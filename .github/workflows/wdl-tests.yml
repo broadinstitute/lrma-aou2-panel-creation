@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        wdlTest: [ 'STATISTICAL_PHASING_WDL' ]
+        wdlTest: [ 'statistical-phasing-wdl' ]
     continue-on-error: true
     name: WDL test ${{ matrix.wdlTest }} on Cromwell
     steps:
@@ -36,7 +36,7 @@ jobs:
           CROMWELL_VERSION: ${{ env.CROMWELL_VERSION }}
 
       - name: "STATISTICAL_PHASING_WDL"
-        if: ${{ matrix.wdlTest == 'STATISTICAL_PHASING_WDL' }}
+        if: ${{ matrix.wdlTest == 'statistical-phasing-wdl' }}
         run: |
           echo "Running statistical phasing WDL";
-          bash scripts/cromwell_tests/statistical_phasing.sh;
+          bash test/cromwell/statistical-phasing.sh;

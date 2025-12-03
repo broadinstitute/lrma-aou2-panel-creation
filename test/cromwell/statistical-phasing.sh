@@ -5,8 +5,8 @@ script_path=$( cd "$(dirname "${BASH_SOURCE}")" ; pwd -P )
 cd "$script_path"
 
 WORKING_DIR=/home/runner/work
-#WDL_DIR=...
-CROMWELL_TEST_DIR=$WORKING_DIR/scripts/cromwell_tests
+WDL_DIR=$WORKING_DIR/wdl
+CROMWELL_TEST_DIR=$WORKING_DIR/test/cromwell
 
 set -e
 echo "Test..."
