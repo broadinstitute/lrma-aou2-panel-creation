@@ -1,2 +1,26 @@
 version: 1.2
 workflows:
+- name: HierarchicallyMergeVcfs
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/HierarchicallyMergeVcfs.wdl
+- name: GenotypeGVCFsCase
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/glimpse2/GenotypeGVCFsCase.wdl
+- name: GLIMPSE2BatchedCaseShardedSingleBatch
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/glimpse2/GLIMPSE2BatchedCaseShardedSingleBatch.wdl
+- name: AnnotateAndPop
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/glimpse2/AnnotateAndPop.wdl
+- name: PanGenieIndex
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/pangenie/PanGenieIndex.wdl
+- name: PanGenieGenotype
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/pangenie/PanGenieGenotype.wdl
+- name: PanGeniePanelCreation
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/pangenie/PanGeniePanelCreation.wdl
+- name: LeaveOutEvaluationReduced
+  subclass: wdl
+  primaryDescriptorPath: /wdl/evaluation/imputation/LeaveOutEvaluationReduced.wdl
