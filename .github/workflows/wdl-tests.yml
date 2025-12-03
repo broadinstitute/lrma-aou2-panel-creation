@@ -31,7 +31,6 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
       - uses: ./.github/actions/install-cromwell
         with:
           CROMWELL_VERSION: ${{ env.CROMWELL_VERSION }}
