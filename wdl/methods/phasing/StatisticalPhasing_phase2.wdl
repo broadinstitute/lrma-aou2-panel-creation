@@ -18,6 +18,7 @@ workflow StatisticalPhasing {
         String region
         String prefix
 
+        Int bin_size = 1000000
         String extra_chunk_args = "--thread $(nproc) --window-size 2000000 --buffer-size 200000"
 
         String filter_and_concat_short_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
@@ -35,7 +36,7 @@ workflow StatisticalPhasing {
 
     call H.split_into_shard as SubsetCreateChunks { input:
         locus = region,
-        bin_size = 1000000,
+        bin_size = bin_size,
         pad_size = 0,
         output_prefix = prefix + ".subset_create_chunks"
     }
@@ -115,7 +116,7 @@ workflow StatisticalPhasing {
     call H.LigateVcfs as LigateScaffold { input:
         vcfs = select_all(flatten([Shapeit5_phase_common.scaffold_vcf, Shapeit4.phased_bcf])),
         vcf_idxs = select_all(flatten([Shapeit5_phase_common.scaffold_vcf_index, Shapeit4.phased_bcf_index])),
-        prefix = prefix + "." + region + ".scaffold.ligated"
+        prefix = prefix + ".scaffold.ligated"
     }
 
     # phase rare
@@ -151,6 +152,6 @@ workflow StatisticalPhasing {
         # File phased_scaffold_vcf = LigateScaffold.ligated_vcf_gz
         # File phased_scaffold_vcf_tbi = LigateScaffold.ligated_vcf_gz_tbi
         File phased_vcf = select_first([ConcatRare.concated_bcf,LigateScaffold.ligated_vcf_gz])
-        File phasedvcf_tbi = select_first([ConcatRare.concated_bcf_index,LigateScaffold.ligated_vcf_gz_tbi])
+        File phased_vcf_tbi = select_first([ConcatRare.concated_bcf_index,LigateScaffold.ligated_vcf_gz_tbi])
     }
 }
