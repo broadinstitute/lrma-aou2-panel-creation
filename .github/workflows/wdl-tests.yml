@@ -39,4 +39,4 @@ jobs:
         if: ${{ matrix.wdlTest == 'STATISTICAL_PHASING_WDL' }}
         run: |
           echo "Running statistical phasing WDL";
-          bash scripts/cromwell_tests/statistical_phasing_wdl.sh;
+          bash scripts/cromwell_tests/statistical_phasing.sh;
