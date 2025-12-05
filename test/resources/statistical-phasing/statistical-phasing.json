@@ -1,0 +1,21 @@
+{
+ "StatisticalPhasing.Shapeit4.extra_args": "",
+ "StatisticalPhasing.bin_size": 5000000,
+ "StatisticalPhasing.chromosome": "chr6",
+ "StatisticalPhasing.extra_chunk_args": "--thread $(nproc) --window-size 2500000 --buffer-size 250000",
+ "StatisticalPhasing.filter_and_concat_short_filter_args": "-i 'MAF>=0.03 && abs(strlen(ALT)-strlen(REF))<50'",
+ "StatisticalPhasing.genetic_mapping_tsv_for_shapeit": "__REPO_DIR__/test/resources/statistical-phasing/genetic_map_b38.mod.tsv",
+ "StatisticalPhasing.joint_short_vcf": "__REPO_DIR__/test/resources/large/statistical-phasing/40-HPRC-1kGP.hiphase.short.merged.chr6-70M-80M.vcf.gz",
+ "StatisticalPhasing.joint_short_vcf_tbi": "__REPO_DIR__/test/resources/large/statistical-phasing/40-HPRC-1kGP.hiphase.short.merged.chr6-70M-80M.vcf.gz.tbi",
+ "StatisticalPhasing.joint_sv_vcf": "__REPO_DIR__/test/resources/large/statistical-phasing/40-HPRC-1kGP.hiphase.sv.merged.chr6-70M-80M.vcf.gz",
+ "StatisticalPhasing.joint_sv_vcf_tbi": "__REPO_DIR__/test/resources/large/statistical-phasing/40-HPRC-1kGP.hiphase.sv.merged.chr6-70M-80M.vcf.gz.tbi",
+ "StatisticalPhasing.output_prefix": "40-HPRC-1kGP.hiphase.sv.merged.chr6-70M-80M",
+ "StatisticalPhasing.reference_fasta": "__REPO_DIR__/test/resources/large/statistical-phasing/GRCh38_full_analysis_set_plus_decoy_hla.ch46-70M-80M.fa",
+ "StatisticalPhasing.reference_fasta_fai": "__REPO_DIR__/test/resources/large/statistical-phasing/GRCh38_full_analysis_set_plus_decoy_hla.ch46-70M-80M.fa.fai",
+ "StatisticalPhasing.region": "chr6:70000000-80000000",
+ "StatisticalPhasing.shapeit5": false,
+ "StatisticalPhasing.shapeit5_common_extra_args": "",
+ "StatisticalPhasing.shapeit5_rare_extra_args": "",
+ "StatisticalPhasing.shapeit_cpu": 1,
+ "StatisticalPhasing.shapeit_memory": 1
+}
