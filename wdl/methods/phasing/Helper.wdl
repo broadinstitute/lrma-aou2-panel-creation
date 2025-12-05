@@ -23,9 +23,9 @@ task HiPhase {
         File bai
 
         File snp_vcf_gz
-        File snp__vcf_gz_tbi
-        File sv__vcf_gz
-        File sv__vcf_gz_tbi
+        File snp_vcf_gz_tbi
+        File sv_vcf_gz
+        File sv_vcf_gz_tbi
 
         File ref_fasta
         File ref_fasta_fai
@@ -55,7 +55,7 @@ task HiPhase {
         --global-realignment-cputime 300 \
         --vcf ~{snp_vcf_gz} \
         --output-vcf ~{sample_name}_phased_snp.vcf.gz \
-        --vcf ~{sv__vcf_gz} \
+        --vcf ~{sv_vcf_gz} \
         --output-vcf ~{sample_name}_phased_sv.vcf.gz \
         --haplotag-file ~{sample_name}_phased_sv_haplotag.tsv \
         --stats-file ~{sample_name}.stats.csv \
