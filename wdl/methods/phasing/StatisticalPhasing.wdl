@@ -38,7 +38,7 @@ workflow StatisticalPhasing {
         locus = region,
         bin_size = bin_size,
         pad_size = 0,
-        output_output_prefix = output_prefix + ".subset_create_chunks"
+        output_prefix = output_prefix + ".subset_create_chunks"
     }
 
     scatter (s_region in SubsetCreateChunks.locuslist) {

@@ -648,7 +648,7 @@ task split_into_shard {
         String locus
         Int bin_size
         Int pad_size
-        String output_output_prefix
+        String output_prefix
 
         Int? preemptible_tries
     }
@@ -660,7 +660,7 @@ task split_into_shard {
         python - --locus ~{locus} \
                  --bin_size ~{bin_size} \
                  --pad_size ~{pad_size} \
-                 --output_file ~{output_output_prefix} \
+                 --output_file ~{output_prefix} \
                  <<-'EOF'
         import gzip
         import argparse
@@ -722,7 +722,7 @@ task split_into_shard {
     }
 
     output {
-        Array[String] locuslist = read_lines("~{output_output_prefix}.txt")
+        Array[String] locuslist = read_lines("~{output_prefix}.txt")
     }
 }
 

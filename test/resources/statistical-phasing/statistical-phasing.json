@@ -9,7 +9,7 @@
  "StatisticalPhasing.joint_short_vcf_tbi": "__REPO_DIR__/test/resources/large/statistical-phasing/40-HPRC-1kGP.hiphase.short.merged.chr6-70M-80M.vcf.gz.tbi",
  "StatisticalPhasing.joint_sv_vcf": "__REPO_DIR__/test/resources/large/statistical-phasing/40-HPRC-1kGP.hiphase.sv.merged.chr6-70M-80M.vcf.gz",
  "StatisticalPhasing.joint_sv_vcf_tbi": "__REPO_DIR__/test/resources/large/statistical-phasing/40-HPRC-1kGP.hiphase.sv.merged.chr6-70M-80M.vcf.gz.tbi",
- "StatisticalPhasing.prefix": "40-HPRC-1kGP.hiphase.sv.merged.chr6-70M-80M",
+ "StatisticalPhasing.output_prefix": "40-HPRC-1kGP.hiphase.sv.merged.chr6-70M-80M",
  "StatisticalPhasing.reference_fasta": "__REPO_DIR__/test/resources/large/statistical-phasing/GRCh38_full_analysis_set_plus_decoy_hla.ch46-70M-80M.fa",
  "StatisticalPhasing.reference_fasta_fai": "__REPO_DIR__/test/resources/large/statistical-phasing/GRCh38_full_analysis_set_plus_decoy_hla.ch46-70M-80M.fa.fai",
  "StatisticalPhasing.region": "chr6:70000000-80000000",
