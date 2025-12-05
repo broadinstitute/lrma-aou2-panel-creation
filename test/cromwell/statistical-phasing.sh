@@ -8,7 +8,7 @@ cd "$script_path"
 
 # set repo dir if we are not running locally and have already set it, e.g.:
 # sudo REPO_DIR=/local/root-of-this-repo CROMWELL_JAR=/local/cromwell.jar ./this-script.sh
-REPO_DIR=${REPO_DIR:=/home/runner/work/lrma-aou2-panel-creation/lrma-aou2-panel-creation}
+REPO_DIR=${REPO_DIR:=/Users/suhang/Analysis/lrma-aou2-panel-creation/}
 
 # insert repo dir into resource files (this will create *.mod.* files, which may need to be cleaned up locally)
 sed -e "s|__REPO_DIR__|$REPO_DIR|g" $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.json > $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.mod.json

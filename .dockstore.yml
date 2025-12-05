@@ -1,8 +1,8 @@
 version: 1.2
 workflows:
-- name: StatisticalPhasingPhase2
+- name: StatisticalPhasing
   subclass: wdl
-  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_phase2.wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing.wdl
 - name: VcfdistAndSwitchEvaluation
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistAndSwitchEvaluation.wdl

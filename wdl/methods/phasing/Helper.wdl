@@ -10,10 +10,6 @@ struct RuntimeAttr {
     String? docker
 }
 
-struct DataTypeParameters {
-    Int num_shards
-    String map_preset
-}
 
 task HiPhase {
 
@@ -26,14 +22,14 @@ task HiPhase {
         File bam
         File bai
 
-        File unphased_snp_vcf
-        File unphased_snp_tbi
-        File unphased_sv_vcf
-        File unphased_sv_tbi
+        File snp_vcf_gz
+        File snp__vcf_gz_tbi
+        File sv__vcf_gz
+        File sv__vcf_gz_tbi
 
         File ref_fasta
         File ref_fasta_fai
-        String samplename
+        String sample_name
 
         Int memory
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
@@ -57,31 +53,31 @@ task HiPhase {
         --bam ~{bam} \
         --reference ~{ref_fasta} \
         --global-realignment-cputime 300 \
-        --vcf ~{unphased_snp_vcf} \
-        --output-vcf ~{samplename}_phased_snp.vcf.gz \
-        --vcf ~{unphased_sv_vcf} \
-        --output-vcf ~{samplename}_phased_sv.vcf.gz \
-        --haplotag-file ~{samplename}_phased_sv_haplotag.tsv \
-        --stats-file ~{samplename}.stats.csv \
-        --blocks-file ~{samplename}.blocks.tsv \
-        --summary-file ~{samplename}.summary.tsv \
+        --vcf ~{snp_vcf_gz} \
+        --output-vcf ~{sample_name}_phased_snp.vcf.gz \
+        --vcf ~{sv__vcf_gz} \
+        --output-vcf ~{sample_name}_phased_sv.vcf.gz \
+        --haplotag-file ~{sample_name}_phased_sv_haplotag.tsv \
+        --stats-file ~{sample_name}.stats.csv \
+        --blocks-file ~{sample_name}.blocks.tsv \
+        --summary-file ~{sample_name}.summary.tsv \
         --verbose \
         ~{extra_args}
 
-        bcftools sort ~{samplename}_phased_snp.vcf.gz -O z -o ~{samplename}_phased_snp.sorted.vcf.gz
-        tabix -p vcf ~{samplename}_phased_snp.sorted.vcf.gz
+        bcftools sort ~{sample_name}_phased_snp.vcf.gz -O z -o ~{sample_name}_phased_snp.sorted.vcf.gz
+        tabix -p vcf ~{sample_name}_phased_snp.sorted.vcf.gz
 
-        bcftools sort ~{samplename}_phased_sv.vcf.gz -O z -o ~{samplename}_phased_sv.sorted.vcf.gz
-        tabix -p vcf ~{samplename}_phased_sv.sorted.vcf.gz
+        bcftools sort ~{sample_name}_phased_sv.vcf.gz -O z -o ~{sample_name}_phased_sv.sorted.vcf.gz
+        tabix -p vcf ~{sample_name}_phased_sv.sorted.vcf.gz
         
     >>>
 
     output {
-        File phased_snp_vcf = "~{samplename}_phased_snp.sorted.vcf.gz"
-        File phased_snp_vcf_tbi = "~{samplename}_phased_snp.sorted.vcf.gz.tbi"
-        File phased_sv_vcf   = "~{samplename}_phased_sv.sorted.vcf.gz"
-        File phased_sv_vcf_tbi = "~{samplename}_phased_sv.sorted.vcf.gz.tbi"
-        File haplotag_file = "~{samplename}_phased_sv_haplotag.tsv"
+        File phased_snp_vcf = "~{sample_name}_phased_snp.sorted.vcf.gz"
+        File phased_snp_vcf_tbi = "~{sample_name}_phased_snp.sorted.vcf.gz.tbi"
+        File phased_sv_vcf   = "~{sample_name}_phased_sv.sorted.vcf.gz"
+        File phased_sv_vcf_tbi = "~{sample_name}_phased_sv.sorted.vcf.gz.tbi"
+        File haplotag_file = "~{sample_name}_phased_sv_haplotag.tsv"
     }
 
     #########################
@@ -118,7 +114,7 @@ task SubsetVCF {
         vcf_gz: "VCF file to be subsetted"
         vcf_tbi: "Tabix index for the VCF file"
         locus: "Locus to be subsetted"
-        prefix: "Prefix for the output file"
+        output_prefix: "output_prefix for the output file"
         runtime_attr_override: "Override default runtime attributes"
     }
 
@@ -126,7 +122,7 @@ task SubsetVCF {
         File vcf_gz
         File? vcf_tbi
         String locus
-        String prefix = "subset"
+        String output_prefix = "subset"
 
         RuntimeAttr? runtime_attr_override
     }
@@ -138,24 +134,24 @@ task SubsetVCF {
         if ! ~{defined(vcf_tbi)}; then
             bcftools index ~{vcf_gz}
         fi
-        bcftools view ~{vcf_gz} --regions ~{locus} -O b -o ~{prefix}.bcf
-        bcftools index ~{prefix}.bcf
+        bcftools view ~{vcf_gz} --regions ~{locus} -O b -o ~{output_prefix}.bcf
+        bcftools index ~{output_prefix}.bcf
     >>>
 
     output {
-        File subset_vcf = "~{prefix}.bcf"
-        File subset_tbi = "~{prefix}.bcf.csi"
+        File subset_vcf = "~{output_prefix}.bcf"
+        File subset_tbi = "~{output_prefix}.bcf.csi"
     }
 
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
-        mem_gb:             8,
+        mem_gb:             4,
         disk_gb:            disk_size,
         boot_disk_gb:       10,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-longshot:0.1.2"
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.2"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -185,7 +181,7 @@ task SubsetVCFStreaming {
             localization_optional: true
         }
         locus: "Locus to be subsetted"
-        prefix: "Prefix for the output file"
+        output_prefix: "output_prefix for the output file"
         runtime_attr_override: "Override default runtime attributes"
     }
 
@@ -193,7 +189,7 @@ task SubsetVCFStreaming {
         File vcf_gz
         File vcf_tbi
         String locus
-        String prefix = "subset"
+        String output_prefix = "subset"
 
         RuntimeAttr? runtime_attr_override
     }
@@ -205,13 +201,13 @@ task SubsetVCFStreaming {
 
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
-        bcftools view --no-version ~{vcf_gz} --regions ~{locus} -Oz -o ~{prefix}.vcf.gz
-        bcftools index -t ~{prefix}.vcf.gz
+        bcftools view --no-version ~{vcf_gz} --regions ~{locus} -Oz -o ~{output_prefix}.vcf.gz
+        bcftools index -t ~{output_prefix}.vcf.gz
     >>>
 
     output {
-        File subset_vcf = "~{prefix}.vcf.gz"
-        File subset_tbi = "~{prefix}.vcf.gz.tbi"
+        File subset_vcf = "~{output_prefix}.vcf.gz"
+        File subset_tbi = "~{output_prefix}.vcf.gz.tbi"
     }
 
     #########################
@@ -237,217 +233,13 @@ task SubsetVCFStreaming {
 }
 
 
-task SubsetBam {
-
-    meta {
-        description : "Subset a BAM file to a specified locus."
-    }
-
-    parameter_meta {
-        bam: {
-            description: "bam to subset",
-            localization_optional: true
-        }
-        bai:    "index for bam file"
-        locus:  "genomic locus to select"
-        prefix: "prefix for output bam and bai file names"
-        runtime_attr_override: "Override the default runtime attributes."
-    }
-
-    input {
-        File bam
-        File bai
-        String locus
-        String prefix = "subset"
-
-        RuntimeAttr? runtime_attr_override
-    }
-
-
-
-    Int disk_size = 4*ceil(size([bam, bai], "GB"))
-
-    command <<<
-        set -euxo pipefail
-
-        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
-
-        samtools view -bhX ~{bam} ~{bai} ~{locus} > ~{prefix}.bam
-        samtools index ~{prefix}.bam
-    >>>
-
-    output {
-        File subset_bam = "~{prefix}.bam"
-        File subset_bai = "~{prefix}.bam.bai"
-    }
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          1,
-        mem_gb:             10,
-        disk_gb:            disk_size,
-        boot_disk_gb:       10,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-utils:0.1.9"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
-}
-
-task InferSampleName {
-    meta {
-        description: "Infer sample name encoded on the @RG line of the header section. Fails if multiple values found, or if SM ~= unnamedsample."
-    }
-
-    parameter_meta {
-        bam: {
-            localization_optional: true,
-            description: "BAM file"
-        }
-    }
-
-    input {
-        File bam
-        File bai
-    }
-
-
-
-    command <<<
-        set -euxo pipefail
-
-        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
-        samtools view -H ~{bam} > header.txt
-        if ! grep -q '^@RG' header.txt; then echo "No read group line found!" && exit 1; fi
-
-        grep '^@RG' header.txt | sed 's/\t/\n/g' | grep '^SM:' | sed 's/SM://g' | sort | uniq > sample.names.txt
-        if [[ $(wc -l sample.names.txt) -gt 1 ]]; then echo "Multiple sample names found!" && exit 1; fi
-        if grep -iq "unnamedsample" sample.names.txt; then echo "Sample name found to be unnamedsample!" && exit 1; fi
-    >>>
-
-    output {
-        String sample_name = read_string("sample.names.txt")
-    }
-
-    runtime {
-        cpu:            1
-        memory:         "4 GiB"
-        disks:          "local-disk 100 HDD"
-        bootDiskSizeGb: 10
-        preemptible:    2
-        maxRetries:     1
-        docker:         "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.1"
-    }
-}
-
-task SplitVCFbySample {
-    input{       
-        File joint_vcf
-        String region
-        String samplename
-    }
-    
-    command <<<
-        set -x pipefail
-
-        bcftools index ~{joint_vcf}
-
-        bcftools view -s ~{samplename} ~{joint_vcf} -r ~{region} -o ~{samplename}.subset.g.vcf.gz
-
-        tabix -p vcf ~{samplename}.subset.g.vcf.gz
-
-    >>>
-    
-    output {
-		File single_sample_vcf = "~{samplename}.subset.g.vcf.gz"
-        File single_sample_vcf_tbi = "~{samplename}.subset.g.vcf.gz.tbi"
-    }
-
-
-    Int disk_size = 1 + ceil(2 * (size(joint_vcf, "GiB")))
-
-    runtime {
-        cpu: 1
-        memory: "64 GiB"
-        disks: "local-disk " + disk_size + " HDD" #"local-disk 100 HDD"
-        bootDiskSizeGb: 10
-        preemptible: 0
-        maxRetries: 1
-        docker: "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.1"
-    }
-}
-
-task MergePerChrVcfWithBcftools {
-    parameter_meta {
-        vcf_input: {localization_optional: true}
-        tbi_input: {localization_optional: true}
-    }
-    input{
-        Array[File] vcf_input
-        Array[File] tbi_input
-        String pref
-        Int threads_num
-    }
-
-    command <<<
-        set -eux
-
-        # we do single-sample phased VCFs localization ourselves
-        mkdir -p ssp_vcfs
-        time \
-        gcloud storage cp ~{sep=" " vcf_input} /cromwell_root/ssp_vcfs/
-
-        time \
-        gcloud storage cp ~{sep=" " tbi_input} /cromwell_root/ssp_vcfs/
-
-        # then merge, and safely assume all ssp-VCFs are sorted in the same order, on one chr
-        cd ssp_vcfs
-        ls *.vcf.gz > my_vcfs.txt
-
-        bcftools merge \
-            --threads ~{threads_num} \
-            --merge none \
-            -l my_vcfs.txt \
-            -O z \
-            -o ~{pref}.AllSamples.vcf.gz
-
-        tabix -@ ~{threads_num} -p vcf ~{pref}.AllSamples.vcf.gz
-
-        # move result files to the correct location for cromwell to de-localize
-        mv ~{pref}.AllSamples.vcf.gz ~{pref}.AllSamples.vcf.gz.tbi /cromwell_root/
-    >>>
-
-    output{
-        File merged_vcf = "~{pref}.AllSamples.vcf.gz"
-        File merged_tbi = "~{pref}.AllSamples.vcf.gz.tbi"
-    }
-
-    runtime {
-        cpu: 16
-        memory: "32 GiB"
-        disks: "local-disk 375 LOCAL"
-        preemptible: 1
-        maxRetries: 0
-        docker: "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.20"
-    }
-}
-
 task Shapeit4 {
     input{
         File vcf_input
         File vcf_index
         File mappingfile
         String region
-        String prefix
+        String output_prefix
         Int cpu
         Int memory
         String extra_args
@@ -456,28 +248,21 @@ task Shapeit4 {
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
     command <<<
-        # add AN AC tag
-
-        # export MONITOR_MOUNT_POINT="/cromwell_root/"
-        # bash /opt/vm_local_monitoring_script.sh &> resources.log &
-        # job_id=$(ps -aux | grep -F 'vm_local_monitoring_script.sh' | head -1 | awk '{print $2}')
 
         shapeit4.2 --input ~{vcf_input} \
                 --map ~{mappingfile} \
                 --region ~{region} \
                 --sequencing \
-                --output ~{prefix}.bcf \
+                --output ~{output_prefix}.bcf \
                 --thread $(nproc) \
                 ~{extra_args}
-        bcftools index ~{prefix}.bcf
-
-        # if ps -p "${job_id}" > /dev/null; then kill "${job_id}"; fi
+        bcftools index ~{output_prefix}.bcf
     >>>
 
     output{
         # File resouce_monitor_log = "resources.log"
-        File phased_bcf = "~{prefix}.bcf"
-        File phased_bcf_index = "~{prefix}.bcf.csi"
+        File phased_bcf = "~{output_prefix}.bcf"
+        File phased_bcf_index = "~{output_prefix}.bcf.csi"
     }
 
     #Int disk_size = 100 + ceil(2 * size(vcf_input, "GiB"))
@@ -511,7 +296,7 @@ task shapeit5_phase_common{
         File vcf_index
         File mappingfile
         String region
-        String prefix
+        String output_prefix
         Int cpu
         Int memory
         String extra_args
@@ -531,13 +316,13 @@ task shapeit5_phase_common{
                             --output scaffold.bcf \
                             --thread $(nproc) \
                             ~{extra_args}
-        bcftools +fill-tags scaffold.bcf -Ob -o ~{prefix}.scaffold.bcf -- -t AN,AC
-        bcftools index ~{prefix}.scaffold.bcf
+        bcftools +fill-tags scaffold.bcf -Ob -o ~{output_prefix}.scaffold.bcf -- -t AN,AC
+        bcftools index ~{output_prefix}.scaffold.bcf
     >>>
 
     output{
-        File scaffold_vcf = "~{prefix}.scaffold.bcf"
-        File scaffold_vcf_index = "~{prefix}.scaffold.bcf.csi"
+        File scaffold_vcf = "~{output_prefix}.scaffold.bcf"
+        File scaffold_vcf_index = "~{output_prefix}.scaffold.bcf.csi"
     }
 
     Int disk_size = 100 + ceil(2 * size(vcf_input, "GiB"))
@@ -571,7 +356,6 @@ task CreateChunks {
         File vcf
         File tbi
         String region
-        String prefix
         String? extra_chunk_args = "--thread $(nproc) --window-size 5000000 --buffer-size 500000"
 
         RuntimeAttr? runtime_attr_override
@@ -626,7 +410,7 @@ task LigateVcfs {
     input {
         Array[File] vcfs
         Array[File]? vcf_idxs
-        String prefix
+        String output_prefix
 
         RuntimeAttr? runtime_attr_override
     }
@@ -639,13 +423,13 @@ task LigateVcfs {
             for ff in ~{sep=' ' vcfs}; do bcftools index $ff; done
         fi
 
-        ligate_static --input ~{write_lines(vcfs)} --output ~{prefix}.vcf.gz
-        bcftools index -t ~{prefix}.vcf.gz
+        ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.vcf.gz
+        bcftools index -t ~{output_prefix}.vcf.gz
     >>>
 
     output {
-        File ligated_vcf_gz = "~{prefix}.vcf.gz"
-        File ligated_vcf_gz_tbi = "~{prefix}.vcf.gz.tbi"
+        File ligated_vcf_gz = "~{output_prefix}.vcf.gz"
+        File ligated_vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
     }
 
     #########################
@@ -680,7 +464,7 @@ task shapeit5_phase_rare{
         File mappingfile
         String chunk_region
         String scaffold_region
-        String prefix
+        String output_prefix
         Int chunknum
         Int cpu
         Int memory
@@ -699,18 +483,18 @@ task shapeit5_phase_rare{
                     --map ~{mappingfile} \
                     --input-region ~{chunk_region} \
                     --scaffold-region ~{scaffold_region} \
-                    --output ~{prefix}.chunk.~{chunknum}.bcf \
+                    --output ~{output_prefix}.chunk.~{chunknum}.bcf \
                     --thread $(nproc) \
                     ~{extra_args}
 
-        bcftools +fill-tags ~{prefix}.chunk.~{chunknum}.bcf -Ob -o ~{prefix}.chunk.~{chunknum}.tagged.bcf -- -t AN,AC
-        bcftools index ~{prefix}.chunk.~{chunknum}.tagged.bcf
+        bcftools +fill-tags ~{output_prefix}.chunk.~{chunknum}.bcf -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AN,AC
+        bcftools index ~{output_prefix}.chunk.~{chunknum}.tagged.bcf
 
     >>>
 
     output{
-        File chunk_vcf = "~{prefix}.chunk.~{chunknum}.tagged.bcf"
-        File chunk_vcf_index = "~{prefix}.chunk.~{chunknum}.tagged.bcf.csi"
+        File chunk_vcf = "~{output_prefix}.chunk.~{chunknum}.tagged.bcf"
+        File chunk_vcf_index = "~{output_prefix}.chunk.~{chunknum}.tagged.bcf.csi"
     }
 
     Int disk_size = 100 + ceil(2 * size(vcf_input, "GiB"))
@@ -744,7 +528,7 @@ task BcftoolsConcatBCFs {
     input {
         Array[File] vcfs
         Array[File]? vcf_idxs
-        String prefix
+        String output_prefix
 
         RuntimeAttr? runtime_attr_override
     }
@@ -757,14 +541,14 @@ task BcftoolsConcatBCFs {
             for ff in ~{sep=' ' vcfs}; do bcftools index $ff; done
         fi
 
-        bcftools concat --allow-overlap --remove-duplicates -Ob -o ~{prefix}.bcf -f ~{write_lines(vcfs)} 
-        bcftools sort ~{prefix}.bcf -Ob -o ~{prefix}.sorted.bcf
-        bcftools index ~{prefix}.sorted.bcf
+        bcftools concat --allow-overlap --remove-duplicates -Ob -o ~{output_prefix}.bcf -f ~{write_lines(vcfs)} 
+        bcftools sort ~{output_prefix}.bcf -Ob -o ~{output_prefix}.sorted.bcf
+        bcftools index ~{output_prefix}.sorted.bcf
     >>>
 
     output {
-        File concated_bcf = "~{prefix}.sorted.bcf"
-        File concated_bcf_index = "~{prefix}.sorted.bcf.csi"
+        File concated_bcf = "~{output_prefix}.sorted.bcf"
+        File concated_bcf_index = "~{output_prefix}.sorted.bcf.csi"
     }
 
     #########################
@@ -797,7 +581,7 @@ task FilterAndConcatVcfs {
         File short_vcf_tbi
         File sv_vcf            # biallelic
         File sv_vcf_tbi
-        String prefix
+        String output_prefix
         String region
         File reference_fasta
         File reference_fasta_fai
@@ -813,28 +597,28 @@ task FilterAndConcatVcfs {
         # filter SV
         bcftools +fill-tags -r ~{region} ~{sv_vcf} -- -t AF,AC,AN | \
             bcftools view ~{filter_and_concat_sv_filter_args} \
-                -Oz -o ~{prefix}.SV.vcf.gz
-        bcftools index -t ~{prefix}.SV.vcf.gz
+                -Oz -o ~{output_prefix}.SV.vcf.gz
+        bcftools index -t ~{output_prefix}.SV.vcf.gz
 
         # split to biallelic and filter short
         bcftools norm -r ~{region} -m-any -N -f ~{reference_fasta} ~{short_vcf} | \
             bcftools +fill-tags -- -t AF,AC,AN | \
             bcftools view ~{filter_and_concat_short_filter_args} | \
-            bcftools sort -Oz -o ~{prefix}.short.vcf.gz
-        bcftools index -t ~{prefix}.short.vcf.gz
+            bcftools sort -Oz -o ~{output_prefix}.short.vcf.gz
+        bcftools index -t ~{output_prefix}.short.vcf.gz
 
         # concatenate with deduplication; providing SV VCF as first argument preferentially keeps those records
         bcftools concat \
-            ~{prefix}.SV.vcf.gz \
-            ~{prefix}.short.vcf.gz \
+            ~{output_prefix}.SV.vcf.gz \
+            ~{output_prefix}.short.vcf.gz \
             --allow-overlaps --remove-duplicates | \
-            bcftools sort -Oz -o ~{prefix}.vcf.gz
-        bcftools index -t ~{prefix}.vcf.gz
+            bcftools sort -Oz -o ~{output_prefix}.vcf.gz
+        bcftools index -t ~{output_prefix}.vcf.gz
     }
 
     output {
-        File filter_and_concat_vcf = "~{prefix}.vcf.gz"
-        File filter_and_concat_vcf_tbi = "~{prefix}.vcf.gz.tbi"
+        File filter_and_concat_vcf = "~{output_prefix}.vcf.gz"
+        File filter_and_concat_vcf_tbi = "~{output_prefix}.vcf.gz.tbi"
     }
 
     #########################
@@ -864,7 +648,7 @@ task split_into_shard {
         String locus
         Int bin_size
         Int pad_size
-        String output_prefix
+        String output_output_prefix
 
         Int? preemptible_tries
     }
@@ -876,7 +660,7 @@ task split_into_shard {
         python - --locus ~{locus} \
                  --bin_size ~{bin_size} \
                  --pad_size ~{pad_size} \
-                 --output_file ~{output_prefix} \
+                 --output_file ~{output_output_prefix} \
                  <<-'EOF'
         import gzip
         import argparse
@@ -894,7 +678,8 @@ task split_into_shard {
                 start_pos = start + i*bin_size - pad_size
                 end_pos = start_pos + bin_size + pad_size
                 intervals.append((chromo, start_pos, end_pos))
-            intervals.append((chromo, start + bin_num*bin_size - pad_size, end))
+            if end > start + bin_num*bin_size:
+                intervals.append((chromo, start + bin_num*bin_size - pad_size, end))
             return(intervals)
 
         def write_bed_file(content, output_file):
@@ -937,7 +722,7 @@ task split_into_shard {
     }
 
     output {
-        Array[String] locuslist = read_lines("~{output_prefix}.txt")
+        Array[String] locuslist = read_lines("~{output_output_prefix}.txt")
     }
 }
 
@@ -945,7 +730,7 @@ task bcftools_concat_naive {
     input {
         Array[File] vcfs
         Array[File]? vcf_tbis
-        String prefix
+        String output_prefix
     }
 
     command <<<
@@ -962,13 +747,13 @@ task bcftools_concat_naive {
             ~{sep=" " vcfs} \
             -n \
             --no-version \
-            -Oz -o ~{prefix}.vcf.gz
-        bcftools index -t ~{prefix}.vcf.gz
+            -Oz -o ~{output_prefix}.vcf.gz
+        bcftools index -t ~{output_prefix}.vcf.gz
     >>>
 
     output {
-        File concatenated_vcf = "~{prefix}.vcf.gz"
-        File concatenated_vcf_tbi = "~{prefix}.vcf.gz.tbi"
+        File concatenated_vcf = "~{output_prefix}.vcf.gz"
+        File concatenated_vcf_tbi = "~{output_prefix}.vcf.gz.tbi"
     }
 
     runtime {
