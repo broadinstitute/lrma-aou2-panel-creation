@@ -34,7 +34,7 @@ workflow StatisticalPhasing {
     Map[String, String] genetic_mapping_dict = read_map(genetic_mapping_tsv_for_shapeit)
 
 
-    call H.split_into_shard as SubsetCreateChunks { input:
+    call H.SplitIntoShard as SubsetCreateChunks { input:
         locus = region,
         bin_size = bin_size,
         pad_size = 0,
@@ -71,7 +71,7 @@ workflow StatisticalPhasing {
         } 
     }
 
-    call H.bcftools_concat_naive as ConcatSubsets { input:
+    call H.BcftoolsConcatNaive as ConcatSubsets { input:
         vcfs = select_all(select_first([FilterAndConcatVcfs.filter_and_concat_vcf,SubsetVcfShort.subset_vcf])),
         vcf_tbis = select_all(select_first([FilterAndConcatVcfs.filter_and_concat_vcf_tbi,SubsetVcfShort.subset_tbi])),
         output_prefix = output_prefix + ".subset.concat"
@@ -121,7 +121,7 @@ workflow StatisticalPhasing {
     # phase rare
     if (shapeit5) {
         scatter (i in range(length(region_list))) {
-            call H.shapeit5_phase_rare as Shapeit5_phase_rare { input:
+            call H.Shapeit5PhaseRare as Shapeit5_phase_rare { input:
                 vcf_input = ConcatSubsets.concatenated_vcf,
                 vcf_index = ConcatSubsets.concatenated_vcf_tbi,
                 scaffold_bcf = LigateScaffold.ligated_vcf_gz,

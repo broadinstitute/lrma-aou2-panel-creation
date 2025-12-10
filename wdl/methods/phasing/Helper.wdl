@@ -11,99 +11,6 @@ struct RuntimeAttr {
 }
 
 
-task HiPhase {
-
-    meta {
-        description: "Generates phased VCF. Note this runs fast so no need to parallize."
-    }
-
-
-    input {
-        File bam
-        File bai
-
-        File snp_vcf_gz
-        File snp_vcf_gz_tbi
-        File sv_vcf_gz
-        File sv_vcf_gz_tbi
-
-        File ref_fasta
-        File ref_fasta_fai
-        String sample_name
-
-        Int memory
-        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
-
-        String extra_args
-
-        RuntimeAttr? runtime_attr_override
-    }
-
-    # Int bam_sz = ceil(size(bam, "GB"))
-	Int disk_size = 30 # if bam_sz > 200 then 2*bam_sz else bam_sz + 200
-    Int thread_num = memory/2
-
-    command <<<
-        set -euxo pipefail
-
-        touch ~{bai}
-
-        hiphase \
-        --threads ~{thread_num} \
-        --bam ~{bam} \
-        --reference ~{ref_fasta} \
-        --global-realignment-cputime 300 \
-        --vcf ~{snp_vcf_gz} \
-        --output-vcf ~{sample_name}_phased_snp.vcf.gz \
-        --vcf ~{sv_vcf_gz} \
-        --output-vcf ~{sample_name}_phased_sv.vcf.gz \
-        --haplotag-file ~{sample_name}_phased_sv_haplotag.tsv \
-        --stats-file ~{sample_name}.stats.csv \
-        --blocks-file ~{sample_name}.blocks.tsv \
-        --summary-file ~{sample_name}.summary.tsv \
-        --verbose \
-        ~{extra_args}
-
-        bcftools sort ~{sample_name}_phased_snp.vcf.gz -O z -o ~{sample_name}_phased_snp.sorted.vcf.gz
-        tabix -p vcf ~{sample_name}_phased_snp.sorted.vcf.gz
-
-        bcftools sort ~{sample_name}_phased_sv.vcf.gz -O z -o ~{sample_name}_phased_sv.sorted.vcf.gz
-        tabix -p vcf ~{sample_name}_phased_sv.sorted.vcf.gz
-        
-    >>>
-
-    output {
-        File phased_snp_vcf = "~{sample_name}_phased_snp.sorted.vcf.gz"
-        File phased_snp_vcf_tbi = "~{sample_name}_phased_snp.sorted.vcf.gz.tbi"
-        File phased_sv_vcf   = "~{sample_name}_phased_sv.sorted.vcf.gz"
-        File phased_sv_vcf_tbi = "~{sample_name}_phased_sv.sorted.vcf.gz.tbi"
-        File haplotag_file = "~{sample_name}_phased_sv_haplotag.tsv"
-    }
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          thread_num,
-        mem_gb:             memory,
-        disk_gb:            disk_size,
-        boot_disk_gb:       100,
-        preemptible_tries:  1,
-        max_retries:        0,
-        docker:             "hangsuunc/hiphase:1.3.0"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " SSD"
-        zones: zones
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
-}
-
-
 task SubsetVCF {
 
     meta {
@@ -455,7 +362,7 @@ task LigateVcfs {
 }
 
 
-task shapeit5_phase_rare{
+task Shapeit5PhaseRare{
     input{
         File vcf_input
         File vcf_index
@@ -573,7 +480,6 @@ task BcftoolsConcatBCFs {
     }
 }
 
-# filter out singletons (i.e., keep MAC >= 2) and concatenate with deduplication
 task FilterAndConcatVcfs {
 
     input {
@@ -643,7 +549,7 @@ task FilterAndConcatVcfs {
     }
 }
 
-task split_into_shard {
+task SplitIntoShard {
     input {
         String locus
         Int bin_size
@@ -662,7 +568,6 @@ task split_into_shard {
                  --pad_size ~{pad_size} \
                  --output_file ~{output_prefix} \
                  <<-'EOF'
-        import gzip
         import argparse
 
         def split_locus(locus):
@@ -670,7 +575,7 @@ task split_into_shard {
             start, end = span.split("-")
             return(chromosome, int(start), int(end))
 
-        def split_locus_to_intervals(locus, bin_size=15000, pad_size=500):
+        def split_locus_to_intervals(locus, bin_size, pad_size):
             chromo, start, end = split_locus(locus)
             bin_num = (end - start)//bin_size
             intervals = [(chromo, start, start + bin_size + pad_size)]
@@ -682,7 +587,7 @@ task split_into_shard {
                 intervals.append((chromo, start + bin_num*bin_size - pad_size, end))
             return(intervals)
 
-        def write_bed_file(content, output_file):
+        def write_output_file(content, output_file):
             with open(output_file, "w") as f:
                 for item in content:
                     l = "%s:%d-%d" % (item[0], item[1], item[2])
@@ -706,7 +611,7 @@ task split_into_shard {
             args = parser.parse_args()
 
             intervals = split_locus_to_intervals(args.locus, args.bin_size, args.pad_size)
-            write_bed_file(intervals, args.output_file + ".txt")
+            write_output_file(intervals, args.output_file + ".txt")
 
         if __name__ == "__main__":
             main()
@@ -726,7 +631,7 @@ task split_into_shard {
     }
 }
 
-task bcftools_concat_naive {
+task BcftoolsConcatNaive {
     input {
         Array[File] vcfs
         Array[File]? vcf_tbis
