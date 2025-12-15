@@ -25,7 +25,7 @@ workflow StatisticalPhasing {
         Boolean shapeit5 = true
         Int shapeit_cpu
         Int shapeit_memory
-        String shapeit5_common_extra_args
+        String shapeit4_common_extra_args
         String shapeit5_rare_extra_args
     }
 
@@ -86,21 +86,44 @@ workflow StatisticalPhasing {
 
     scatter (i in range(length(region_list))) {
         # phase common using shapeit4
-        call Shapeit4 as Shapeit4 { input:
-            vcf_input = ConcatSubsets.concatenated_vcf,
-            vcf_index = ConcatSubsets.concatenated_vcf_tbi,
-            mappingfile = genetic_mapping_dict[chromosome],
-            region = region_list[i],
-            output_prefix = output_prefix + ".filter_and_concat.phased",
-            cpu = shapeit_cpu,
-            memory = shapeit_memory
+        if (!shapeit5) {
+            call Shapeit4 as Shapeit4_all { input:
+                vcf_input = ConcatSubsets.concatenated_vcf,
+                vcf_index = ConcatSubsets.concatenated_vcf_tbi,
+                mappingfile = genetic_mapping_dict[chromosome],
+                region = region_list[i],
+                output_prefix = output_prefix + ".filter_and_concat.phased",
+                cpu = shapeit_cpu,
+                memory = shapeit_memory,
+                extra_args = shapeit4_common_extra_args
+            }
+        }
+        if (shapeit5) {
+            call FilterCommonandRareVariants { input:
+                vcf_gz = ConcatSubsets.concatenated_vcf,
+                vcf_gz_tbi = ConcatSubsets.concatenated_vcf_tbi,
+                output_prefix = output_prefix + ".filter_common_and_rare",
+                region = region_list[i],
+                filter_common_args = "-i 'AF>=0.01'",
+                filter_rare_args = "-i 'AF<=0.01'",
+            }
+            call Shapeit4 as Shapeit4_common { input:
+                vcf_input = FilterCommonandRareVariants.filter_common_vcf,
+                vcf_index = FilterCommonandRareVariants.filter_common_vcf_tbi,
+                mappingfile = genetic_mapping_dict[chromosome],
+                region = region_list[i],
+                output_prefix = output_prefix + ".filter_and_concat.common",
+                cpu = shapeit_cpu,
+                memory = shapeit_memory,
+                extra_args = shapeit4_common_extra_args
+            }
         }
         
     }
 
     call LigateVcfs as LigateScaffold { input:
-        vcfs = flatten([Shapeit4.phased_bcf]),
-        vcf_idxs = flatten([Shapeit4.phased_bcf_index]),
+        vcfs = select_all(flatten([Shapeit4_common.phased_bcf,Shapeit4_all.phased_bcf])),
+        vcf_idxs = select_all(flatten([Shapeit4_common.phased_bcf_index, Shapeit4_all.phased_bcf_index])),
         output_prefix = output_prefix + ".scaffold.ligated"
     }
 
@@ -605,6 +628,66 @@ task BcftoolsConcatBCFs {
         cpu_cores:          2,
         mem_gb:             8,
         disk_gb:            disk_size,
+        boot_disk_gb:       10,
+        preemptible_tries:  0,
+        max_retries:        1,
+        docker:"hangsuunc/shapeit5:v1"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " SSD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+    }
+}
+
+task FilterCommonandRareVariants {
+
+    input {
+        File vcf_gz        
+        File vcf_gz_tbi
+        String output_prefix
+        String region
+        Float common_maf_threshold = 0.01
+        String filter_common_args = "-i 'AF>=${common_maf_threshold}'"
+        String filter_rare_args = "-i 'AF<=${common_maf_threshold}'"
+
+        RuntimeAttr? runtime_attr_override
+    }
+
+    command {
+        set -euxo pipefail
+
+        # filter common
+        bcftools +fill-tags -r ~{region} ~{vcf_gz} -- -t AF,AC,AN | \
+            bcftools view ~{filter_common_args} \
+                -Oz -o ~{output_prefix}.common.vcf.gz
+        bcftools index -t ~{output_prefix}.common.vcf.gz
+
+        # filter rare
+        bcftools +fill-tags -r ~{region} ~{vcf_gz} -- -t AF,AC,AN | \
+            bcftools view ~{filter_rare_args} \
+                -Oz -o ~{output_prefix}.rare.vcf.gz
+        bcftools index -t ~{output_prefix}.rare.vcf.gz
+
+    }
+
+    output {
+        File filter_common_vcf = "~{output_prefix}.common.vcf.gz"
+        File filter_common_vcf_tbi = "~{output_prefix}.common.vcf.gz.tbi"
+        File filter_rare_vcf = "~{output_prefix}.rare.vcf.gz"
+        File filter_rare_vcf_tbi = "~{output_prefix}.rare.vcf.gz.tbi"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          2,
+        mem_gb:             8,
+        disk_gb:            1000,
         boot_disk_gb:       10,
         preemptible_tries:  0,
         max_retries:        1,
