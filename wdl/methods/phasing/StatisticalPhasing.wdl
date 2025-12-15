@@ -104,7 +104,8 @@ workflow StatisticalPhasing {
                 vcf_gz_tbi = ConcatSubsets.concatenated_vcf_tbi,
                 output_prefix = output_prefix + ".filter_common_and_rare",
                 region = region_list[i],
-                filter_common_args = filter_common_args,
+                filter_common_args = "-i 'MAF>=0.01'",
+                filter_rare_args = "-i 'MAF<=0.01'"
             }
             call Shapeit4 as Shapeit4_common { input:
                 vcf_input = FilterCommonandRareVariants.filter_common_vcf,
@@ -651,9 +652,8 @@ task FilterCommonandRareVariants {
         File vcf_gz_tbi
         String output_prefix
         String region
-        Float common_maf_threshold = 0.01
-        String filter_common_args = "-i 'MAF>=${common_maf_threshold}'"
-        String filter_rare_args = "-i 'MAF<=${common_maf_threshold}'"
+        String filter_common_args 
+        String filter_rare_args
 
         RuntimeAttr? runtime_attr_override
     }
