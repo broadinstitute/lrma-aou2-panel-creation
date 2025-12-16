@@ -547,11 +547,14 @@ task Shapeit5PhaseRare{
     }
     command <<<
 
+        bcftools +fill-tags ~{scaffold_bcf} -Ob -o tmp.scaffold.out.bcf -- -t AN,AC
+        bcftools index tmp.scaffold.out.bcf
+
         bcftools +fill-tags ~{vcf_input} -Ob -o tmp.out.bcf -- -t AN,AC
         bcftools index tmp.out.bcf
 
         phase_rare_static --input tmp.out.bcf \
-                    --scaffold ~{scaffold_bcf} \
+                    --scaffold tmp.scaffold.out.bcf \
                     --map ~{mappingfile} \
                     --input-region ~{chunk_region} \
                     --scaffold-region ~{scaffold_region} \
