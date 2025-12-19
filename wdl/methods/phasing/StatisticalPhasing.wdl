@@ -555,6 +555,7 @@ task Shapeit5PhaseRare{
         
         # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
         bcftools view --threads 4 -e 'F_MISSING > 0.10 || ALT="." || ALT="*"' -Ob -o tmp.rare.out.bcf tmp.out.bcf
+        bcftools index tmp.rare.out.bcf
         
         phase_rare_static --input tmp.rare.out.bcf \
                     --scaffold tmp.scaffold.out.bcf \
