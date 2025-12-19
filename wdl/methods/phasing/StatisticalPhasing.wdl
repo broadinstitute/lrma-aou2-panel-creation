@@ -552,8 +552,11 @@ task Shapeit5PhaseRare{
 
         bcftools +fill-tags ~{vcf_input} -Ob -o tmp.out.bcf -- -t AN,AC
         bcftools index tmp.out.bcf
-
-        phase_rare_static --input tmp.out.bcf \
+        
+        # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
+        bcftools view --threads 4 -e 'F_MISSING > 0.10 || ALT="." || ALT="*"' -Ob -o tmp.rare.out.bcf tmp.out.bcf
+        
+        phase_rare_static --input tmp.rare.out.bcf \
                     --scaffold tmp.scaffold.out.bcf \
                     --map ~{mappingfile} \
                     --input-region ~{chunk_region} \
