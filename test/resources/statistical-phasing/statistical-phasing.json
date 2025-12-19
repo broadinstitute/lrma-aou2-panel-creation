@@ -14,7 +14,7 @@
  "StatisticalPhasing.reference_fasta_fai": "__REPO_DIR__/test/resources/large/statistical-phasing/GRCh38_full_analysis_set_plus_decoy_hla.ch46-70M-80M.fa.fai",
  "StatisticalPhasing.region": "chr6:70000000-80000000",
  "StatisticalPhasing.shapeit5": false,
- "StatisticalPhasing.shapeit5_common_extra_args": "",
+ "StatisticalPhasing.shapeit4_common_extra_args": "",
  "StatisticalPhasing.shapeit5_rare_extra_args": "",
  "StatisticalPhasing.shapeit_cpu": 1,
  "StatisticalPhasing.shapeit_memory": 1
