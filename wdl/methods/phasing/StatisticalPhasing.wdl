@@ -152,15 +152,23 @@ workflow StatisticalPhasing {
             output_prefix = output_prefix + ".phase.rare.concat"
         }
 
+        # concat common and rare
+        call BcftoolsConcatBCFs as ConcatCommonRare { input:
+            vcfs = [LigateScaffold.ligated_vcf_gz, ConcatRare.concated_bcf],
+            vcf_idxs = [LigateScaffold.ligated_vcf_gz_tbi, ConcatRare.concated_bcf_index],
+            output_prefix = output_prefix + ".phase.common.rare.concat"
+        }
+
     }
+
 
 
 
     output {
         # File phased_scaffold_vcf = LigateScaffold.ligated_vcf_gz
         # File phased_scaffold_vcf_tbi = LigateScaffold.ligated_vcf_gz_tbi
-        File phased_vcf = select_first([ConcatRare.concated_bcf,LigateScaffold.ligated_vcf_gz])
-        File phased_vcf_tbi = select_first([ConcatRare.concated_bcf_index,LigateScaffold.ligated_vcf_gz_tbi])
+        File phased_vcf = select_first([ConcatCommonRare.concated_bcf,LigateScaffold.ligated_vcf_gz])
+        File phased_vcf_tbi = select_first([ConcatCommonRare.concated_bcf_index,LigateScaffold.ligated_vcf_gz_tbi])
     }
 }
 
