@@ -146,16 +146,16 @@ workflow StatisticalPhasing {
             }
         }
 
-        call BcftoolsConcatBCFs as ConcatRare { input:
-            vcfs = Shapeit5_phase_rare.chunk_vcf,
-            vcf_idxs = Shapeit5_phase_rare.chunk_vcf_index,
+        call LigateVcfs as LigateRare { input:
+            vcfs = select_all(flatten([Shapeit5_phase_rare.chunk_vcf])),
+            vcf_idxs = select_all(flatten([Shapeit5_phase_rare.chunk_vcf_index])),
             output_prefix = output_prefix + ".phase.rare.concat"
         }
 
         # concat common and rare
         call BcftoolsConcatBCFs as ConcatCommonRare { input:
-            vcfs = [LigateScaffold.ligated_vcf_gz, ConcatRare.concated_bcf],
-            vcf_idxs = [LigateScaffold.ligated_vcf_gz_tbi, ConcatRare.concated_bcf_index],
+            vcfs = [LigateScaffold.ligated_vcf_gz, LigateRare.ligated_vcf_gz],
+            vcf_idxs = [LigateScaffold.ligated_vcf_gz_tbi, LigateRare.ligated_vcf_gz_tbi],
             output_prefix = output_prefix + ".phase.common.rare.concat"
         }
 
