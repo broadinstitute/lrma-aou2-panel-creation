@@ -1,5 +1,4 @@
 {
- "StatisticalPhasing.Shapeit4.extra_args": "",
  "StatisticalPhasing.bin_size": 5000000,
  "StatisticalPhasing.chromosome": "chr6",
  "StatisticalPhasing.extra_chunk_args": "--thread $(nproc) --window-size 2500000 --buffer-size 250000",
