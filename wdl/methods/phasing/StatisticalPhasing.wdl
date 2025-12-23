@@ -16,6 +16,12 @@ workflow StatisticalPhasing {
         String region
         String output_prefix
 
+        # inputs for FixVariantCollisions
+        File fix_variant_collisions_java
+        Int operation
+        String weight_tag
+        Int is_weight_format_field
+
         Int bin_size = 1000000
         String extra_chunk_args = "--thread $(nproc) --window-size 2000000 --buffer-size 200000"
 
@@ -27,6 +33,7 @@ workflow StatisticalPhasing {
         Int shapeit_memory
         String shapeit4_common_extra_args
         String shapeit5_rare_extra_args
+        String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
     }
 
     Map[String, String] genetic_mapping_dict = read_map(genetic_mapping_tsv_for_shapeit)
@@ -74,10 +81,19 @@ workflow StatisticalPhasing {
         vcf_tbis = select_all(select_first([FilterAndConcatVcfs.filter_and_concat_vcf_tbi,SubsetVcfShort.subset_tbi])),
         output_prefix = output_prefix + ".subset.concat"
     }
+    # added variant collision fix step
+    call FixVariantCollisions { input:
+        phased_bcf = ConcatSubsets.concatenated_vcf,
+        fix_variant_collisions_java = fix_variant_collisions_java,
+        operation = operation,
+        weight_tag = weight_tag,
+        is_weight_format_field = is_weight_format_field,
+        output_prefix = output_prefix
+    }
 
     call CreateChunks as CreateChunks { input:
-        vcf = ConcatSubsets.concatenated_vcf,
-        tbi = ConcatSubsets.concatenated_vcf_tbi,
+        vcf = FixVariantCollisions.phased_collisionless_bcf,
+        tbi = FixVariantCollisions.phased_collisionless_bcf_index,
         region = region,
         extra_chunk_args = extra_chunk_args
     }
@@ -88,8 +104,8 @@ workflow StatisticalPhasing {
         # phase common using shapeit4
         if (!shapeit5) {
             call Shapeit4 as Shapeit4_all { input:
-                vcf_input = ConcatSubsets.concatenated_vcf,
-                vcf_index = ConcatSubsets.concatenated_vcf_tbi,
+                vcf_input = FixVariantCollisions.phased_collisionless_bcf,
+                vcf_index = FixVariantCollisions.phased_collisionless_bcf_index,
                 mappingfile = genetic_mapping_dict[chromosome],
                 region = region_list[i],
                 output_prefix = output_prefix + ".filter_and_concat.phased",
@@ -100,8 +116,8 @@ workflow StatisticalPhasing {
         }
         if (shapeit5) {
             call FilterCommonandRareVariants { input:
-                vcf_gz = ConcatSubsets.concatenated_vcf,
-                vcf_gz_tbi = ConcatSubsets.concatenated_vcf_tbi,
+                vcf_gz = FixVariantCollisions.phased_collisionless_bcf,
+                vcf_gz_tbi = FixVariantCollisions.phased_collisionless_bcf_index,
                 output_prefix = output_prefix + ".filter_common_and_rare",
                 region = region_list[i],
                 filter_common_args = "-i 'MAF>=0.01'",
@@ -131,8 +147,8 @@ workflow StatisticalPhasing {
     if (shapeit5) {
         scatter (i in range(length(region_list))) {
             call Shapeit5PhaseRare as Shapeit5_phase_rare { input:
-                vcf_input = ConcatSubsets.concatenated_vcf,
-                vcf_index = ConcatSubsets.concatenated_vcf_tbi,
+                vcf_input = FixVariantCollisions.phased_collisionless_bcf,
+                vcf_index = FixVariantCollisions.phased_collisionless_bcf_index,
                 scaffold_bcf = LigateScaffold.ligated_vcf_gz,
                 scaffold_bcf_index = LigateScaffold.ligated_vcf_gz_tbi,
                 mappingfile = genetic_mapping_dict[chromosome],
@@ -142,7 +158,8 @@ workflow StatisticalPhasing {
                 chunknum = i,
                 cpu = shapeit_cpu,
                 memory = shapeit_memory,
-                extra_args = shapeit5_rare_extra_args
+                extra_args = shapeit5_rare_extra_args,
+                shapeit5_phase_rare_filter_args = shapeit5_phase_rare_filter_args
             }
         }
 
@@ -165,8 +182,6 @@ workflow StatisticalPhasing {
 
 
     output {
-        # File phased_scaffold_vcf = LigateScaffold.ligated_vcf_gz
-        # File phased_scaffold_vcf_tbi = LigateScaffold.ligated_vcf_gz_tbi
         File phased_vcf = select_first([ConcatCommonRare.concated_bcf,LigateScaffold.ligated_vcf_gz])
         File phased_vcf_tbi = select_first([ConcatCommonRare.concated_bcf_index,LigateScaffold.ligated_vcf_gz_tbi])
     }
@@ -547,6 +562,7 @@ task Shapeit5PhaseRare{
         Int cpu
         Int memory
         String extra_args
+        String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
 
         RuntimeAttr? runtime_attr_override
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
@@ -560,7 +576,7 @@ task Shapeit5PhaseRare{
         bcftools index tmp.out.bcf
         
         # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
-        bcftools view --threads 4 -e 'F_MISSING > 0.10 || ALT="." || ALT="*"' -Ob -o tmp.rare.out.bcf tmp.out.bcf
+        bcftools view --threads 4 ~{shapeit5_phase_rare_filter_args} -Ob -o tmp.rare.out.bcf tmp.out.bcf
         bcftools index tmp.rare.out.bcf
         
         phase_rare_static --input tmp.rare.out.bcf \
@@ -903,5 +919,61 @@ task BcftoolsConcatNaive {
         memory: "32 GB"
         cpu: 8
         disks: "local-disk 1000 SSD"
+    }
+}
+
+task FixVariantCollisions {
+
+    input {
+        File phased_bcf                     # biallelic
+        File fix_variant_collisions_java
+        Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
+        String weight_tag = "UNIT_WEIGHT"   # ID of the weight field; if this field is not found, all weights are set to one; weights are assumed to be non-negative
+        Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the sample column (1) or in the INFO field (0)
+        String output_prefix
+    }
+
+    command <<<
+        set -euxo pipefail
+
+        # convert bcf to vcf.gz
+        bcftools view ~{phased_bcf} -Oz -o phased.vcf.gz
+        bcftools index -t phased.vcf.gz
+
+        java ~{fix_variant_collisions_java} \
+            phased.vcf.gz \
+            ~{operation} \
+            ~{weight_tag} \
+            ~{is_weight_format_field} \
+            collisionless.vcf \
+            windows.txt \
+            histogram.txt \
+            null                            # do not output figures
+
+        # replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
+        bcftools view collisionless.vcf | \
+            sed -e 's/\.|0/0|0/g' | sed -e 's/0|\./0|0/g' | sed -e 's/\.|1/0|1/g' | sed -e 's/1|\./1|0/g' | sed -e 's/\.|\./0|0/g' | \
+            bcftools view -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz
+        # index and convert via vcf.gz to avoid errors from missing header lines
+        bcftools index -t ~{output_prefix}.phased.collisionless.vcf.gz
+        bcftools view ~{output_prefix}.phased.collisionless.vcf.gz -Ob -o ~{output_prefix}.phased.collisionless.bcf
+        bcftools index ~{output_prefix}.phased.collisionless.bcf
+    >>>
+
+    output {
+        File phased_collisionless_bcf = "~{output_prefix}.phased.collisionless.bcf"
+        File phased_collisionless_bcf_index = "~{output_prefix}.phased.collisionless.bcf.csi"
+        File windows = "windows.txt"
+        File histogram = "histogram.txt"
+    }
+    ###################
+    runtime {
+        cpu: 1
+        memory:  "16 GiB"
+        disks: "local-disk 100 HDD"
+        bootDiskSizeGb: 10
+        preemptible_tries:     3
+        max_retries:           2
+        docker:"us.gcr.io/broad-gatk/gatk:4.6.0.0"
     }
 }
