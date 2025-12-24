@@ -970,10 +970,10 @@ task FixVariantCollisions {
     runtime {
         cpu: 1
         memory:  "16 GiB"
-        disks: "local-disk 100 HDD"
+        disks: "local-disk 1000 HDD"
         bootDiskSizeGb: 10
-        preemptible_tries:     3
-        max_retries:           2
+        preemptible_tries:     0
+        max_retries:           0
         docker:"us.gcr.io/broad-gatk/gatk:4.6.0.0"
     }
 }
