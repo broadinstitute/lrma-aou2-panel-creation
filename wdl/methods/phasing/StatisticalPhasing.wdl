@@ -18,9 +18,9 @@ workflow StatisticalPhasing {
 
         # inputs for FixVariantCollisions
         File fix_variant_collisions_java
-        Int operation
-        String weight_tag
-        Int is_weight_format_field
+        Int? operation
+        String? weight_tag
+        Int? is_weight_format_field
 
         Int bin_size = 1000000
         String extra_chunk_args = "--thread $(nproc) --window-size 2000000 --buffer-size 200000"
