@@ -34,6 +34,8 @@ jobs:
       - uses: ./.github/actions/install-cromwell
         with:
           CROMWELL_VERSION: ${{ env.CROMWELL_VERSION }}
+      - uses: ./.github/actions/install-jq
+      - uses: ./.github/actions/install-bcftools
 
       - name: "STATISTICAL_PHASING_WDL"
         if: ${{ matrix.wdlTest == 'statistical-phasing-wdl' }}

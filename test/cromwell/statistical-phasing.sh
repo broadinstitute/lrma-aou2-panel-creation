@@ -14,4 +14,9 @@ REPO_DIR=${REPO_DIR:=/home/runner/work/lrma-aou2-panel-creation/lrma-aou2-panel-
 sed -e "s|__REPO_DIR__|$REPO_DIR|g" $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.json > $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.mod.json
 sed -e "s|__REPO_DIR__|$REPO_DIR|g" $REPO_DIR/test/resources/statistical-phasing/genetic_map_b38.tsv > $REPO_DIR/test/resources/statistical-phasing/genetic_map_b38.mod.tsv
 
-java -jar $CROMWELL_JAR run $REPO_DIR/wdl/methods/phasing/StatisticalPhasing.wdl -i $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.mod.json
+java -jar $CROMWELL_JAR run $REPO_DIR/wdl/methods/phasing/StatisticalPhasing.wdl -i $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.mod.json -m $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.mod.output.json
+
+RESULT_VCF_GZ=$(jq -r '.outputs."StatisticalPhasing.phased_vcf"' $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.mod.output.json)
+EXPECTED_VCF_GZ=$REPO_DIR/test/resources/large/statistical-phasing/expected/40-HPRC-1kGP.hiphase.sv.merged.chr6-70M-80M.scaffold.ligated.vcf.gz
+
+diff <(bcftools view --no-version $EXPECTED_VCF_GZ | grep -v fileDate) <(bcftools view --no-version $RESULT_VCF_GZ | grep -v fileDate)

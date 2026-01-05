@@ -322,7 +322,7 @@ task Shapeit4 {
         String output_prefix
         Int cpu
         Int memory
-        String extra_args
+        String extra_args = "--thread $(nproc)"
 
         RuntimeAttr? runtime_attr_override
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
@@ -334,7 +334,6 @@ task Shapeit4 {
                 --region ~{region} \
                 --sequencing \
                 --output ~{output_prefix}.bcf \
-                --thread $(nproc) \
                 ~{extra_args}
         bcftools index ~{output_prefix}.bcf
     >>>
@@ -379,7 +378,7 @@ task Shapeit5PhaseCommon{
         String output_prefix
         Int cpu
         Int memory
-        String extra_args
+        String extra_args = "--thread $(nproc)"
         Float minimal_maf = 0.01
 
         RuntimeAttr? runtime_attr_override
@@ -394,7 +393,6 @@ task Shapeit5PhaseCommon{
                             --region ~{region} \
                             --map ~{mappingfile} \
                             --output scaffold.bcf \
-                            --thread $(nproc) \
                             ~{extra_args}
         bcftools +fill-tags scaffold.bcf -Ob -o ~{output_prefix}.scaffold.bcf -- -t AN,AC
         bcftools index ~{output_prefix}.scaffold.bcf
