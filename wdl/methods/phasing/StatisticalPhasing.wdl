@@ -576,7 +576,10 @@ task Shapeit5PhaseRare{
         bcftools index tmp.out.bcf
         
         # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
-        bcftools view --threads 4 ~{shapeit5_phase_rare_filter_args} -Ob -o tmp.rare.out.bcf tmp.out.bcf
+        #bcftools view --threads 4 ~{shapeit5_phase_rare_filter_args} -Ob -o tmp.rare.out.bcf tmp.out.bcf
+        #bcftools index tmp.rare.out.bcf
+        # replace filtering with setGT to set missing genotypes to 0|0
+        bcftools +setGT tmp.out.bcf -Ob -o tmp.rare.out.bcf -- -t . -n 0p
         bcftools index tmp.rare.out.bcf
         
         phase_rare_static --input tmp.rare.out.bcf \
