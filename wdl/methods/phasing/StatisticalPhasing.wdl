@@ -567,7 +567,8 @@ task Shapeit5PhaseRare{
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
     command <<<
-
+        set -euxo pipefail
+        
         bcftools +fill-tags ~{scaffold_bcf} -Ob -o tmp.scaffold.out.bcf -- -t AN,AC
         bcftools index tmp.scaffold.out.bcf
 
