@@ -29,11 +29,13 @@ workflow StatisticalPhasing {
         String filter_and_concat_sv_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
 
         Boolean shapeit5 = true
-        Int shapeit_cpu
-        Int shapeit_memory
-        String shapeit4_common_extra_args
-        String shapeit5_rare_extra_args
-        String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
+        Int shapeit4_cpu
+        Int shapeit4_memory
+        Int shapeit5_cpu
+        Int shapeit5_memory
+        String shapeit4_common_extra_args = "--thread $(nproc)"
+        String shapeit5_rare_extra_args =  "--thread $(nproc)"
+        #String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
     }
 
     Map[String, String] genetic_mapping_dict = read_map(genetic_mapping_tsv_for_shapeit)
@@ -109,8 +111,8 @@ workflow StatisticalPhasing {
                 mappingfile = genetic_mapping_dict[chromosome],
                 region = region_list[i],
                 output_prefix = output_prefix + ".filter_and_concat.phased",
-                cpu = shapeit_cpu,
-                memory = shapeit_memory,
+                cpu = shapeit4_cpu,
+                memory = shapeit4_memory,
                 extra_args = shapeit4_common_extra_args
             }
         }
@@ -129,8 +131,8 @@ workflow StatisticalPhasing {
                 mappingfile = genetic_mapping_dict[chromosome],
                 region = region_list[i],
                 output_prefix = output_prefix + ".filter_and_concat.common",
-                cpu = shapeit_cpu,
-                memory = shapeit_memory,
+                cpu = shapeit4_cpu,
+                memory = shapeit4_memory,
                 extra_args = shapeit4_common_extra_args
             }
         }
@@ -156,10 +158,10 @@ workflow StatisticalPhasing {
                 scaffold_region = region,
                 output_prefix = output_prefix + ".chunk.phase.rare.phased",
                 chunknum = i,
-                cpu = shapeit_cpu,
-                memory = shapeit_memory,
+                cpu = shapeit5_cpu,
+                memory = shapeit5_memory,
                 extra_args = shapeit5_rare_extra_args,
-                shapeit5_phase_rare_filter_args = shapeit5_phase_rare_filter_args
+                #shapeit5_phase_rare_filter_args = shapeit5_phase_rare_filter_args
             }
         }
 
@@ -170,16 +172,13 @@ workflow StatisticalPhasing {
         }
 
         # concat common and rare
-        call BcftoolsConcatBCFs as ConcatCommonRare { input:
+        call BcftoolsConcatNaive as ConcatCommonRare { input:
             vcfs = [LigateScaffold.ligated_vcf_gz, LigateRare.ligated_vcf_gz],
             vcf_idxs = [LigateScaffold.ligated_vcf_gz_tbi, LigateRare.ligated_vcf_gz_tbi],
             output_prefix = output_prefix + ".phase.common.rare.concat"
         }
 
     }
-
-
-
 
     output {
         File phased_vcf = select_first([ConcatCommonRare.concated_bcf,LigateScaffold.ligated_vcf_gz])
@@ -562,7 +561,7 @@ task Shapeit5PhaseRare{
         Int cpu
         Int memory
         String extra_args
-        String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
+        #String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
 
         RuntimeAttr? runtime_attr_override
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
@@ -607,7 +606,7 @@ task Shapeit5PhaseRare{
     RuntimeAttr default_attr = object {
         cpu_cores:          cpu,
         mem_gb:             memory,
-        disk_gb:            100,
+        disk_gb:            disk_size,
         boot_disk_gb:       100,
         preemptible_tries:  0,
         max_retries:        0,
