@@ -352,13 +352,14 @@ task Shapeit4 {
                 --sequencing \
                 --output ~{output_prefix}.bcf \
                 ~{extra_args}
-        bcftools index ~{output_prefix}.bcf
+        bcftools +fill-tags ~{output_prefix}.bcf -Ob -o ~{output_prefix}.tagged.bcf -- -t AN,AC
+        bcftools index ~{output_prefix}.tagged.bcf
     >>>
 
     output{
         # File resouce_monitor_log = "resources.log"
-        File phased_bcf = "~{output_prefix}.bcf"
-        File phased_bcf_index = "~{output_prefix}.bcf.csi"
+        File phased_bcf = "~{output_prefix}.tagged.bcf"
+        File phased_bcf_index = "~{output_prefix}.tagged.bcf.csi"
     }
 
     #Int disk_size = 100 + ceil(2 * size(vcf_input, "GiB"))
@@ -912,7 +913,6 @@ task BcftoolsConcatNaive {
             ~{sep=" " vcfs} \
             -n \
             --no-version | \
-            bcftools +fill-tags -- -t AN,AC | \
             bcftools sort -Oz -o ~{output_prefix}.vcf.gz
         bcftools index -t ~{output_prefix}.vcf.gz
     >>>
