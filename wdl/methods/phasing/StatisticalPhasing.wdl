@@ -521,7 +521,7 @@ task LigateVcfs {
 
         ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.vcf.gz
         bcftools +fill-tags ~{output_prefix}.vcf.gz -- -t AF,AC,AN | \
-            bcftools annotate -x 'FORMAT/PP' \
+            bcftools annotate --no-version  -x 'FORMAT/PP' \
                 -Oz -o ~{output_prefix}.tagged.vcf.gz
         
         bcftools index -t ~{output_prefix}.tagged.vcf.gz
@@ -587,7 +587,7 @@ task Shapeit5PhaseRare{
         # replace filtering with setGT to set missing genotypes to 0|0
         # try to fix the issue of ID starts with numbers, will revisit later
         bcftools +setGT tmp.out.bcf -- -t . -n 0p | \
-            bcftools annotate -x 'ID' \
+            bcftools annotate --no-version -x 'ID' \
                 -Ob -o tmp.rare.out.bcf
         bcftools index tmp.rare.out.bcf
         
@@ -843,14 +843,14 @@ task FilterAndConcatVcfs {
         set -euxo pipefail
 
         # filter SV
-        bcftools +fill-tags -r ~{region} ~{sv_vcf} -- -t AF,AC,AN | \
+        bcftools +fill-tags --no-version -r ~{region} ~{sv_vcf} -- -t AF,AC,AN | \
             bcftools view ~{filter_and_concat_sv_filter_args} \
                 -Oz -o ~{output_prefix}.SV.vcf.gz
         bcftools index -t ~{output_prefix}.SV.vcf.gz
 
         # split to biallelic and filter short
         bcftools norm -r ~{region} -m-any -N -f ~{reference_fasta} ~{short_vcf} | \
-            bcftools +fill-tags -- -t AF,AC,AN | \
+            bcftools +fill-tags --no-version -- -t AF,AC,AN | \
             bcftools view ~{filter_and_concat_short_filter_args} | \
             bcftools sort -Oz -o ~{output_prefix}.short.vcf.gz
         bcftools index -t ~{output_prefix}.short.vcf.gz
