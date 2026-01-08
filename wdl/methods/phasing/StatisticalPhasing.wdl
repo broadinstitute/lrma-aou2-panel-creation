@@ -152,6 +152,11 @@ workflow StatisticalPhasing {
     # phase rare
     if (shapeit5) {
         ## todo: add buffer to each region as Shapeit5PhaseRare.scaffold_region
+        call AddBuffer as AddBufferToRegions { input:
+            region_list = CreateChunks.chunks,
+            pad_size = 500000,
+            output_prefix = output_prefix + ".scaffold_regions"
+        }
         scatter (i in range(length(region_list))) {
             call Shapeit5PhaseRareNew as Shapeit5_phase_rare { input:
                 vcf_input = FixVariantCollisions.phased_collisionless_bcf,
@@ -160,7 +165,7 @@ workflow StatisticalPhasing {
                 scaffold_bcf_index = LigateScaffold.ligated_vcf_gz_tbi,
                 mappingfile = genetic_mapping_dict[chromosome],
                 chunk_region = region_list[i],
-                scaffold_region = region,
+                scaffold_region = AddBufferToRegions.locuslist[i],
                 output_prefix = output_prefix + ".chunk.phase.rare.phased",
                 chunknum = i,
                 cpu = shapeit5_cpu,
@@ -1067,5 +1072,82 @@ task FixVariantCollisions {
         preemptible_tries:     0
         max_retries:           0
         docker:"us.gcr.io/broad-gatk/gatk:4.6.0.0"
+    }
+}
+
+
+task AddBuffer {
+    input {
+        File region_list
+        Int pad_size
+        String output_prefix
+
+        Int? preemptible_tries
+    }
+
+
+    command <<<
+        set -eo pipefail
+
+        python - --regionfile ~{region_list} \
+                 --pad_size ~{pad_size} \
+                 --output_file ~{output_prefix} \
+                 <<-'EOF'
+        import argparse
+
+        def split_locus(locus):
+            chromosome, span = locus.split(":")
+            start, end = span.split("-")
+            return(chromosome, int(start), int(end))
+
+        def write_output_file(content, output_file):
+            with open(output_file, "w") as f:
+                for item in content:
+                    l = "%s:%d-%d" % (item[0], item[1], item[2])
+                    f.write(l+ "\n")
+
+        def main():
+            parser = argparse.ArgumentParser()
+
+            parser.add_argument('--regionfile',
+                                type=str)
+
+            parser.add_argument('--output_file',
+                                type=str)
+
+            parser.add_argument('--pad_size',
+                    type=int)
+
+            args = parser.parse_args()
+            padsize = args.pad_size
+            intervals = []
+            with open(args.regionfile, 'r') as fp:
+                data = fp.readlines()
+                line = data[0]
+                chromosome, start, end = split_locus(line[:-1])
+                intervals.append([chromosome, start, end + padsize])
+                for line in data[1:-1]:
+                    chromosome, start, end = split_locus(line[:-1])
+                    intervals.append([chromosome, start-padsize, end + padsize])
+                line = data[-1]
+                chromosome, start, end = split_locus(line[:-1])
+                intervals.append([chromosome, start-padsize, end + padsize])
+            write_output_file(intervals, args.output_file + ".txt")
+
+        if __name__ == "__main__":
+            main()
+        EOF
+
+    >>>
+
+    runtime {
+        docker: "us.gcr.io/broad-dsde-methods/slee/kage-lite:pr_29"
+        memory: "4 GB"
+        cpu: 1
+        disks: "local-disk 100 SSD"
+    }
+
+    output {
+        Array[String] locuslist = read_lines("~{output_prefix}.txt")
     }
 }
