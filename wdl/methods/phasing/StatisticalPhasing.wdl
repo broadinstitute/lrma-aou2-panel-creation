@@ -104,6 +104,8 @@ workflow StatisticalPhasing {
 
     Array[String] region_list = read_lines(CreateChunks.chunks)
 
+    
+
     scatter (i in range(length(region_list))) {
         # phase common using shapeit4
         if (!shapeit5) {
@@ -149,6 +151,7 @@ workflow StatisticalPhasing {
 
     # phase rare
     if (shapeit5) {
+        ## todo: add buffer to each region as Shapeit5PhaseRare.scaffold_region
         scatter (i in range(length(region_list))) {
             call Shapeit5PhaseRare as Shapeit5_phase_rare { input:
                 vcf_input = FixVariantCollisions.phased_collisionless_bcf,
@@ -167,24 +170,24 @@ workflow StatisticalPhasing {
             }
         }
 
-        call LigateVcfs as LigateRare { input:
-            vcfs = select_all(flatten([Shapeit5_phase_rare.chunk_vcf])),
-            vcf_idxs = select_all(flatten([Shapeit5_phase_rare.chunk_vcf_index])),
-            output_prefix = output_prefix + ".phase.rare.concat"
-        }
+        # call LigateVcfs as LigateRare { input:
+        #     vcfs = select_all(flatten([Shapeit5_phase_rare.chunk_vcf])),
+        #     vcf_idxs = select_all(flatten([Shapeit5_phase_rare.chunk_vcf_index])),
+        #     output_prefix = output_prefix + ".phase.rare.concat"
+        # }
 
-        # concat common and rare
-        call BcftoolsConcatNaive as ConcatCommonRare { input:
-            vcfs = [LigateScaffold.ligated_vcf_gz, LigateRare.ligated_vcf_gz],
-            vcf_tbis = [LigateScaffold.ligated_vcf_gz_tbi, LigateRare.ligated_vcf_gz_tbi],
+        # concat rare, following the tutorial
+        call BcftoolsConcatNaive as ConcatRare { input:
+            vcfs = flatten([Shapeit5_phase_rare.chunk_vcf]),
+            vcf_tbis = flatten([Shapeit5_phase_rare.chunk_vcf_index]),
             output_prefix = output_prefix + ".phase.common.rare.concat"
         }
 
     }
 
     output {
-        File phased_vcf = select_first([ConcatCommonRare.concatenated_vcf,LigateScaffold.ligated_vcf_gz])
-        File phased_vcf_tbi = select_first([ConcatCommonRare.concatenated_vcf_tbi,LigateScaffold.ligated_vcf_gz_tbi])
+        File phased_vcf = select_first([ConcatRare.concatenated_vcf,LigateScaffold.ligated_vcf_gz])
+        File phased_vcf_tbi = select_first([ConcatRare.concatenated_vcf_tbi,LigateScaffold.ligated_vcf_gz_tbi])
     }
 }
 
