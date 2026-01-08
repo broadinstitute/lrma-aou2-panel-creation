@@ -35,6 +35,8 @@ workflow StatisticalPhasing {
         Int shapeit5_memory
         String shapeit4_common_extra_args = "--thread $(nproc)"
         String shapeit5_rare_extra_args =  "--thread $(nproc)"
+        String filter_common_args = "-i 'MAF>=0.01'"
+        String filter_rare_args = "-i 'MAF<=0.01'"
         #String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
     }
 
@@ -122,8 +124,8 @@ workflow StatisticalPhasing {
                 vcf_gz_tbi = FixVariantCollisions.phased_collisionless_bcf_index,
                 output_prefix = output_prefix + ".filter_common_and_rare",
                 region = region_list[i],
-                filter_common_args = "-i 'MAF>=0.01'",
-                filter_rare_args = "-i 'MAF<=0.01'"
+                filter_common_args = filter_common_args,
+                filter_rare_args = filter_rare_args
             }
             call Shapeit4 as Shapeit4_common { input:
                 vcf_input = FilterCommonandRareVariants.filter_common_vcf,
@@ -562,7 +564,7 @@ task Shapeit5PhaseRare{
         Int chunknum
         Int cpu
         Int memory
-        String extra_args
+        String extra_args = "--thread $(nproc)"
         #String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
 
         RuntimeAttr? runtime_attr_override
@@ -591,7 +593,6 @@ task Shapeit5PhaseRare{
                     --input-region ~{chunk_region} \
                     --scaffold-region ~{scaffold_region} \
                     --output ~{output_prefix}.chunk.~{chunknum}.bcf \
-                    --thread $(nproc) \
                     ~{extra_args}
 
         bcftools +fill-tags ~{output_prefix}.chunk.~{chunknum}.bcf -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AN,AC

@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        wdlTest: [ 'statistical-phasing-wdl' ]
+        wdlTest: [ 'statistical-phasing-wdl', 'statistical-phasing-wdl-shapeit5']
     continue-on-error: true
     name: WDL test ${{ matrix.wdlTest }} on Cromwell
     steps:
@@ -37,8 +37,14 @@ jobs:
       - uses: ./.github/actions/install-jq
       - uses: ./.github/actions/install-bcftools
 
-      - name: "STATISTICAL_PHASING_WDL"
+      - name: "statistical-phasing-wdl"
         if: ${{ matrix.wdlTest == 'statistical-phasing-wdl' }}
         run: |
           echo "Running statistical phasing WDL";
           bash test/cromwell/statistical-phasing.sh;
+
+      - name: "statistical-phasing-wdl-shapeit5"
+        if: ${{ matrix.wdlTest == 'statistical-phasing-wdl-shapeit5' }}
+        run: |
+          echo "Running statistical phasing WDL (Shapeit5)";
+          bash test/cromwell/statistical-phasing-shapeit5.sh;
