@@ -520,7 +520,7 @@ task LigateVcfs {
         fi
 
         ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.vcf.gz
-        bcftools +fill-tags ~{output_prefix}.vcf.gz -Oz -o ~{output_prefix}.tagged.vcf.gz -- -t AN,AC
+        bcftools +fill-tags ~{output_prefix}.vcf.gz -Oz -o ~{output_prefix}.tagged.vcf.gz -- -t AF,AC,AN
         bcftools index -t ~{output_prefix}.tagged.vcf.gz
     >>>
 
@@ -596,7 +596,7 @@ task Shapeit5PhaseRare{
                     --output ~{output_prefix}.chunk.~{chunknum}.bcf \
                     ~{extra_args}
 
-        bcftools +fill-tags ~{output_prefix}.chunk.~{chunknum}.bcf -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AN,AC
+        bcftools +fill-tags ~{output_prefix}.chunk.~{chunknum}.bcf -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AF,AC,AN
         bcftools index ~{output_prefix}.chunk.~{chunknum}.tagged.bcf
 
     >>>
