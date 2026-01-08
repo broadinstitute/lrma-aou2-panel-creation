@@ -150,7 +150,7 @@ workflow StatisticalPhasing {
     # phase rare
     if (shapeit5) {
         scatter (i in range(length(region_list))) {
-            call Shapeit5PhaseRare as Shapeit5_phase_rare { input:
+            call Shapeit5PhaseRareNew as Shapeit5_phase_rare { input:
                 vcf_input = FixVariantCollisions.phased_collisionless_bcf,
                 vcf_index = FixVariantCollisions.phased_collisionless_bcf_index,
                 scaffold_bcf = LigateScaffold.ligated_vcf_gz,
@@ -620,6 +620,84 @@ task Shapeit5PhaseRare{
         preemptible_tries:  0,
         max_retries:        0,
         docker:             "hangsuunc/shapeit5:v1"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " SSD"
+        zones: zones
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+    }
+}
+
+task Shapeit5PhaseRareNew{
+    input{
+        File vcf_input
+        File vcf_index
+        File scaffold_bcf
+        File scaffold_bcf_index
+        File mappingfile
+        String chunk_region
+        String scaffold_region
+        String output_prefix
+        Int chunknum
+        Int cpu
+        Int memory
+        String extra_args = "--thread $(nproc)"
+        #String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
+
+        RuntimeAttr? runtime_attr_override
+        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
+    }
+    command <<<
+        set -euxo pipefail
+
+        bcftools +fill-tags ~{scaffold_bcf} -Ob -o tmp.scaffold.out.bcf -- -t AN,AC
+        bcftools index tmp.scaffold.out.bcf
+
+        bcftools +fill-tags ~{vcf_input} -Ob -o tmp.out.bcf -- -t AN,AC
+        bcftools index tmp.out.bcf
+        
+        # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
+        # replace filtering with setGT to set missing genotypes to 0|0
+        # try to fix the issue of ID starts with numbers, will revisit later
+        bcftools +setGT tmp.out.bcf -- -t . -n 0p \
+                -Ob -o tmp.rare.out.bcf
+        bcftools index tmp.rare.out.bcf
+        
+        /shapeit5/phase_rare --input tmp.rare.out.bcf \
+                    --scaffold tmp.scaffold.out.bcf \
+                    --map ~{mappingfile} \
+                    --input-region ~{chunk_region} \
+                    --scaffold-region ~{scaffold_region} \
+                    --output ~{output_prefix}.chunk.~{chunknum}.bcf \
+                    ~{extra_args}
+
+        bcftools +fill-tags ~{output_prefix}.chunk.~{chunknum}.bcf -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AF,AC,AN
+        bcftools index ~{output_prefix}.chunk.~{chunknum}.tagged.bcf
+
+    >>>
+
+    output{
+        File chunk_vcf = "~{output_prefix}.chunk.~{chunknum}.tagged.bcf"
+        File chunk_vcf_index = "~{output_prefix}.chunk.~{chunknum}.tagged.bcf.csi"
+    }
+
+    Int disk_size = 100 + ceil(2 * size(vcf_input, "GiB"))
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          cpu,
+        mem_gb:             memory,
+        disk_gb:            disk_size,
+        boot_disk_gb:       100,
+        preemptible_tries:  0,
+        max_retries:        0,
+        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/shapeit5:develop"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
