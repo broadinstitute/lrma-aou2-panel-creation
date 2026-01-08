@@ -174,15 +174,15 @@ workflow StatisticalPhasing {
         # concat common and rare
         call BcftoolsConcatNaive as ConcatCommonRare { input:
             vcfs = [LigateScaffold.ligated_vcf_gz, LigateRare.ligated_vcf_gz],
-            vcf_idxs = [LigateScaffold.ligated_vcf_gz_tbi, LigateRare.ligated_vcf_gz_tbi],
+            vcf_tbis = [LigateScaffold.ligated_vcf_gz_tbi, LigateRare.ligated_vcf_gz_tbi],
             output_prefix = output_prefix + ".phase.common.rare.concat"
         }
 
     }
 
     output {
-        File phased_vcf = select_first([ConcatCommonRare.concated_bcf,LigateScaffold.ligated_vcf_gz])
-        File phased_vcf_tbi = select_first([ConcatCommonRare.concated_bcf_index,LigateScaffold.ligated_vcf_gz_tbi])
+        File phased_vcf = select_first([ConcatCommonRare.concatenated_vcf,LigateScaffold.ligated_vcf_gz])
+        File phased_vcf_tbi = select_first([ConcatCommonRare.concatenated_vcf_tbi,LigateScaffold.ligated_vcf_gz_tbi])
     }
 }
 
@@ -342,6 +342,7 @@ task Shapeit4 {
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
     command <<<
+        set -euxo pipefail
 
         shapeit4.2 --input ~{vcf_input} \
                 --map ~{mappingfile} \
@@ -399,6 +400,7 @@ task Shapeit5PhaseCommon{
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
     command <<<
+        set -euxo pipefail
         # add AN AC tag
         bcftools +fill-tags ~{vcf_input} -Ob -o tmp.out.bcf -- -t AN,AC
         bcftools index tmp.out.bcf
@@ -568,7 +570,7 @@ task Shapeit5PhaseRare{
     }
     command <<<
         set -euxo pipefail
-        
+
         bcftools +fill-tags ~{scaffold_bcf} -Ob -o tmp.scaffold.out.bcf -- -t AN,AC
         bcftools index tmp.scaffold.out.bcf
 
@@ -576,8 +578,6 @@ task Shapeit5PhaseRare{
         bcftools index tmp.out.bcf
         
         # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
-        #bcftools view --threads 4 ~{shapeit5_phase_rare_filter_args} -Ob -o tmp.rare.out.bcf tmp.out.bcf
-        #bcftools index tmp.rare.out.bcf
         # replace filtering with setGT to set missing genotypes to 0|0
         bcftools +setGT tmp.out.bcf -Ob -o tmp.rare.out.bcf -- -t . -n 0p
         bcftools index tmp.rare.out.bcf
