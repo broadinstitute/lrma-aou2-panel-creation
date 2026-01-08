@@ -579,7 +579,10 @@ task Shapeit5PhaseRare{
         
         # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
         # replace filtering with setGT to set missing genotypes to 0|0
-        bcftools +setGT tmp.out.bcf -Ob -o tmp.rare.out.bcf -- -t . -n 0p
+        # try to fix the issue of ID starts with numbers, will revisit later
+        bcftools +setGT tmp.out.bcf -- -t . -n 0p | \
+            bcftools annotate -x 'ID' \
+                -Ob -o tmp.rare.out.bcf
         bcftools index tmp.rare.out.bcf
         
         phase_rare_static --input tmp.rare.out.bcf \
