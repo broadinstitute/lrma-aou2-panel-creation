@@ -16,6 +16,8 @@
  "StatisticalPhasing.shapeit5": false,
  "StatisticalPhasing.shapeit4_common_extra_args": "--thread 1",
  "StatisticalPhasing.shapeit5_rare_extra_args": "",
- "StatisticalPhasing.shapeit_cpu": 1,
- "StatisticalPhasing.shapeit_memory": 1
+ "StatisticalPhasing.shapeit4_cpu": 1,
+ "StatisticalPhasing.shapeit4_memory": 1,
+ "StatisticalPhasing.shapeit5_cpu": 1,
+ "StatisticalPhasing.shapeit5_memory": 1
 }
