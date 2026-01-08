@@ -150,7 +150,7 @@ workflow StatisticalPhasing {
     # phase rare
     if (shapeit5) {
         scatter (i in range(length(region_list))) {
-            call Shapeit5PhaseRareNew as Shapeit5_phase_rare { input:
+            call Shapeit5PhaseRare as Shapeit5_phase_rare { input:
                 vcf_input = FixVariantCollisions.phased_collisionless_bcf,
                 vcf_index = FixVariantCollisions.phased_collisionless_bcf_index,
                 scaffold_bcf = LigateScaffold.ligated_vcf_gz,
