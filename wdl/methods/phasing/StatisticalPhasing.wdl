@@ -923,7 +923,7 @@ task BcftoolsConcatNaive {
     }
 
     runtime {
-        docker: "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.1"
+        docker: "hangsuunc/shapeit5:v1"
         memory: "32 GB"
         cpu: 8
         disks: "local-disk 1000 SSD"
