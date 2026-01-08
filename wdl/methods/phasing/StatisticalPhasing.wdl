@@ -352,14 +352,13 @@ task Shapeit4 {
                 --sequencing \
                 --output ~{output_prefix}.bcf \
                 ~{extra_args}
-        bcftools +fill-tags ~{output_prefix}.bcf -Ob -o ~{output_prefix}.tagged.bcf -- -t AN,AC
-        bcftools index ~{output_prefix}.tagged.bcf
+        bcftools index ~{output_prefix}.bcf
     >>>
 
     output{
         # File resouce_monitor_log = "resources.log"
-        File phased_bcf = "~{output_prefix}.tagged.bcf"
-        File phased_bcf_index = "~{output_prefix}.tagged.bcf.csi"
+        File phased_bcf = "~{output_prefix}.bcf"
+        File phased_bcf_index = "~{output_prefix}.bcf.csi"
     }
 
     #Int disk_size = 100 + ceil(2 * size(vcf_input, "GiB"))
@@ -521,12 +520,13 @@ task LigateVcfs {
         fi
 
         ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.vcf.gz
-        bcftools index -t ~{output_prefix}.vcf.gz
+        bcftools +fill-tags ~{output_prefix}.vcf.gz -Oz -o ~{output_prefix}.tagged.vcf.gz -- -t AN,AC
+        bcftools index -t ~{output_prefix}.tagged.vcf.gz
     >>>
 
     output {
-        File ligated_vcf_gz = "~{output_prefix}.vcf.gz"
-        File ligated_vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
+        File ligated_vcf_gz = "~{output_prefix}.tagged.vcf.gz"
+        File ligated_vcf_gz_tbi = "~{output_prefix}.tagged.vcf.gz.tbi"
     }
 
     #########################
