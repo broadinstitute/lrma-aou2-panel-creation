@@ -520,7 +520,10 @@ task LigateVcfs {
         fi
 
         ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.vcf.gz
-        bcftools +fill-tags ~{output_prefix}.vcf.gz -Oz -o ~{output_prefix}.tagged.vcf.gz -- -t AF,AC,AN
+        bcftools +fill-tags ~{output_prefix}.vcf.gz -- -t AF,AC,AN | \
+            bcftools annotate -x 'FORMAT/PP' \
+                -Oz -o ~{output_prefix}.tagged.vcf.gz
+        
         bcftools index -t ~{output_prefix}.tagged.vcf.gz
     >>>
 
