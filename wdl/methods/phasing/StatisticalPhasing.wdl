@@ -911,7 +911,7 @@ task BcftoolsConcatNaive {
 
         bcftools concat \
             ~{sep=" " vcfs} \
-            -n \
+            --naive-force \
             --no-version | \
             bcftools sort -Oz -o ~{output_prefix}.vcf.gz
         bcftools index -t ~{output_prefix}.vcf.gz
