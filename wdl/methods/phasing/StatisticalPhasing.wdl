@@ -577,16 +577,16 @@ task Shapeit5PhaseRare{
     command <<<
         set -euxo pipefail
 
-        bcftools +fill-tags ~{scaffold_bcf} -Ob -o tmp.scaffold.out.bcf -- -t AN,AC
+        bcftools +fill-tags --no-version ~{scaffold_bcf} -Ob -o tmp.scaffold.out.bcf -- -t AN,AC
         bcftools index tmp.scaffold.out.bcf
 
-        bcftools +fill-tags ~{vcf_input} -Ob -o tmp.out.bcf -- -t AN,AC
+        bcftools +fill-tags --no-version ~{vcf_input} -Ob -o tmp.out.bcf -- -t AN,AC
         bcftools index tmp.out.bcf
         
         # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
         # replace filtering with setGT to set missing genotypes to 0|0
         # try to fix the issue of ID starts with numbers, will revisit later
-        bcftools +setGT tmp.out.bcf -- -t . -n 0p | \
+        bcftools +setGT --no-version tmp.out.bcf -- -t . -n 0p | \
             bcftools annotate --no-version -x 'ID' \
                 -Ob -o tmp.rare.out.bcf
         bcftools index tmp.rare.out.bcf
@@ -599,7 +599,7 @@ task Shapeit5PhaseRare{
                     --output ~{output_prefix}.chunk.~{chunknum}.bcf \
                     ~{extra_args}
 
-        bcftools +fill-tags ~{output_prefix}.chunk.~{chunknum}.bcf -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AF,AC,AN
+        bcftools +fill-tags --no-version ~{output_prefix}.chunk.~{chunknum}.bcf -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AF,AC,AN
         bcftools index ~{output_prefix}.chunk.~{chunknum}.tagged.bcf
 
     >>>
@@ -656,16 +656,16 @@ task Shapeit5PhaseRareNew{
     command <<<
         set -euxo pipefail
 
-        bcftools +fill-tags ~{scaffold_bcf} -Ob -o tmp.scaffold.out.bcf -- -t AN,AC
+        bcftools +fill-tags ~{scaffold_bcf} --no-version -Ob -o tmp.scaffold.out.bcf -- -t AN,AC
         bcftools index tmp.scaffold.out.bcf
 
-        bcftools +fill-tags ~{vcf_input} -Ob -o tmp.out.bcf -- -t AN,AC
+        bcftools +fill-tags ~{vcf_input} --no-version -Ob -o tmp.out.bcf -- -t AN,AC
         bcftools index tmp.out.bcf
         
         # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
         # replace filtering with setGT to set missing genotypes to 0|0
         # try to fix the issue of ID starts with numbers, will revisit later
-        bcftools +setGT tmp.out.bcf -Ob -o tmp.rare.out.bcf -- -t . -n 0p
+        bcftools +setGT tmp.out.bcf --no-version -Ob -o tmp.rare.out.bcf -- -t . -n 0p
                 
         bcftools index tmp.rare.out.bcf
         
@@ -677,7 +677,7 @@ task Shapeit5PhaseRareNew{
                     --output ~{output_prefix}.chunk.~{chunknum}.bcf \
                     ~{extra_args}
 
-        bcftools +fill-tags ~{output_prefix}.chunk.~{chunknum}.bcf -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AF,AC,AN
+        bcftools +fill-tags ~{output_prefix}.chunk.~{chunknum}.bcf --no-version -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AF,AC,AN
         bcftools index ~{output_prefix}.chunk.~{chunknum}.tagged.bcf
 
     >>>
@@ -780,15 +780,15 @@ task FilterCommonandRareVariants {
         set -euxo pipefail
 
         # filter common
-        bcftools +fill-tags -r ~{region} ~{vcf_gz} -- -t AF,AC,AN | \
+        bcftools +fill-tags --no-version -r ~{region} ~{vcf_gz} -- -t AF,AC,AN | \
             bcftools view ~{filter_common_args} \
                 -Oz -o ~{output_prefix}.common.vcf.gz
         bcftools index -t ~{output_prefix}.common.vcf.gz
 
         # filter rare
-        bcftools +fill-tags -r ~{region} ~{vcf_gz} -- -t AF,AC,AN | \
+        bcftools +fill-tags --no-version -r ~{region} ~{vcf_gz} -- -t AF,AC,AN | \
             bcftools view ~{filter_rare_args} \
-                -Oz -o ~{output_prefix}.rare.vcf.gz
+                --no-version -Oz -o ~{output_prefix}.rare.vcf.gz
         bcftools index -t ~{output_prefix}.rare.vcf.gz
 
     }
