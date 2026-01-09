@@ -456,7 +456,13 @@ task switch {
         Int num_threads
     }
     command <<<
-        switch_static --validation ~{truth_bcf} --estimation ~{test_bcf} --region ~{region} --output ~{outputprefix} --thread ~{num_threads}
+        set -euxo pipefail
+        bcftools view -i 'abs(strlen(ALT)-strlen(REF))<5' ~{truth_bcf} -Oz -o truth.short_filtered.bcf
+        bcftools index truth.short_filtered.bcf
+        bcftools view -i 'abs(strlen(ALT)-strlen(REF))<5' ~{test_bcf} -Oz -o test.short_filtered.bcf
+        bcftools index test.short_filtered.bcf
+
+        switch_static --validation truth.short_filtered.bcf --estimation test.short_filtered.bcf --region ~{region} --output ~{outputprefix} --thread ~{num_threads}
     >>>
 
     output{
