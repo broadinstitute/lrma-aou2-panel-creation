@@ -102,9 +102,7 @@ workflow StatisticalPhasing {
         extra_chunk_args = extra_chunk_args
     }
 
-    Array[String] region_list = read_lines(CreateChunks.chunks)
-
-    
+    Array[String] region_list = read_lines(CreateChunks.common_chunks) # for shapeit4
 
     scatter (i in range(length(region_list))) {
         # phase common using shapeit4
@@ -152,11 +150,13 @@ workflow StatisticalPhasing {
     # phase rare
     if (shapeit5) {
         ## todo: add buffer to each region as Shapeit5PhaseRare.scaffold_region
-        call AddBuffer as AddBufferToRegions { input:
-            region_list = CreateChunks.chunks,
-            pad_size = 500000,
-            output_prefix = output_prefix + ".scaffold_regions"
-        }
+        # be careful if the pad_size is too large
+        # call AddBuffer as AddBufferToRegions { input:
+        #     region_list = CreateChunks.chunks,
+        #     pad_size = 500000,
+        #     output_prefix = output_prefix + ".scaffold_regions"
+        # }
+        Array[String] rare_region_list = read_lines(CreateChunks.rare_chunks) # for shapeit5
         scatter (i in range(length(region_list))) {
             call Shapeit5PhaseRareNew as Shapeit5_phase_rare { input:
                 vcf_input = FixVariantCollisions.phased_collisionless_bcf,
@@ -164,8 +164,8 @@ workflow StatisticalPhasing {
                 scaffold_bcf = LigateScaffold.ligated_vcf_gz,
                 scaffold_bcf_index = LigateScaffold.ligated_vcf_gz_tbi,
                 mappingfile = genetic_mapping_dict[chromosome],
-                chunk_region = region_list[i],
-                scaffold_region = AddBufferToRegions.locuslist[i],
+                chunk_region = rare_region_list[i],
+                scaffold_region = region_list[i],
                 output_prefix = output_prefix + ".chunk.phase.rare.phased",
                 chunknum = i,
                 cpu = shapeit5_cpu,
@@ -480,11 +480,13 @@ task CreateChunks {
             -O chunks.txt
 
         # cut chunks + buffers
-        cut -f 3 chunks.txt > chunks.regions.txt
+        cut -f 3 chunks.txt > common.chunks.regions.txt
+        cut -f 4 chunks.txt > rare.chunks.regions.txt
     >>>
 
     output {
-        File chunks = "chunks.regions.txt"
+        File common_chunks = "common.chunks.regions.txt"
+        File rare_chunks = "rare.chunks.regions.txt"
     }
 
     #########################
