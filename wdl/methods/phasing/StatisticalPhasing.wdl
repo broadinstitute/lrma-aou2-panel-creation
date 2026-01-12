@@ -78,26 +78,27 @@ workflow StatisticalPhasing {
                 filter_and_concat_sv_filter_args = filter_and_concat_sv_filter_args
             }
         } 
+        # added variant collision fix step
+        call FixVariantCollisions { input:
+            phased_bcf = select_first([FilterAndConcatVcfs.filter_and_concat_vcf, SubsetVcfShort.subset_vcf]),
+            fix_variant_collisions_java = fix_variant_collisions_java,
+            operation = operation,
+            weight_tag = weight_tag,
+            is_weight_format_field = is_weight_format_field,
+            output_prefix = output_prefix
+        }
     }
 
     call BcftoolsConcatNaive as ConcatSubsets { input:
-        vcfs = select_all(select_first([FilterAndConcatVcfs.filter_and_concat_vcf,SubsetVcfShort.subset_vcf])),
+        vcfs = select_all(FixVariantCollisions.phased_collisionless_bcf),
         vcf_tbis = select_all(select_first([FilterAndConcatVcfs.filter_and_concat_vcf_tbi,SubsetVcfShort.subset_tbi])),
         output_prefix = output_prefix + ".subset.concat"
     }
-    # added variant collision fix step
-    call FixVariantCollisions { input:
-        phased_bcf = ConcatSubsets.concatenated_vcf,
-        fix_variant_collisions_java = fix_variant_collisions_java,
-        operation = operation,
-        weight_tag = weight_tag,
-        is_weight_format_field = is_weight_format_field,
-        output_prefix = output_prefix
-    }
+
 
     call CreateChunks as CreateChunks { input:
-        vcf = FixVariantCollisions.phased_collisionless_bcf,
-        tbi = FixVariantCollisions.phased_collisionless_bcf_index,
+        vcf = ConcatSubsets.concatenated_vcf,
+        tbi = ConcatSubsets.concatenated_vcf_tbi,
         region = region,
         extra_chunk_args = extra_chunk_args
     }
@@ -108,8 +109,8 @@ workflow StatisticalPhasing {
         # phase common using shapeit4
         if (!shapeit5) {
             call Shapeit4 as Shapeit4_all { input:
-                vcf_input = FixVariantCollisions.phased_collisionless_bcf,
-                vcf_index = FixVariantCollisions.phased_collisionless_bcf_index,
+                vcf_input = ConcatSubsets.concatenated_vcf,
+                vcf_index = ConcatSubsets.concatenated_vcf_tbi,
                 mappingfile = genetic_mapping_dict[chromosome],
                 region = region_list[i],
                 output_prefix = output_prefix + ".filter_and_concat.phased",
@@ -120,8 +121,8 @@ workflow StatisticalPhasing {
         }
         if (shapeit5) {
             call FilterCommonandRareVariants { input:
-                vcf_gz = FixVariantCollisions.phased_collisionless_bcf,
-                vcf_gz_tbi = FixVariantCollisions.phased_collisionless_bcf_index,
+                vcf_gz = ConcatSubsets.concatenated_vcf,
+                vcf_gz_tbi = ConcatSubsets.concatenated_vcf_tbi,
                 output_prefix = output_prefix + ".filter_common_and_rare",
                 region = region_list[i],
                 filter_common_args = filter_common_args,
@@ -149,18 +150,11 @@ workflow StatisticalPhasing {
 
     # phase rare
     if (shapeit5) {
-        ## todo: add buffer to each region as Shapeit5PhaseRare.scaffold_region
-        # be careful if the pad_size is too large
-        # call AddBuffer as AddBufferToRegions { input:
-        #     region_list = CreateChunks.chunks,
-        #     pad_size = 500000,
-        #     output_prefix = output_prefix + ".scaffold_regions"
-        # }
         Array[String] rare_region_list = read_lines(CreateChunks.rare_chunks) # for shapeit5
         scatter (i in range(length(region_list))) {
             call Shapeit5PhaseRareNew as Shapeit5_phase_rare { input:
-                vcf_input = FixVariantCollisions.phased_collisionless_bcf,
-                vcf_index = FixVariantCollisions.phased_collisionless_bcf_index,
+                vcf_input = ConcatSubsets.concatenated_vcf,
+                vcf_index = ConcatSubsets.concatenated_vcf_tbi,
                 scaffold_bcf = LigateScaffold.ligated_vcf_gz,
                 scaffold_bcf_index = LigateScaffold.ligated_vcf_gz_tbi,
                 mappingfile = genetic_mapping_dict[chromosome],
@@ -170,16 +164,9 @@ workflow StatisticalPhasing {
                 chunknum = i,
                 cpu = shapeit5_cpu,
                 memory = shapeit5_memory,
-                extra_args = shapeit5_rare_extra_args,
-                #shapeit5_phase_rare_filter_args = shapeit5_phase_rare_filter_args
+                extra_args = shapeit5_rare_extra_args
             }
         }
-
-        # call LigateVcfs as LigateRare { input:
-        #     vcfs = select_all(flatten([Shapeit5_phase_rare.chunk_vcf])),
-        #     vcf_idxs = select_all(flatten([Shapeit5_phase_rare.chunk_vcf_index])),
-        #     output_prefix = output_prefix + ".phase.rare.concat"
-        # }
 
         # concat rare, following the tutorial
         call BcftoolsConcatNaive as ConcatRare { input:
@@ -369,8 +356,6 @@ task Shapeit4 {
         File phased_bcf_index = "~{output_prefix}.bcf.csi"
     }
 
-    #Int disk_size = 100 + ceil(2 * size(vcf_input, "GiB"))
-
  #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          cpu,
@@ -429,8 +414,6 @@ task Shapeit5PhaseCommon{
         File scaffold_vcf_index = "~{output_prefix}.scaffold.bcf.csi"
     }
 
-    Int disk_size = 100 + ceil(2 * size(vcf_input, "GiB"))
-
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          cpu,
@@ -460,7 +443,7 @@ task CreateChunks {
         File vcf
         File tbi
         String region
-        String? extra_chunk_args = "--thread $(nproc) --window-size 5000000 --buffer-size 500000"
+        String extra_chunk_args = "--thread $(nproc) --window-size 5000000 --buffer-size 500000"
 
         RuntimeAttr? runtime_attr_override
     }
@@ -564,86 +547,6 @@ task LigateVcfs {
     }
 }
 
-
-task Shapeit5PhaseRare{
-    input{
-        File vcf_input
-        File vcf_index
-        File scaffold_bcf
-        File scaffold_bcf_index
-        File mappingfile
-        String chunk_region
-        String scaffold_region
-        String output_prefix
-        Int chunknum
-        Int cpu
-        Int memory
-        String extra_args = "--thread $(nproc)"
-        #String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
-
-        RuntimeAttr? runtime_attr_override
-        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
-    }
-    command <<<
-        set -euxo pipefail
-
-        bcftools +fill-tags --no-version ~{scaffold_bcf} -Ob -o tmp.scaffold.out.bcf -- -t AN,AC
-        bcftools index tmp.scaffold.out.bcf
-
-        bcftools +fill-tags --no-version ~{vcf_input} -Ob -o tmp.out.bcf -- -t AN,AC
-        bcftools index tmp.out.bcf
-        
-        # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
-        # replace filtering with setGT to set missing genotypes to 0|0
-        # try to fix the issue of ID starts with numbers, will revisit later
-        bcftools +setGT --no-version tmp.out.bcf -- -t . -n 0p | \
-            bcftools annotate --no-version -x 'ID' \
-                -Ob -o tmp.rare.out.bcf
-        bcftools index tmp.rare.out.bcf
-        
-        phase_rare_static --input tmp.rare.out.bcf \
-                    --scaffold tmp.scaffold.out.bcf \
-                    --map ~{mappingfile} \
-                    --input-region ~{chunk_region} \
-                    --scaffold-region ~{scaffold_region} \
-                    --output ~{output_prefix}.chunk.~{chunknum}.bcf \
-                    ~{extra_args}
-
-        bcftools +fill-tags --no-version ~{output_prefix}.chunk.~{chunknum}.bcf -Ob -o ~{output_prefix}.chunk.~{chunknum}.tagged.bcf -- -t AF,AC,AN
-        bcftools index ~{output_prefix}.chunk.~{chunknum}.tagged.bcf
-
-    >>>
-
-    output{
-        File chunk_vcf = "~{output_prefix}.chunk.~{chunknum}.tagged.bcf"
-        File chunk_vcf_index = "~{output_prefix}.chunk.~{chunknum}.tagged.bcf.csi"
-    }
-
-    Int disk_size = 100 + ceil(2 * size(vcf_input, "GiB"))
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          cpu,
-        mem_gb:             memory,
-        disk_gb:            disk_size,
-        boot_disk_gb:       100,
-        preemptible_tries:  0,
-        max_retries:        0,
-        docker:             "hangsuunc/shapeit5:v1"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " SSD"
-        zones: zones
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
-}
-
 task Shapeit5PhaseRareNew{
     input{
         File vcf_input
@@ -658,8 +561,7 @@ task Shapeit5PhaseRareNew{
         Int cpu
         Int memory
         String extra_args = "--thread $(nproc)"
-        #String shapeit5_phase_rare_filter_args = "-e 'F_MISSING > 0.10 || ALT=\".\" || ALT=\"*\"'"
-
+        
         RuntimeAttr? runtime_attr_override
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
@@ -674,9 +576,7 @@ task Shapeit5PhaseRareNew{
         
         # try to fix bugs in https://github.com/odelaneau/shapeit5/issues/33
         # replace filtering with setGT to set missing genotypes to 0|0
-        # try to fix the issue of ID starts with numbers, will revisit later
-        bcftools +setGT tmp.out.bcf --no-version -Ob -o tmp.rare.out.bcf -- -t . -n 0p
-                
+        bcftools +setGT tmp.out.bcf --no-version -Ob -o tmp.rare.out.bcf -- -t . -n 0p  
         bcftools index tmp.rare.out.bcf
         
         /shapeit5/phase_rare --input tmp.rare.out.bcf \
@@ -843,8 +743,8 @@ task FilterAndConcatVcfs {
         String region
         File reference_fasta
         File reference_fasta_fai
-        String? filter_and_concat_short_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
-        String? filter_and_concat_sv_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
+        String filter_and_concat_short_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
+        String filter_and_concat_sv_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
 
         RuntimeAttr? runtime_attr_override
     }
@@ -1074,82 +974,5 @@ task FixVariantCollisions {
         preemptible_tries:     0
         max_retries:           0
         docker:"us.gcr.io/broad-gatk/gatk:4.6.0.0"
-    }
-}
-
-
-task AddBuffer {
-    input {
-        File region_list
-        Int pad_size
-        String output_prefix
-
-        Int? preemptible_tries
-    }
-
-
-    command <<<
-        set -eo pipefail
-
-        python - --regionfile ~{region_list} \
-                 --pad_size ~{pad_size} \
-                 --output_file ~{output_prefix} \
-                 <<-'EOF'
-        import argparse
-
-        def split_locus(locus):
-            chromosome, span = locus.split(":")
-            start, end = span.split("-")
-            return(chromosome, int(start), int(end))
-
-        def write_output_file(content, output_file):
-            with open(output_file, "w") as f:
-                for item in content:
-                    l = "%s:%d-%d" % (item[0], item[1], item[2])
-                    f.write(l+ "\n")
-
-        def main():
-            parser = argparse.ArgumentParser()
-
-            parser.add_argument('--regionfile',
-                                type=str)
-
-            parser.add_argument('--output_file',
-                                type=str)
-
-            parser.add_argument('--pad_size',
-                    type=int)
-
-            args = parser.parse_args()
-            padsize = args.pad_size
-            intervals = []
-            with open(args.regionfile, 'r') as fp:
-                data = fp.readlines()
-                line = data[0]
-                chromosome, start, end = split_locus(line[:-1])
-                intervals.append([chromosome, start, end + padsize])
-                for line in data[1:-1]:
-                    chromosome, start, end = split_locus(line[:-1])
-                    intervals.append([chromosome, start-padsize, end + padsize])
-                line = data[-1]
-                chromosome, start, end = split_locus(line[:-1])
-                intervals.append([chromosome, start-padsize, end + padsize])
-            write_output_file(intervals, args.output_file + ".txt")
-
-        if __name__ == "__main__":
-            main()
-        EOF
-
-    >>>
-
-    runtime {
-        docker: "us.gcr.io/broad-dsde-methods/slee/kage-lite:pr_29"
-        memory: "4 GB"
-        cpu: 1
-        disks: "local-disk 100 SSD"
-    }
-
-    output {
-        Array[String] locuslist = read_lines("~{output_prefix}.txt")
     }
 }
