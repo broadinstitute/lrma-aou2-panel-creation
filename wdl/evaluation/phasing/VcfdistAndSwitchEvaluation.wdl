@@ -33,6 +33,8 @@ workflow VcfdistAndSwitchEvaluation {
         String? vcfdist_extra_args
         Int? vcfdist_mem_gb
 
+        String? switch_filter_args
+
         String summarize_evaluations_docker
     }
 
@@ -60,12 +62,13 @@ workflow VcfdistAndSwitchEvaluation {
         }
 
         call switch { input: 
-            truth_bcf = SubsetSampleFromVcfTruth.single_sample_vcf, 
-            truth_bcf_index = SubsetSampleFromVcfTruth.single_sample_vcf_tbi, 
-            test_bcf = SubsetSampleFromVcfEval.single_sample_vcf, 
-            test_bcf_index = SubsetSampleFromVcfEval.single_sample_vcf_tbi, 
-            region = region, 
-            outputprefix = sample, 
+            truth_bcf = SubsetSampleFromVcfTruth.single_sample_vcf,
+            truth_bcf_index = SubsetSampleFromVcfTruth.single_sample_vcf_tbi,
+            test_bcf = SubsetSampleFromVcfEval.single_sample_vcf,
+            test_bcf_index = SubsetSampleFromVcfEval.single_sample_vcf_tbi,
+            region = region,
+            outputprefix = sample,
+            filter_args = switch_filter_args,
             num_threads = 4
         }
     }
@@ -454,12 +457,13 @@ task switch {
         String region
         String outputprefix
         Int num_threads
+        String? filter_args = "-i 'abs(strlen(ALT)-strlen(REF))<5'"
     }
     command <<<
         set -euxo pipefail
-        bcftools view -i 'abs(strlen(ALT)-strlen(REF))<5' ~{truth_bcf} -Oz -o truth.short_filtered.bcf
+        bcftools view ~{filter_args} ~{truth_bcf} -Oz -o truth.short_filtered.bcf
         bcftools index truth.short_filtered.bcf
-        bcftools view -i 'abs(strlen(ALT)-strlen(REF))<5' ~{test_bcf} -Oz -o test.short_filtered.bcf
+        bcftools view ~{filter_args} ~{test_bcf} -Oz -o test.short_filtered.bcf
         bcftools index test.short_filtered.bcf
 
         switch_static --validation truth.short_filtered.bcf --estimation test.short_filtered.bcf --region ~{region} --output ~{outputprefix} --thread ~{num_threads}
