@@ -455,7 +455,7 @@ task LigateVcfs {
         fi
 
         ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.vcf.gz
-        bcftools +fill-tags ~{output_prefix}.vcf.gz -- -t AF,AC,AN | \
+        bcftools +fill-tags --no-version ~{output_prefix}.vcf.gz -- -t AF,AC,AN | \
             bcftools annotate --no-version  -x 'FORMAT/PP' \
                 -Oz -o ~{output_prefix}.tagged.vcf.gz
         
@@ -583,8 +583,8 @@ task BcftoolsConcatBCFs {
             for ff in ~{sep=' ' vcfs}; do bcftools index $ff; done
         fi
 
-        bcftools concat --allow-overlap --remove-duplicates -Ob -o ~{output_prefix}.bcf -f ~{write_lines(vcfs)} 
-        bcftools sort ~{output_prefix}.bcf -Ob -o ~{output_prefix}.sorted.bcf
+        bcftools concat --no-version --allow-overlap --remove-duplicates -Ob -o ~{output_prefix}.bcf -f ~{write_lines(vcfs)}
+        bcftools sort --no-version ~{output_prefix}.bcf -Ob -o ~{output_prefix}.sorted.bcf
         bcftools index ~{output_prefix}.sorted.bcf
     >>>
 
