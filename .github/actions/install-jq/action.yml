@@ -1,0 +1,9 @@
+name: 'install-jq'
+description: 'installs jq locally for jobs that require it'
+runs:
+  using: "composite"
+  steps:
+    - name: Install jq
+      run: |
+        sudo apt install jq
+      shell: bash

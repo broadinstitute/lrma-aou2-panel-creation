@@ -1,0 +1,9 @@
+name: 'install-bcftools'
+description: 'installs bcftools (using apt) locally for jobs that require it'
+runs:
+  using: "composite"
+  steps:
+    - name: Install bcftools
+      run: |
+        sudo apt install bcftools
+      shell: bash

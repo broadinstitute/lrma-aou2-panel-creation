@@ -1,0 +1,5 @@
+*.vcf.gz filter=lfs diff=lfs merge=lfs -text
+*.vcf.gz.tbi filter=lfs diff=lfs merge=lfs -text
+*.fa filter=lfs diff=lfs merge=lfs -text
+*.fa.fai filter=lfs diff=lfs merge=lfs -text
+*.gmap.gz filter=lfs diff=lfs merge=lfs -text
