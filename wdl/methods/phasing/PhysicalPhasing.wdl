@@ -99,15 +99,12 @@ task PreProcessVCF {
         RuntimeAttr? runtime_attr_override
     }
     String docker_dir = "/truvari_intrasample"
-    String work_dir = "/mnt/disks/cromwell_root/truvari_intrasample"
 
     command <<<
         set -euxo pipefail
 
         # convert lower case alleles to upper case
-        mkdir -p ~{work_dir}
-        cp ~{docker_dir}/convert_lower_case.py ~{work_dir}/convert_lower_case.py
-        cd ~{work_dir}
+        cp ~{docker_dir}/convert_lower_case.py .
 
         python convert_lower_case.py -i ~{vcf} -o ~{prefix}.uppercase.vcf
         bgzip ~{prefix}.uppercase.vcf ~{prefix}.uppercase.vcf.gz
@@ -121,13 +118,13 @@ task PreProcessVCF {
         bcftools view --no-version ~{prefix}.unphased.vcf.gz --regions ~{locus} -Oz -o ~{prefix}.vcf.gz
         bcftools index -t ~{prefix}.vcf.gz
 
-        pwd
+        ls -l
         
     >>>
 
     output {
-        File subset_vcf = "~{work_dir}/~{prefix}.vcf.gz"
-        File subset_tbi = "~{work_dir}/~{prefix}.vcf.gz.tbi"
+        File subset_vcf = "~{prefix}.vcf.gz"
+        File subset_tbi = "~{prefix}.vcf.gz.tbi"
     }
 
     #########################
