@@ -120,12 +120,14 @@ task PreProcessVCF {
         # subset VCF
         bcftools view --no-version ~{prefix}.unphased.vcf.gz --regions ~{locus} -Oz -o ~{prefix}.vcf.gz
         bcftools index -t ~{prefix}.vcf.gz
+
+        pwd
         
     >>>
 
     output {
-        File subset_vcf = "~{prefix}.vcf.gz"
-        File subset_tbi = "~{prefix}.vcf.gz.tbi"
+        File subset_vcf = "~{work_dir}/~{prefix}.vcf.gz"
+        File subset_tbi = "~{work_dir}/~{prefix}.vcf.gz.tbi"
     }
 
     #########################
