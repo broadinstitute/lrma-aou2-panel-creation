@@ -124,8 +124,8 @@ task PreProcessVCF {
     >>>
 
     output {
-        File subset_vcf = "~{work_dir}/~{prefix}.vcf.gz"
-        File subset_tbi = "~{work_dir}/~{prefix}.vcf.gz.tbi"
+        File subset_vcf = "~{prefix}.vcf.gz"
+        File subset_tbi = "~{prefix}.vcf.gz.tbi"
     }
 
     #########################
