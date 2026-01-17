@@ -282,7 +282,7 @@ task HiPhase {
         boot_disk_gb:       100,
         preemptible_tries:  1,
         max_retries:        0,
-        docker:             "hangsuunc/hiphase:1.3.0"
+        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/hiphase:v1.5.0"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -377,7 +377,7 @@ task HiPhaseTRGT {
         boot_disk_gb:       100,
         preemptible_tries:  1,
         max_retries:        0,
-        docker:             "hangsuunc/hiphase:1.3.0"
+        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/hiphase:v1.5.0"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
