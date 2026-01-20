@@ -8,7 +8,7 @@ workflows:
   primaryDescriptorPath: /wdl/methods/phasing/PhysicalPhasing.wdl
 - name: SplitVcfPhase2
   subclass: wdl
-  primaryDescriptorPath: /wdl/methods/phasing/SplitVcfPhasing2.wdl
+  primaryDescriptorPath: /wdl/methods/phasing/SplitVcfPhase2.wdl
 - name: VcfdistAndSwitchEvaluation
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistAndSwitchEvaluation.wdl
