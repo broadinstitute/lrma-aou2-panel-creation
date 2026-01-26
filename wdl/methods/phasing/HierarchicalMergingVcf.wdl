@@ -14,7 +14,6 @@ struct RuntimeAttributes {
 workflow HierarchicallyMergeVcfs {
     input {
         Array[File] vcf_gzs
-        Array[File] vcf_gz_tbis
         Array[String] regions   # bcftools regions, e.g. ["chr1,chr2,chr3", "chr4,chr5,chr6", ...]
         Int batch_size
         String output_prefix
@@ -28,12 +27,9 @@ workflow HierarchicallyMergeVcfs {
     call CreateBatches {
         input:
             vcf_gzs = vcf_gzs,
-            vcf_gz_tbis = vcf_gz_tbis,
             batch_size = batch_size,
             docker = docker
     }
-
-
 
     scatter (i in range(length(CreateBatches.vcf_gz_batch_fofns))) {
         scatter (j in range(length(regions))) {
@@ -41,7 +37,7 @@ workflow HierarchicallyMergeVcfs {
                 input:
                     vcf_gzs = read_lines(CreateBatches.vcf_gz_batch_fofns[i]),
                     vcf_gz_tbis = read_lines(CreateBatches.vcf_gz_tbi_batch_fofns[i]),
-                    output_prefix = output_prefix + ".batch-" + i + ".region-" + i,
+                    output_prefix = output_prefix + ".batch-" + i + ".region-" + j,
                     extra_args = "-r " + regions[j] + " " + extra_merge_args,
                     docker = docker,
                     monitoring_script = monitoring_script
@@ -89,18 +85,28 @@ workflow HierarchicallyMergeVcfs {
 task CreateBatches {
     input {
         Array[String] vcf_gzs
-        Array[String] vcf_gz_tbis
+        Array[String]? vcf_gzs_tbi
         Int batch_size
 
         String docker
         RuntimeAttributes runtime_attributes = {}
     }
 
+
     command {
         set -euox pipefail
 
-        cat ~{write_lines(vcf_gzs)} | split -l ~{batch_size} - vcf_gz_batch_
-        cat ~{write_lines(vcf_gz_tbis)} | split -l ~{batch_size} - vcf_gz_tbi_batch_
+        for vcf in ~{sep=' ' vcf_gzs}; do
+            # Get basename of VCF file (remove directory path)
+            vcf_basename=$(basename "$vcf")
+            # Recompress and index the VCF file
+            bcftools view "$vcf" -Oz -o "$vcf_basename"
+            bcftools index -t "$vcf_basename"
+        done
+
+        ls *.vcf.gz | split -l ~{batch_size} - vcf_gz_batch_
+        ls *.vcf.gz.tbi | split -l ~{batch_size} - vcf_gz_tbi_batch_
+
     }
 
     output {
