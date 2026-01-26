@@ -248,6 +248,7 @@ task HiPhase {
         hiphase \
         --threads ~{thread_num} \
         --bam ~{bam} \
+        --output-bam ~{samplename}.haplotagged.bam \
         --reference ~{ref_fasta} \
         --global-realignment-cputime 300 \
         --vcf ~{unphased_snp_vcf} \
@@ -264,6 +265,7 @@ task HiPhase {
     >>>
 
     output {
+        File haplotagged_bam = "~{samplename}.haplotagged.bam"
         File phased_snp_vcf = "~{samplename}_phased_snp.vcf.gz"
         File phased_snp_vcf_tbi = "~{samplename}_phased_snp.vcf.gz.tbi"
         File phased_sv_vcf   = "~{samplename}_phased_sv.vcf.gz"
