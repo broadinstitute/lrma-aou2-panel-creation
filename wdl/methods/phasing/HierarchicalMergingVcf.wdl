@@ -14,6 +14,7 @@ struct RuntimeAttributes {
 workflow HierarchicallyMergeVcfs {
     input {
         Array[File] vcf_gzs
+        Array[File]? vcf_gz_tbis
         Array[String] regions   # bcftools regions, e.g. ["chr1,chr2,chr3", "chr4,chr5,chr6", ...]
         Int batch_size
         String output_prefix
@@ -24,31 +25,53 @@ workflow HierarchicallyMergeVcfs {
         File? monitoring_script
     }
 
-    call CreateBatches {
+    call CreateBatches as SplitVcf {
         input:
             vcf_gzs = vcf_gzs,
             batch_size = batch_size,
             docker = docker
     }
 
-    scatter (i in range(length(CreateBatches.vcf_gz_batch_fofns))) {
-        scatter (j in range(length(regions))) {
-            call MergeVcfs as MergeVcfsSingleBatchRegion {
-                input:
-                    vcf_gzs = read_lines(CreateBatches.vcf_gz_batch_fofns[i]),
-                    vcf_gz_tbis = read_lines(CreateBatches.vcf_gz_tbi_batch_fofns[i]),
-                    output_prefix = output_prefix + ".batch-" + i + ".region-" + j,
-                    extra_args = "-r " + regions[j] + " " + extra_merge_args,
-                    docker = docker,
-                    monitoring_script = monitoring_script
+    if (defined(vcf_gz_tbis)) {
+        call CreateBatches as SplitTbi {
+            input:
+                vcf_gzs = select_first([vcf_gz_tbis]),
+                batch_size = batch_size,
+                docker = docker
+        }
+        scatter (i in range(length(SplitVcf.vcf_gz_batch_fofns))) {
+            scatter (j in range(length(regions))) {
+                call MergeVcfs as MergeVcfsSingleBatchRegion0 {
+                    input:
+                        vcf_gzs = read_lines(SplitVcf.vcf_gz_batch_fofns[i]),
+                        vcf_gz_tbis = read_lines(SplitTbi.vcf_gz_batch_fofns[i]),
+                        output_prefix = output_prefix + ".batch-" + i + ".region-" + j,
+                        extra_args = "-r " + regions[j] + " " + extra_merge_args,
+                        docker = docker,
+                        monitoring_script = monitoring_script
+                }
+            }
+        }
+    }
+
+    if (!defined(vcf_gz_tbis)) {
+        scatter (i in range(length(SplitVcf.vcf_gz_batch_fofns))) {
+            scatter (j in range(length(regions))) {
+                call MergeVcfs as MergeVcfsSingleBatchRegion1 {
+                    input:
+                        vcf_gzs = read_lines(SplitVcf.vcf_gz_batch_fofns[i]),
+                        output_prefix = output_prefix + ".batch-" + i + ".region-" + j,
+                        extra_args = "-r " + regions[j] + " " + extra_merge_args,
+                        docker = docker,
+                        monitoring_script = monitoring_script
+                }
             }
         }
     }
     
 
-    Array[Array[File]] region_by_batch_vcf_gzs = transpose(MergeVcfsSingleBatchRegion.merged_vcf_gz)
-    Array[Array[File]] region_by_batch_vcf_gz_tbis = transpose( MergeVcfsSingleBatchRegion.merged_vcf_gz_tbi)
-
+    Array[Array[File]] region_by_batch_vcf_gzs = transpose(select_first([MergeVcfsSingleBatchRegion0.merged_vcf_gz ,MergeVcfsSingleBatchRegion1.merged_vcf_gz ]))
+    Array[Array[File]] region_by_batch_vcf_gz_tbis = transpose(select_first([MergeVcfsSingleBatchRegion0.merged_vcf_gz_tbi ,MergeVcfsSingleBatchRegion1.merged_vcf_gz_tbi ]))
 
 
     # merge all samples in each region
@@ -85,7 +108,6 @@ workflow HierarchicallyMergeVcfs {
 task CreateBatches {
     input {
         Array[String] vcf_gzs
-        Array[String]? vcf_gzs_tbi
         Int batch_size
 
         String docker
@@ -96,22 +118,12 @@ task CreateBatches {
     command {
         set -euox pipefail
 
-        for vcf in ~{sep=' ' vcf_gzs}; do
-            # Get basename of VCF file (remove directory path)
-            vcf_basename=$(basename "$vcf")
-            # Recompress and index the VCF file
-            bcftools view "$vcf" -Oz -o "$vcf_basename"
-            bcftools index -t "$vcf_basename"
-        done
-
-        ls *.vcf.gz | split -l ~{batch_size} - vcf_gz_batch_
-        ls *.vcf.gz.tbi | split -l ~{batch_size} - vcf_gz_tbi_batch_
+        cat ~{write_lines(vcf_gzs)} | split -l ~{batch_size} - vcf_gz_batch_
 
     }
 
     output {
         Array[File] vcf_gz_batch_fofns = glob("vcf_gz_batch_*")
-        Array[File] vcf_gz_tbi_batch_fofns = glob("vcf_gz_tbi_batch_*")
     }
 
     runtime {
@@ -128,7 +140,7 @@ task CreateBatches {
 task MergeVcfs {
     input{
         Array[File] vcf_gzs
-        Array[File] vcf_gz_tbis
+        Array[File]? vcf_gz_tbis
         String output_prefix
         String? extra_args
 
@@ -147,11 +159,29 @@ task MergeVcfs {
             bash ~{monitoring_script} > monitoring.log &
         fi
 
-        bcftools merge \
-            -l ~{write_lines(vcf_gzs)} \
-            ~{extra_args} \
-            -Oz -o ~{output_prefix}.vcf.gz
-        bcftools index -t ~{output_prefix}.vcf.gz
+        if (!defined(vcf_gz_tbis)); then
+            for vcf in ~{sep=' ' vcf_gzs}; do
+                # Get basename of VCF file (remove directory path)
+                vcf_basename=$(basename "$vcf")
+                # Recompress and index the VCF file
+                bcftools view "$vcf" -Oz -o "$vcf_basename"
+                bcftools index -t "$vcf_basename"
+            done
+            ls *.vcf.gz > filelist.txt
+            bcftools merge \
+                -l filelist.txt \
+                ~{extra_args} \
+                -Oz -o ~{output_prefix}.vcf.gz
+            bcftools index -t ~{output_prefix}.vcf.gz
+        fi
+
+        if (defined(vcf_gz_tbis)); then
+            bcftools merge \
+                -l ~{write_lines(vcf_gzs)} \
+                ~{extra_args} \
+                -Oz -o ~{output_prefix}.vcf.gz
+            bcftools index -t ~{output_prefix}.vcf.gz
+        fi
     }
 
     output {
