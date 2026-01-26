@@ -164,8 +164,8 @@ task MergeVcfs {
                 # Get basename of VCF file (remove directory path)
                 vcf_basename=$(basename "$vcf")
                 # Recompress and index the VCF file
-                bcftools view "$vcf" -Oz -o "$vcf_basename"
-                bcftools index -t "$vcf_basename"
+                bcftools view "$vcf" -Oz -o "$vcf_basename.vcf.gz"
+                bcftools index -t "$vcf_basename.vcf.gz"
             done
             ls *.vcf.gz > filelist.txt
             bcftools merge \
