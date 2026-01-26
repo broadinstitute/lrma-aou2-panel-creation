@@ -6,6 +6,9 @@ workflows:
 - name: PhysicalPhasing
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/PhysicalPhasing.wdl
+- name: HierarchicalMergingVcf
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/HierarchicalMergingVcf.wdl
 - name: SplitVcfPhase2
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/SplitVcfPhase2.wdl
