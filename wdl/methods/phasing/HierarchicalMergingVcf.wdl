@@ -159,7 +159,7 @@ task MergeVcfs {
             bash ~{monitoring_script} > monitoring.log &
         fi
 
-        if (!defined(vcf_gz_tbis)); then
+        if [ "~{if defined(vcf_gz_tbis) then "1" else "0"}" = "0" ]; then
             for vcf in ~{sep=' ' vcf_gzs}; do
                 # Get basename of VCF file (remove directory path)
                 vcf_basename=$(basename "$vcf")
@@ -175,7 +175,7 @@ task MergeVcfs {
             bcftools index -t ~{output_prefix}.vcf.gz
         fi
 
-        if (defined(vcf_gz_tbis)); then
+        if [ "~{if defined(vcf_gz_tbis) then "1" else "0"}" = "1" ]; then
             bcftools merge \
                 -l ~{write_lines(vcf_gzs)} \
                 ~{extra_args} \
