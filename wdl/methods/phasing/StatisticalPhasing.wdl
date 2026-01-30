@@ -17,8 +17,9 @@ workflow StatisticalPhasing {
         String output_prefix
 
         Int filter_and_concat_shard_size = 1000000
-        String filter_and_concat_short_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
-        String filter_and_concat_sv_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
+        String? filter_and_concat_short_filter_args
+        String filter_and_concat_short_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
+        String filter_and_concat_sv_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
 
         # inputs for FixVariantCollisions (see documentation for arguments in task)
         File fix_variant_collisions_java
@@ -71,8 +72,9 @@ workflow StatisticalPhasing {
             reference_fasta = reference_fasta,
             reference_fasta_fai = reference_fasta_fai,
             region = shard_region,
+            filter_and_concat_short_view_args = filter_and_concat_short_view_args,
             filter_and_concat_short_filter_args = filter_and_concat_short_filter_args,
-            filter_and_concat_sv_filter_args = filter_and_concat_sv_filter_args
+            filter_and_concat_sv_view_args = filter_and_concat_sv_view_args
         }
         
         # added variant collision fix step
@@ -393,8 +395,9 @@ task FilterAndConcatVcfs {
         String region
         File reference_fasta
         File reference_fasta_fai
-        String filter_and_concat_short_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
-        String filter_and_concat_sv_filter_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
+        String? filter_and_concat_short_filter_args
+        String filter_and_concat_short_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
+        String filter_and_concat_sv_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
 
         RuntimeAttr? runtime_attr_override
     }
@@ -404,19 +407,21 @@ task FilterAndConcatVcfs {
     command <<<
         set -euxo pipefail
 
+        # split to biallelic and filter short (re-fill tags when needed)
+        bcftools norm --no-version -r ~{region} -m-any -N -f ~{reference_fasta} ~{short_vcf} | \
+            bcftools +fill-tags --no-version -- -t AF,AC,AN | \
+            bcftools filter --no-version ~{filter_and_concat_short_filter_args} | \
+            bcftools +fill-tags --no-version -- -t AF,AC,AN | \
+            bcftools view --no-version ~{filter_and_concat_short_view_args} | \
+            bcftools sort -Ob -o ~{output_prefix}.short.bcf
+        bcftools index ~{output_prefix}.short.bcf
+
         # populate missing with hom-ref and filter SV
         bcftools +setGT -r ~{region} ~{sv_vcf} --no-version -- -t . -n 0p | \
             bcftools +fill-tags --no-version -- -t AF,AC,AN | \
-            bcftools view --no-version ~{filter_and_concat_sv_filter_args} \
+            bcftools view --no-version ~{filter_and_concat_sv_view_args} \
                 -Ob -o ~{output_prefix}.SV.bcf
         bcftools index ~{output_prefix}.SV.bcf
-
-        # split to biallelic and filter short
-        bcftools norm --no-version -r ~{region} -m-any -N -f ~{reference_fasta} ~{short_vcf} | \
-            bcftools +fill-tags --no-version -- -t AF,AC,AN | \
-            bcftools view --no-version ~{filter_and_concat_short_filter_args} | \
-            bcftools sort -Ob -o ~{output_prefix}.short.bcf
-        bcftools index ~{output_prefix}.short.bcf
 
         # concatenate with deduplication; providing SV VCF as first argument preferentially keeps those records
         bcftools concat --no-version \
