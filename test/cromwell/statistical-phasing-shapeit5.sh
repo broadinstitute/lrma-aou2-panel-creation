@@ -19,7 +19,7 @@ sed -e "s|__REPO_DIR__|$REPO_DIR|g" $REPO_DIR/test/resources/statistical-phasing
 java -jar $CROMWELL_JAR run $REPO_DIR/wdl/methods/phasing/StatisticalPhasing.wdl -i $REPO_DIR/test/resources/statistical-phasing/statistical-phasing-shapeit5.mod.json -m $REPO_DIR/test/resources/statistical-phasing/statistical-phasing-shapeit5.mod.output.json
 
 RESULT_VCF_GZ=$(jq -r '.outputs."StatisticalPhasing.phased_vcf"' $REPO_DIR/test/resources/statistical-phasing/statistical-phasing-shapeit5.mod.output.json)
-EXPECTED_VCF_GZ=$REPO_DIR/test/resources/large/statistical-phasing/expected/40-HPRC-1kGP.hiphase.sv.merged.chr6-70M-80M.phased.concat.vcf.gz
+EXPECTED_VCF_GZ=$REPO_DIR/test/resources/large/statistical-phasing/expected/40-HPRC-1kGP.chr6-70M-80M.phased.concat.vcf.gz
 
 diff <(bcftools view -h --no-version $EXPECTED_VCF_GZ | grep -v fileDate) <(bcftools view -h --no-version $RESULT_VCF_GZ | grep -v fileDate)
 diff <(bcftools view -H --no-version $EXPECTED_VCF_GZ | grep -v fileDate) <(bcftools view -H --no-version $RESULT_VCF_GZ | grep -v fileDate) | head -500
