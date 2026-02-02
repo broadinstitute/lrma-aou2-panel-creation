@@ -492,15 +492,13 @@ task FixVariantCollisions {
         # replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
         bcftools +setGT --no-version collisionless.vcf -- -t . -n 0p | \
             bcftools +fill-tags --no-version -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
-        # index and convert via vcf.gz to avoid errors from missing header lines
+        # use vcf.gz to avoid errors from missing header lines
         bcftools index -t ~{output_prefix}.phased.collisionless.vcf.gz
-        bcftools view --no-version ~{output_prefix}.phased.collisionless.vcf.gz -Ob -o ~{output_prefix}.phased.collisionless.bcf
-        bcftools index ~{output_prefix}.phased.collisionless.bcf
     >>>
 
     output {
-        File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.bcf"
-        File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.bcf.csi"
+        File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.vcf.gz"
+        File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.vcf.gz.tbi"
         File windows = "windows.txt"
         File histogram = "histogram.txt"
     }
@@ -599,8 +597,7 @@ task BcftoolsConcatNaive {
     command <<<
         set -euxo pipefail
 
-        bcftools concat --no-version ~{sep=" " vcfs} --naive-force | \
-            bcftools sort -Oz -o ~{output_prefix}.vcf.gz
+        bcftools concat --no-version ~{sep=" " vcfs} --naive -Oz -o ~{output_prefix}.vcf.gz
         bcftools index -t ~{output_prefix}.vcf.gz
     >>>
 
@@ -819,14 +816,14 @@ task Shapeit5Rare {
             --output phased.bcf \
             ~{extra_args}
 
-        bcftools +fill-tags phased.bcf --no-version -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
-        bcftools index ~{output_prefix}.bcf
+        bcftools +fill-tags phased.bcf --no-version -Oz -o ~{output_prefix}.vcf.gz -- -t AF,AC,AN
+        bcftools index -t ~{output_prefix}.vcf.gz
 
     >>>
 
     output{
-        File phased_vcf = "~{output_prefix}.bcf"
-        File phased_vcf_idx = "~{output_prefix}.bcf.csi"
+        File phased_vcf = "~{output_prefix}.vcf.gz"
+        File phased_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
     }
 
     #########################
