@@ -692,7 +692,7 @@ task Shapeit4 {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 50 + 4 * ceil(size(vcf, "GiB"))
+    Int disk_gb = 10 + 4 * ceil(size(vcf, "GiB"))
     
     command <<<
         set -euxo pipefail
@@ -743,7 +743,7 @@ task LigateVcfs {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 50 + 4 * ceil(size(vcfs, "GiB"))
+    Int disk_gb = 10 + 4 * ceil(size(vcfs, "GiB"))
 
     command <<<
         set -euxo pipefail
@@ -797,7 +797,7 @@ task Shapeit5Rare {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 50 + 4 * ceil(size(vcf, "GiB")) + ceil(size(scaffold_vcf, "GiB"))
+    Int disk_gb = 10 + 4 * ceil(size(vcf, "GiB")) + ceil(size(scaffold_vcf, "GiB"))
 
     command <<<
         set -euxo pipefail
