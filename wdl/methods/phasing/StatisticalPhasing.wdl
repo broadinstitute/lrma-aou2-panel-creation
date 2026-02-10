@@ -16,7 +16,7 @@ workflow StatisticalPhasing {
         String region
         String output_prefix
 
-        Int filter_and_concat_shard_size = 1000000
+        Int filter_and_concat_shard_size = 2000000
         String? filter_and_concat_short_filter_args
         String filter_and_concat_short_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
         String filter_and_concat_sv_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
