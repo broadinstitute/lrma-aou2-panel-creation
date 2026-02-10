@@ -37,7 +37,6 @@ public class FixVariantCollisions {
      */
     private static String WEIGHT_TAG;
     private static boolean WEIGHT_TAG_IN_SAMPLE_COLUMN;
-    private static double DEFAULT_WEIGHT;
     
     /**
      * FALSE=remove entire VCF records from a sample;
@@ -110,19 +109,19 @@ public class FixVariantCollisions {
      * 0: input VCF.GZ; every record is assumed to be biallelic;
      * 1: operations allowed to fix the genotypes of a sample: 0=can only remove
      *    an entire VCF record; 1=can remove single ones from a GT;
-     * 2: ID of the weight field; weights are assumed to be non-negative;
+     * 2: ID of the weight field; if this field is not found, all weights are
+     *    set to one; weights are assumed to be non-negative;
      * 3: given a VCF record in a sample, assign it a weight encoded in the
-     *    INFO field (0) or in the sample column (1);
-     * 4: default weight if the weight field is not found.
+     *    sample column (1) or in the INFO field (0).
      *
      * Output arguments:
-     * 5: writes to this file (uncompressed VCF) the input VCF.GZ with all
+     * 4: writes to this file (uncompressed VCF) the input VCF.GZ with all
      *    collisions fixed; "null"=collisions are not fixed and the file is not
      *    written;
-     * 6: writes to this file the list of all windows processed;
-     * 7: histogram: for each X, the number of (window,sample) pairs with X
+     * 5: writes to this file the list of all windows processed;
+     * 6: histogram: for each X, the number of (window,sample) pairs with X
      *    collisions; "null"=the histogram is not printed;
-     * 8: directory where to store figures for every window and sample with
+     * 7: directory where to store figures for every window and sample with
      *    collisions; "null"=figures are not printed. 
      */
     public static void main(String[] args) throws IOException {
@@ -131,12 +130,11 @@ public class FixVariantCollisions {
         METHOD=args[1].equalsIgnoreCase("1");
         WEIGHT_TAG=args[2];
         WEIGHT_TAG_IN_SAMPLE_COLUMN=Integer.parseInt(args[3])==1;
-        DEFAULT_WEIGHT=Double.parseDouble(args[4]);
         // Output arguments
-        final String OUTPUT_VCF = args[5];
-        final String OUTPUT_WINDOWS = args[6];
-        final String OUTPUT_HISTOGRAM = args[7];
-        String OUTPUT_FIGURES_DIR = args[8];
+        final String OUTPUT_VCF = args[4];
+        final String OUTPUT_WINDOWS = args[5];
+        final String OUTPUT_HISTOGRAM = args[6];
+        String OUTPUT_FIGURES_DIR = args[7];
         
         int i;
         int nRecords;
@@ -994,7 +992,7 @@ public class FixVariantCollisions {
                 }
             }
             else value=getInfoField(vcfRecord[7],WEIGHT_TAG);
-            weight=value!=null?Double.parseDouble(value):DEFAULT_WEIGHT;
+            weight=value!=null?Double.parseDouble(value):1.0;
         }
         
         
