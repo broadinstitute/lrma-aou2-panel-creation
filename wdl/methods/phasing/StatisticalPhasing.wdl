@@ -343,7 +343,7 @@ task SubsetVCFStreaming {
         String region
         String output_prefix
 
-        Int disk_gb = 100
+        Int disk_gb = 10
 
         RuntimeAttr? runtime_attr_override
     }
@@ -365,7 +365,7 @@ task SubsetVCFStreaming {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
-        mem_gb:             8,
+        mem_gb:             3,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            false,
@@ -408,12 +408,13 @@ task FilterAndConcatVcfs {
         set -euxo pipefail
 
         # split to biallelic and filter short (re-fill tags when needed)
-        bcftools norm --no-version -r ~{region} -m-any -N -f ~{reference_fasta} ~{short_vcf} | \
+        bcftools norm --no-version -r ~{region} \
+                -m-any -N -f ~{reference_fasta} ~{short_vcf} | \
             bcftools +fill-tags --no-version -- -t AF,AC,AN | \
             bcftools filter --no-version ~{filter_and_concat_short_filter_args} | \
             bcftools +fill-tags --no-version -- -t AF,AC,AN | \
-            bcftools view --no-version ~{filter_and_concat_short_view_args} | \
-            bcftools sort -Ob -o ~{output_prefix}.short.bcf
+            bcftools view --no-version ~{filter_and_concat_short_view_args} \
+                -Ob -o ~{output_prefix}.short.bcf
         bcftools index ~{output_prefix}.short.bcf
 
         # populate missing with hom-ref and filter SV
@@ -440,7 +441,7 @@ task FilterAndConcatVcfs {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
-        mem_gb:             8,
+        mem_gb:             6,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -473,7 +474,7 @@ task FixVariantCollisions {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 100 + 4 * (ceil(size(phased_vcf, "GiB")))
+    Int disk_gb = 50 + 4 * (ceil(size(phased_vcf, "GiB")))
 
     command <<<
         set -euxo pipefail
@@ -491,7 +492,7 @@ task FixVariantCollisions {
 
         # replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
         bcftools +setGT --no-version collisionless.vcf -- -t . -n 0p | \
-            bcftools +fill-tags --no-version -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
+            bcftools +fill-tags --no-version --threads $(($(nproc)-1)) -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
         # use vcf.gz to avoid errors from missing header lines
         bcftools index -t ~{output_prefix}.phased.collisionless.vcf.gz
     >>>
@@ -505,8 +506,8 @@ task FixVariantCollisions {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          1,
-        mem_gb:             16,
+        cpu_cores:          2,
+        mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
