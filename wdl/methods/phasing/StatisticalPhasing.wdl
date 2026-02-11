@@ -99,6 +99,7 @@ workflow StatisticalPhasing {
         vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf,
         vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx,
         region = region,
+        genetic_map = genetic_maps_dict[chromosome],
         extra_args = chunk_extra_args
     }
 
@@ -424,7 +425,8 @@ task FilterAndConcatVcfs {
                 -Ob -o ~{output_prefix}.SV.bcf
         bcftools index ~{output_prefix}.SV.bcf
 
-        # concatenate with deduplication; providing SV VCF as first argument preferentially keeps those records
+        # concatenate with deduplication; providing SV VCF as first argument preferentially keeps those records;
+        # output to vcf.gz as FixVariantCollisions requires this as input
         bcftools concat --no-version \
             ~{output_prefix}.SV.bcf \
             ~{output_prefix}.short.bcf \
@@ -492,14 +494,16 @@ task FixVariantCollisions {
 
         # replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
         bcftools +setGT --no-version collisionless.vcf -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads $(($(nproc)-1)) -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
-        # use vcf.gz to avoid errors from missing header lines
-        bcftools index -t ~{output_prefix}.phased.collisionless.vcf.gz
+            bcftools +fill-tags --no-version --threads $(($(nproc)-1)) -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
+        bcftools index ~{output_prefix}.phased.collisionless.bcf
+#            bcftools +fill-tags --no-version --threads $(($(nproc)-1)) -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
+#        # use vcf.gz to avoid errors from missing header lines
+#        bcftools index -t ~{output_prefix}.phased.collisionless.vcf.gz
     >>>
 
     output {
-        File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.vcf.gz"
-        File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.vcf.gz.tbi"
+        File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.bcf"
+        File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.bcf.csi"
         File windows = "windows.txt"
         File histogram = "histogram.txt"
     }
@@ -532,7 +536,8 @@ task CreateShapeitChunks {
         File vcf
         File vcf_idx
         String region
-        String extra_args = "--thread $(nproc) --window-size 5000000 --buffer-size 500000"
+        File genetic_map
+        String extra_args = "--thread $(nproc) --sequential --window-mb 5 --buffer-mb 0.5"
 
         RuntimeAttr? runtime_attr_override
     }
@@ -542,12 +547,13 @@ task CreateShapeitChunks {
     command <<<
         set -euxo pipefail
 
-        wget https://github.com/odelaneau/GLIMPSE/releases/download/v1.1.1/GLIMPSE_chunk_static
-        chmod +x GLIMPSE_chunk_static
+        wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_chunk_static
+        chmod +x GLIMPSE2_chunk_static
 
-        ./GLIMPSE_chunk_static \
+        ./GLIMPSE2_chunk_static \
             -I ~{vcf} \
             --region ~{region} \
+            --map ~{genetic_map} \
             ~{extra_args} \
             -O chunks.txt
 
@@ -598,13 +604,13 @@ task BcftoolsConcatNaive {
     command <<<
         set -euxo pipefail
 
-        bcftools concat --no-version ~{sep=" " vcfs} --naive -Oz -o ~{output_prefix}.vcf.gz
-        bcftools index -t ~{output_prefix}.vcf.gz
+        bcftools concat --no-version ~{sep=" " vcfs} --naive -Ob -o ~{output_prefix}.bcf
+        bcftools index ~{output_prefix}.bcf
     >>>
 
     output {
-        File concatenated_vcf = "~{output_prefix}.vcf.gz"
-        File concatenated_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
+        File concatenated_vcf = "~{output_prefix}.bcf"
+        File concatenated_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
@@ -751,13 +757,13 @@ task LigateVcfs {
 
         ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.bcf
         bcftools +fill-tags --no-version ~{output_prefix}.bcf \
-            -Oz -o ~{output_prefix}.vcf.gz -- -t AF,AC,AN
-        bcftools index -t ~{output_prefix}.vcf.gz
+            -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
+        bcftools index ~{output_prefix}.bcf
     >>>
 
     output {
-        File ligated_vcf = "~{output_prefix}.vcf.gz"
-        File ligated_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
+        File ligated_vcf = "~{output_prefix}.bcf"
+        File ligated_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
@@ -817,14 +823,14 @@ task Shapeit5Rare {
             --output phased.bcf \
             ~{extra_args}
 
-        bcftools +fill-tags phased.bcf --no-version -Oz -o ~{output_prefix}.vcf.gz -- -t AF,AC,AN
-        bcftools index -t ~{output_prefix}.vcf.gz
+        bcftools +fill-tags phased.bcf --no-version -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
+        bcftools index ~{output_prefix}.bcf
 
     >>>
 
     output{
-        File phased_vcf = "~{output_prefix}.vcf.gz"
-        File phased_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
+        File phased_vcf = "~{output_prefix}.bcf"
+        File phased_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
