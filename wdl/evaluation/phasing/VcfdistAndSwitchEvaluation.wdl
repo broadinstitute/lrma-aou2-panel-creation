@@ -32,6 +32,7 @@ workflow VcfdistAndSwitchEvaluation {
         Array[String] labels_per_stratification
         String? vcfdist_extra_args
         Int? vcfdist_mem_gb
+        String vcfdist_docker
 
         String? switch_filter_args
 
@@ -196,7 +197,7 @@ task Vcfdist {
     }
 
     runtime {
-        docker: "timd1/vcfdist:v2.5.3"
+        docker: vcfdist_docker
         disks: "local-disk " + disk_size_gb + " HDD"
         memory: mem_gb + " GiB"
         cpu: cpu
