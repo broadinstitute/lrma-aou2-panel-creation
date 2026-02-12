@@ -83,7 +83,8 @@ workflow VcfdistAndSwitchEvaluation {
                 bed_file = vcfdist_bed_files[j],
                 reference_fasta = reference_fasta,
                 extra_args = vcfdist_extra_args,
-                mem_gb = vcfdist_mem_gb
+                mem_gb = vcfdist_mem_gb,
+                docker = vcfdist_docker
             }
         }
     }
@@ -161,6 +162,7 @@ task Vcfdist {
         String? extra_args
         Int verbosity = 1
 
+        String docker
         Int disk_size_gb = ceil(size(truth_vcf, "GiB") + 10)
         Int mem_gb = 32
         Int cpu = 4
@@ -197,7 +199,7 @@ task Vcfdist {
     }
 
     runtime {
-        docker: vcfdist_docker
+        docker: docker
         disks: "local-disk " + disk_size_gb + " HDD"
         memory: mem_gb + " GiB"
         cpu: cpu
