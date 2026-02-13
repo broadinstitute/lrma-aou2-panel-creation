@@ -65,10 +65,10 @@ task PanGeniePanelCreation {
     command <<<
         set -euxo pipefail
 
-        bcftools stats -r ~{region} ~{phased_vcf} > ~{output_prefix}.stats.txt
+        bcftools stats -r ~{region} --regions-overlap 0 ~{phased_vcf} > ~{output_prefix}.stats.txt
 
         # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, and split to biallelic
-        bcftools norm --no-version -r ~{region} --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} | \
+        bcftools norm --no-version -r ~{region} --regions-overlap 0 --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} | \
             pypy ~{prepare_vcf_script} --missing ~{frac_missing} | \
             pypy ~{add_ids_script} | \
             bcftools norm --no-version -m-any -Ov -o prepare.id.split.vcf
