@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        wdlTest: [ "statistical-phasing-wdl", "statistical-phasing-wdl-shapeit5", "pangenie-panel-creation-wdl"]
+        wdlTest: [ "statistical-phasing-wdl", "statistical-phasing-wdl-shapeit5", "pangenie-panel-creation-wdl" ]
     continue-on-error: true
     name: WDL test ${{ matrix.wdlTest }} on Cromwell
     steps:
