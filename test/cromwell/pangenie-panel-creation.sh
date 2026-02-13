@@ -17,8 +17,8 @@ sed -e "s|__REPO_DIR__|$REPO_DIR|g" $REPO_DIR/test/resources/pangenie-panel-crea
 
 java -jar $CROMWELL_JAR run $REPO_DIR/wdl/methods/imputation/PanGeniePanelCreation.wdl -i $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.json -m $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.output.json
 
-RESULT=$(jq -r '.outputs."PanGeniePanelCreation.panel_vcf_gz"' $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.output.json)
-EXPECTED=$REPO_DIR/test/resources/large/pangenie-panel-creation/expected/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.prepare.id.split.mergehap.vcf.gz
+RESULT=$(jq -r '.outputs."PanGeniePanelCreation.panel_vcf"' $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.output.json)
+EXPECTED=$REPO_DIR/test/resources/large/pangenie-panel-creation/expected/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.prepare.id.split.mergehap.bcf
 
 diff <(bcftools view -h --no-version $EXPECTED | grep -v bcftools_viewCommand) <(bcftools view -h --no-version $RESULT | grep -v bcftools_viewCommand)
 diff <(bcftools view -H --no-version $EXPECTED) <(bcftools view -H --no-version $RESULT) | head -500

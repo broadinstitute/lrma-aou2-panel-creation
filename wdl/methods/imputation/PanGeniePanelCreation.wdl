@@ -13,7 +13,7 @@ struct RuntimeAttributes {
 
 workflow PanGeniePanelCreation {
     input {
-        File phased_bcf
+        File phased_vcf
         File reference_fasta
         File prepare_vcf_script
         File add_ids_script
@@ -22,33 +22,29 @@ workflow PanGeniePanelCreation {
         String output_prefix
 
         String docker
-        File? monitoring_script
     }
 
     call PanGeniePanelCreation {
         input:
-            phased_bcf = phased_bcf,
+            phased_vcf = phased_vcf,
             reference_fasta = reference_fasta,
             prepare_vcf_script = prepare_vcf_script,
             add_ids_script = add_ids_script,
             merge_vcfs_script = merge_vcfs_script,
             frac_missing = frac_missing,
             output_prefix = output_prefix,
-            docker = docker,
-            monitoring_script = monitoring_script
+            docker = docker
     }
 
     output {
-        File panel_vcf_gz = PanGeniePanelCreation.panel_vcf_gz
-        File panel_vcf_gz_tbi = PanGeniePanelCreation.panel_vcf_gz_tbi
+        File panel_vcf = PanGeniePanelCreation.panel_vcf
+        File panel_vcf_idx = PanGeniePanelCreation.panel_vcf_idx
     }
 }
 
-
-# TODO consider piping more steps
 task PanGeniePanelCreation {
     input {
-        File phased_bcf
+        File phased_vcf
         File reference_fasta
         String output_prefix
 
@@ -58,7 +54,6 @@ task PanGeniePanelCreation {
         Float frac_missing
 
         String docker
-        File? monitoring_script
 
         RuntimeAttributes runtime_attributes = {}
     }
@@ -66,50 +61,26 @@ task PanGeniePanelCreation {
     command {
         set -euxo pipefail
 
-        # Create a zero-size monitoring log file so it exists even if we don't pass a monitoring script
-        touch monitoring.log
-        if [ -s ~{monitoring_script} ]; then
-            bash ~{monitoring_script} > monitoring.log &
-        fi
+        bcftools stats ~{phased_vcf} > ~{output_prefix}.stats.txt 
 
-        # validate variants against reference
-        bcftools norm --check-ref e --fasta-ref ~{reference_fasta} ~{phased_bcf} &> validate-vcf.log
-
-        # atomize variants and run PanGenie prepare-vcf script
-        bcftools norm -a ~{phased_bcf} | \
-            python3 ~{prepare_vcf_script} \
-                --missing ~{frac_missing} \
-            2> prepare-vcf.log \
-            1> prepare.vcf
-
-        bcftools stats prepare.vcf > ~{output_prefix}.prepare.stats.txt
-
-        # run PanGenie add-ids script
-        cat prepare.vcf | \
-            python3 ~{add_ids_script} \
-            2> add-ids.log \
-            1> prepare.id.vcf
-
-        # split to biallelic
-        bcftools norm -m- prepare.id.vcf \
-            --threads $(nproc) \
-            2> split.log \
-            1> prepare.id.split.vcf
+        # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, and split to biallelic
+        bcftools norm --no-version --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} | \
+            pypy ~{prepare_vcf_script} --missing ~{frac_missing} | \
+            pypy ~{add_ids_script} | \
+            bcftools norm --no-version -m-any -Ov -o prepare.id.split.vcf
 
         # run PanGenie merge script
-        pip install pyfaidx
-        python3 ~{merge_vcfs_script} merge \
+        pypy -m pip install pyfaidx
+        bcftools view --no-version -h prepare.id.split.vcf > header.txt
+        pypy ~{merge_vcfs_script} merge \
             -vcf prepare.id.split.vcf \
+            -header header.txt \
             -r ~{reference_fasta} \
-            -ploidy 2  \
-            2> merge-haplotypes.log \
-            1> prepare.id.split.mergehap.vcf
+            -ploidy 2 | \
+            bcftools view --no-version -Ob -o ~{output_prefix}.prepare.id.split.mergehap.bcf
+        bcftools index ~{output_prefix}.prepare.id.split.mergehap.bcf
 
-        bcftools view prepare.id.split.mergehap.vcf \
-            -Oz -o ~{output_prefix}.prepare.id.split.mergehap.vcf.gz
-        bcftools index -t ~{output_prefix}.prepare.id.split.mergehap.vcf.gz
-
-        bcftools stats ~{output_prefix}.prepare.id.split.mergehap.vcf.gz > ~{output_prefix}.prepare.id.split.mergehap.stats.txt
+        bcftools stats ~{output_prefix}.prepare.id.split.mergehap.bcf > ~{output_prefix}.prepare.id.split.mergehap.stats.txt
     }
 
     runtime {
@@ -123,11 +94,9 @@ task PanGeniePanelCreation {
     }
 
     output {
-        File monitoring_log = "monitoring.log"
-        Array[File] logs = glob("*.log")
-        File prepare_stats = "~{output_prefix}.prepare.stats.txt"
+        File input_stats = "~{output_prefix}.stats.txt"
         File panel_stats = "~{output_prefix}.prepare.id.split.mergehap.stats.txt"
-        File panel_vcf_gz = "~{output_prefix}.prepare.id.split.mergehap.vcf.gz"
-        File panel_vcf_gz_tbi = "~{output_prefix}.prepare.id.split.mergehap.vcf.gz.tbi"
+        File panel_vcf = "~{output_prefix}.prepare.id.split.mergehap.bcf"
+        File panel_vcf_idx = "~{output_prefix}.prepare.id.split.mergehap.bcf.csi"
     }
 }
