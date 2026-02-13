@@ -1,5 +1,5 @@
 # Slightly modified version of https://github.com/eblerjana/pangenie/blob/v4.2.1/pipelines/run-from-callset/scripts/merge_vcfs.py
-# that preserves original VCF header, emits more verbose logging, and removes unused combine columns functionality.
+# that reads from stdin, allows for preserving original VCF header, emits more verbose logging, and removes unused combine columns functionality.
 
 #!/usr/bin/python
 
@@ -484,10 +484,16 @@ class HaplotypeTable:
 def print_header(header):
     with open(header, 'r') as f:
         for line in f:
-            print(line, end='')
+            if line.startswith('##'):
+                print(line, end='')
+                continue
+            if line.startswith('#'):
+                print('##INFO=<ID=ID,Number=A,Type=String,Description="Variant IDs.">')
+                print(line, end='')
+                continue
 
 
-def run_merge(reference, vcf, header, ploidy, chromosomes=None):
+def run_merge(reference, header, ploidy, chromosomes=None):
     """
     Runs variant merging.
     
@@ -495,8 +501,6 @@ def run_merge(reference, vcf, header, ploidy, chromosomes=None):
     
     reference: str
         name of the reference FASTA file.
-    vcf: str
-        name of the VCF file.
     ploidy: int
         ploidy of the samples.
     chromosomes:
@@ -513,16 +517,16 @@ def run_merge(reference, vcf, header, ploidy, chromosomes=None):
     prev_end = 0
     prev_chrom = None
     row_index = 0
-    # read vcf-file
-    for line in open(vcf, 'r'):
+    # read vcf-file from stdin
+    for line in sys.stdin:
         if line.startswith('##'):
             continue
         fields = line.split()
         if line.startswith('#'):
             if samples is not None:
-                 raise Exception('File ' + filename + ' is not a valid VCF file.')
+                 raise Exception('Input is not a valid VCF file.')
             if len(fields) < 10:
-                raise Exception('File ' + filename + ' does not contain any samples.')
+                raise Exception('Input does not contain any samples.')
             samples = fields[9:]
             haplotypes = HaplotypeTable(samples, ploidy)
             print_header(header)
@@ -562,7 +566,6 @@ if __name__ == '__main__':
     subparsers = parser.add_subparsers(dest="subparser_name")
     parser_merge = subparsers.add_parser('merge', help='merge variant calls into pangenome graph represented in terms of a multi-sample VCF file.')
     parser_merge.add_argument('-r', metavar='reference', required=True, help='reference sequence (FASTA-format).')
-    parser_merge.add_argument('-vcf', metavar='VCF', required=True, help='multi-sample VCF-file with variants to merge.')
     parser_merge.add_argument('-header', metavar='header', required=True, help='file containing header for output VCF.')
     parser_merge.add_argument('-ploidy', metavar='PLOIDY', required=True, type=int, help='ploidy of the samples.')
     parser_merge.add_argument('-chromosomes', metavar='CHROMOSOMES', default='', help='comma separated list of chromosomes. Only output variants on these chromosomes.')
@@ -572,4 +575,4 @@ if __name__ == '__main__':
         chromosomes = None
         if args.chromosomes != '':
             chromosomes = args.chromosomes.split(',')
-        run_merge(args.r, args.vcf, args.header, args.ploidy, chromosomes)
+        run_merge(args.r, args.header, args.ploidy, chromosomes)
