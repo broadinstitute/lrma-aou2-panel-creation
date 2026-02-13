@@ -4,6 +4,8 @@
   "PanGeniePanelCreation.prepare_vcf_script": "__REPO_DIR__/test/resources/pangenie-panel-creation/prepare-vcf.py",
   "PanGeniePanelCreation.reference_fasta": "__REPO_DIR__/test/resources/large/GRCh38_full_analysis_set_plus_decoy_hla.chr6-70M-80M.fa",
   "PanGeniePanelCreation.merge_vcfs_script": "__REPO_DIR__/test/resources/pangenie-panel-creation/merge_vcfs_verbose.py",
-  "PanGeniePanelCreation.phased_vcf": "__REPO_DIR__/test/resources/large/pangenie-panel-creation/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.bcf"
+  "PanGeniePanelCreation.phased_vcf": "__REPO_DIR__/test/resources/large/pangenie-panel-creation/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.bcf",
+  "PanGeniePanelCreation.phased_vcf_idx": "__REPO_DIR__/test/resources/large/pangenie-panel-creation/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.bcf.csi",
+  "PanGeniePanelCreation.region": "chr6-70000000-80000000:1-10000000"
 }
 

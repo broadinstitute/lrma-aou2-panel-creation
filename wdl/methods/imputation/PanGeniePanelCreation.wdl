@@ -3,7 +3,9 @@ version 1.0
 workflow PanGeniePanelCreation {
     input {
         File phased_vcf
+        File phased_vcf_idx
         File reference_fasta
+        String region
         File prepare_vcf_script
         File add_ids_script
         File merge_vcfs_script
@@ -15,7 +17,9 @@ workflow PanGeniePanelCreation {
     call PanGeniePanelCreation {
         input:
             phased_vcf = phased_vcf,
+            phased_vcf_idx = phased_vcf_idx,
             reference_fasta = reference_fasta,
+            region = region,
             prepare_vcf_script = prepare_vcf_script,
             add_ids_script = add_ids_script,
             merge_vcfs_script = merge_vcfs_script,
@@ -43,7 +47,9 @@ struct RuntimeAttr {
 task PanGeniePanelCreation {
     input {
         File phased_vcf
+        File phased_vcf_idx
         File reference_fasta
+        String region
         String output_prefix
 
         File prepare_vcf_script
@@ -59,10 +65,10 @@ task PanGeniePanelCreation {
     command <<<
         set -euxo pipefail
 
-        bcftools stats ~{phased_vcf} > ~{output_prefix}.stats.txt 
+        bcftools stats -r ~{region} ~{phased_vcf} > ~{output_prefix}.stats.txt
 
         # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, and split to biallelic
-        bcftools norm --no-version --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} | \
+        bcftools norm --no-version -r ~{region} --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} | \
             pypy ~{prepare_vcf_script} --missing ~{frac_missing} | \
             pypy ~{add_ids_script} | \
             bcftools norm --no-version -m-any -Ov -o prepare.id.split.vcf
