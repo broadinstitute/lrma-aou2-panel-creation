@@ -4,7 +4,6 @@
   "PanGeniePanelCreation.prepare_vcf_script": "__REPO_DIR__/test/resources/pangenie-panel-creation/prepare-vcf.py",
   "PanGeniePanelCreation.reference_fasta": "__REPO_DIR__/test/resources/large/GRCh38_full_analysis_set_plus_decoy_hla.chr6-70M-80M.fa",
   "PanGeniePanelCreation.merge_vcfs_script": "__REPO_DIR__/test/resources/pangenie-panel-creation/merge_vcfs_verbose.py",
-  "PanGeniePanelCreation.phased_vcf": "__REPO_DIR__/test/resources/large/pangenie-panel-creation/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.bcf",
-  "PanGeniePanelCreation.docker": "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation:v1"
+  "PanGeniePanelCreation.phased_vcf": "__REPO_DIR__/test/resources/large/pangenie-panel-creation/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.bcf"
 }
 

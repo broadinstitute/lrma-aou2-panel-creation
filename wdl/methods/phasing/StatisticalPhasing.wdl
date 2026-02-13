@@ -4,7 +4,6 @@ version 1.0
 workflow StatisticalPhasing {
 
     input {
-
         File joint_short_vcf
         File joint_short_vcf_idx
         File joint_sv_vcf
@@ -37,7 +36,6 @@ workflow StatisticalPhasing {
     }
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
-
 
     call CreateShards { input:
         region = region,
@@ -280,7 +278,6 @@ task CreateShards {
     }
 }
 
-
 task SubsetVCF {
     input {
         File vcf
@@ -311,7 +308,7 @@ task SubsetVCF {
         mem_gb:             4,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
-        use_ssd:            false,
+        use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.3"
@@ -369,7 +366,7 @@ task SubsetVCFStreaming {
         mem_gb:             3,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
-        use_ssd:            false,
+        use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.3"

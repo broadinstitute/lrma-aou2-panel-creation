@@ -1,16 +1,5 @@
 version 1.0
 
-struct RuntimeAttributes {
-    Int? cpu
-    Int? command_mem_gb
-    Int? additional_mem_gb
-    Int? disk_size_gb
-    Int? boot_disk_size_gb
-    Boolean? use_ssd
-    Int? preemptible
-    Int? max_retries
-}
-
 workflow PanGeniePanelCreation {
     input {
         File phased_vcf
@@ -18,10 +7,9 @@ workflow PanGeniePanelCreation {
         File prepare_vcf_script
         File add_ids_script
         File merge_vcfs_script
-        Float frac_missing = 0.2
         String output_prefix
 
-        String docker
+        Float frac_missing = 0.2
     }
 
     call PanGeniePanelCreation {
@@ -32,14 +20,24 @@ workflow PanGeniePanelCreation {
             add_ids_script = add_ids_script,
             merge_vcfs_script = merge_vcfs_script,
             frac_missing = frac_missing,
-            output_prefix = output_prefix,
-            docker = docker
+            output_prefix = output_prefix
     }
 
     output {
         File panel_vcf = PanGeniePanelCreation.panel_vcf
         File panel_vcf_idx = PanGeniePanelCreation.panel_vcf_idx
     }
+}
+
+struct RuntimeAttr {
+    Float? mem_gb
+    Int? cpu_cores
+    Int? disk_gb
+    Int? boot_disk_gb
+    Boolean? use_ssd
+    Int? preemptible_tries
+    Int? max_retries
+    String? docker
 }
 
 task PanGeniePanelCreation {
@@ -53,12 +51,12 @@ task PanGeniePanelCreation {
         File merge_vcfs_script
         Float frac_missing
 
-        String docker
-
-        RuntimeAttributes runtime_attributes = {}
+        RuntimeAttr? runtime_attr_override
     }
 
-    command {
+    Int disk_gb = 3 * ceil(size(phased_vcf, "GiB")) + ceil(size(reference_fasta, "GiB")) 
+
+    command <<<
         set -euxo pipefail
 
         bcftools stats ~{phased_vcf} > ~{output_prefix}.stats.txt 
@@ -81,16 +79,28 @@ task PanGeniePanelCreation {
         bcftools index ~{output_prefix}.prepare.id.split.mergehap.bcf
 
         bcftools stats ~{output_prefix}.prepare.id.split.mergehap.bcf > ~{output_prefix}.prepare.id.split.mergehap.stats.txt
-    }
+    >>>
 
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          1,
+        mem_gb:             6,
+        disk_gb:            disk_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation:v1"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
-        docker: docker
-        cpu: select_first([runtime_attributes.cpu, 1])
-        memory: select_first([runtime_attributes.command_mem_gb, 6]) + select_first([runtime_attributes.additional_mem_gb, 1]) + " GB"
-        disks: "local-disk " + select_first([runtime_attributes.disk_size_gb, 500]) + if select_first([runtime_attributes.use_ssd, false]) then " SSD" else " HDD"
-        bootDiskSizeGb: select_first([runtime_attributes.boot_disk_size_gb, 15])
-        preemptible: select_first([runtime_attributes.preemptible, 2])
-        maxRetries: select_first([runtime_attributes.max_retries, 1])
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 
     output {
