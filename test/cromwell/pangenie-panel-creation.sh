@@ -20,5 +20,5 @@ java -jar $CROMWELL_JAR run $REPO_DIR/wdl/methods/imputation/PanGeniePanelCreati
 RESULT=$(jq -r '.outputs."PanGeniePanelCreation.panel_vcf_gz"' $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.output.json)
 EXPECTED=$REPO_DIR/test/resources/large/pangenie-panel-creation/expected/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.prepare.id.split.mergehap.vcf.gz
 
-diff <(bcftools view -h --no-version $EXPECTED | grep -v fileDate) <(bcftools view -h --no-version $RESULT | grep -v fileDate)
-diff <(bcftools view -H --no-version $EXPECTED | grep -v fileDate) <(bcftools view -H --no-version $RESULT | grep -v fileDate) | head -500
+diff <(bcftools view -h --no-version $EXPECTED | grep -v bcftools_viewCommand) <(bcftools view -h --no-version $RESULT | grep -v bcftools_viewCommand)
+diff <(bcftools view -H --no-version $EXPECTED) <(bcftools view -H --no-version $RESULT) | head -500
