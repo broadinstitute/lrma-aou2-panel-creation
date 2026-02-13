@@ -2,9 +2,9 @@ name: Test WDLs
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ 'main' ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ 'main' ]
 
 env:
   CROMWELL_VERSION: 91
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        wdlTest: [ "statistical-phasing-wdl", "statistical-phasing-wdl-shapeit5", "pangenie-panel-creation-wdl" ]
+        wdlTest: [ 'statistical-phasing-wdl', 'statistical-phasing-wdl-shapeit5', 'pangenie-panel-creation-wdl' ]
     continue-on-error: true
     name: WDL test ${{ matrix.wdlTest }} on Cromwell
     steps:
@@ -29,28 +29,28 @@ jobs:
       - name: Set up java 17
         uses: actions/setup-java@v3
         with:
-          java-version: "17"
-          distribution: "temurin"
+          java-version: '17'
+          distribution: 'temurin'
       - uses: ./.github/actions/install-cromwell
         with:
           CROMWELL_VERSION: ${{ env.CROMWELL_VERSION }}
       - uses: ./.github/actions/install-jq
       - uses: ./.github/actions/install-bcftools
 
-      - name: "statistical-phasing-wdl"
-        if: ${{ matrix.wdlTest == "statistical-phasing-wdl" }}
+      - name: 'statistical-phasing-wdl'
+        if: ${{ matrix.wdlTest == 'statistical-phasing-wdl' }}
         run: |
-          echo "Running statistical phasing WDL";
+          echo 'Running statistical phasing WDL';
           bash test/cromwell/statistical-phasing.sh;
 
-      - name: "statistical-phasing-wdl-shapeit5"
-        if: ${{ matrix.wdlTest == "statistical-phasing-wdl-shapeit5" }}
+      - name: 'statistical-phasing-wdl-shapeit5'
+        if: ${{ matrix.wdlTest == 'statistical-phasing-wdl-shapeit5' }}
         run: |
-          echo "Running statistical phasing WDL (Shapeit5)";
+          echo 'Running statistical phasing WDL (Shapeit5)';
           bash test/cromwell/statistical-phasing-shapeit5.sh;
 
-      - name: "pangenie-panel-creation-wdl"
-        if: ${{ matrix.wdlTest == "pangenie-panel-creation-wdl" }}
+      - name: 'pangenie-panel-creation-wdl'
+        if: ${{ matrix.wdlTest == 'pangenie-panel-creation-wdl' }}
         run: |
-          echo "Running PanGenie panel-creation WDL";
+          echo 'Running PanGenie panel-creation WDL';
           bash test/cromwell/pangenie-panel-creation.sh;
