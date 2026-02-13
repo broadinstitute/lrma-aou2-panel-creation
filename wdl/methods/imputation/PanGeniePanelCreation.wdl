@@ -88,7 +88,7 @@ task PanGeniePanelCreation {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
-        mem_gb:             6,
+        mem_gb:             3,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
