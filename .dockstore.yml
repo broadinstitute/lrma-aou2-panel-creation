@@ -3,6 +3,9 @@ workflows:
 - name: StatisticalPhasing
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing.wdl
+- name: PanGeniePanelCreation
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/PanGeniePanelCreation.wdl
 - name: VcfdistAndSwitchEvaluation
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistAndSwitchEvaluation.wdl

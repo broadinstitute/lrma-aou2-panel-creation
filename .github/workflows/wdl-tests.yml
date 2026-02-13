@@ -48,3 +48,9 @@ jobs:
         run: |
           echo "Running statistical phasing WDL (Shapeit5)";
           bash test/cromwell/statistical-phasing-shapeit5.sh;
+
+    - name: "pangenie-panel-creation-wdl"
+        if: ${{ matrix.wdlTest == 'pangenie-panel-creation-wdl' }}
+        run: |
+          echo "Running PanGenie panel-creation WDL";
+          bash test/cromwell/pangenie-panel-creation.sh;
