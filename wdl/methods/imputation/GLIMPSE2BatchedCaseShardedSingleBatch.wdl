@@ -1,7 +1,5 @@
 version 1.0
 
-import "../../methods/phasing/HierarchicallyMergeVcfs.wdl" as HierarchicallyMergeVcfs
-
 struct RuntimeAttributes {
     Int? cpu
     Int? command_mem_gb
