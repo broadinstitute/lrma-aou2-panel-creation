@@ -13,6 +13,8 @@ workflow PanGeniePanelCreation {
 
         Float frac_missing = 0.2
     }
+    
+    # TODO add FixVariantCollisions
 
     call PanGeniePanelCreation {
         input:
@@ -26,6 +28,9 @@ workflow PanGeniePanelCreation {
             frac_missing = frac_missing,
             output_prefix = output_prefix
     }
+    
+    # make sure dict in header
+    # TODO add preprocessing steps from KAGE Panel WDL
 
     output {
         File panel_vcf = PanGeniePanelCreation.panel_vcf
