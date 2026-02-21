@@ -70,7 +70,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     output_region = output_regions[k],
                     genetic_map = genetic_maps[j],
                     output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".split",
-                    extra_split_args = extra_split_args
+                    extra_split_args = extra_split_args,
+                    docker = docker
             }
 
             call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
@@ -85,7 +86,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     extra_phase_args = extra_phase_args,
                     docker = docker,
                     monitoring_script = monitoring_script,
-                    runtime_attributes = glimpse2_phase_runtime_attributes
+                    runtime_attributes = glimpse2_phase_runtime_attributes,
+                    docker = docker
 #                    command_mem_gb = command_mem_gb
             }
         }
@@ -146,6 +148,7 @@ task GLIMPSE2Chunk {
         File genetic_map
         String prefix
         String? extra_chunk_args
+        String docker
 
         RuntimeAttributes runtime_attributes = {}
     }
@@ -195,6 +198,7 @@ task GLIMPSE2SplitReference {
         File genetic_map
         String output_prefix
         String? extra_split_args
+        String docker
 
         RuntimeAttributes runtime_attributes = {}
     }
