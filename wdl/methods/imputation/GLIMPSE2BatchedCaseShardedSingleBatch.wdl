@@ -52,7 +52,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                 region = chromosome,
                 genetic_map = genetic_maps[j],
                 prefix = output_prefix + "." + chromosome,
-                extra_chunk_args = extra_chunk_args
+                extra_chunk_args = extra_chunk_args,
+                docker = docker
         }
 
         Array[String] input_regions = read_lines(ChromosomeGLIMPSE2Chunk.input_regions)
@@ -86,8 +87,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     extra_phase_args = extra_phase_args,
                     docker = docker,
                     monitoring_script = monitoring_script,
-                    runtime_attributes = glimpse2_phase_runtime_attributes,
-                    docker = docker
+                    runtime_attributes = glimpse2_phase_runtime_attributes
 #                    command_mem_gb = command_mem_gb
             }
         }
