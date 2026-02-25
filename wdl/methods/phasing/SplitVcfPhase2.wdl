@@ -5,134 +5,97 @@ workflow SplitCohortVcf {
     input {
         File joint_vcf
         File joint_vcf_tbi
-        Int batch_size
-        String outputdirectory
-    }
-
-    call get_sample_list { input:
-        joint_vcf = joint_vcf,
-        joint_vcf_tbi = joint_vcf_tbi,
-        batch_size = batch_size
-    }
-
-    Array[File] sample_batch = get_sample_list.sample_lists
-    scatter (index in range(length(sample_batch))) {
-        File sample_list = sample_batch[index]
-        call split_sample_vcfs { input:
-            joint_vcf = joint_vcf,
-            joint_vcf_tbi = joint_vcf_tbi,
-            sample_list = sample_list,
-            prefix = "sample_batch_" + index,
-        }
-        call SplitVcf{ input:
-            joint_vcf = split_sample_vcfs.subset_vcf,
-            joint_vcf_tbi = split_sample_vcfs.subset_tbi,
-            gcs_output_dir = outputdirectory
-        }
-    }
-
-    output {
-    }
-}
-
-
-task get_sample_list {
-
-    input {
-        File joint_vcf
-        File joint_vcf_tbi
-        Int batch_size
-        Int memory = 16
-    }
-
-    command <<<
-        set -euxo pipefail
-        bcftools query -l ~{joint_vcf} | split -l ~{batch_size} - sample_batch_
-    >>>
-
-    output {
-        Array[File] sample_lists = glob("sample_batch_*")
-    }
-    ###################
-    runtime {
-        cpu: 4
-        memory: memory + " GiB"
-        disks: "local-disk 100 LOCAL"
-        bootDiskSizeGb: 10
-        preemptible_tries:     1
-        max_retries:           0
-        docker:"us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.20"
-    }
-}
-
-task split_sample_vcfs {
-
-    input {
-        File joint_vcf
-        File joint_vcf_tbi
-        File sample_list
-        
-        String prefix
-        Int memory = 16
-    }
-
-    Array[String] sl = read_lines(sample_list)
-
-    command <<<
-        set -euxo pipefail
-        bcftools view -s ~{sep="," sl} ~{joint_vcf} -Oz -o ~{prefix}.split.vcf.gz
-        bcftools index -t ~{prefix}.split.vcf.gz
-    >>>
-
-    output {
-        File subset_vcf = "~{prefix}.split.vcf.gz"
-        File subset_tbi = "~{prefix}.split.vcf.gz.tbi"
-    }
-    ###################
-    runtime {
-        cpu: 4
-        memory: memory + " GiB"
-        disks: "local-disk 100 LOCAL"
-        bootDiskSizeGb: 10
-        preemptible_tries:     1
-        max_retries:           0
-        docker:"us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.20"
-    }
-}
-
-task SplitVcf {
-
-    input {
-        File joint_vcf
-        File joint_vcf_tbi
-        String gcs_output_dir
+        String locus 
         Int memory
     }
 
+
+    call SubsetandSplitVcf{ input:
+        vcf_gz = joint_vcf,
+        vcf_gz_tbi = joint_vcf_tbi,
+        locus = locus,
+        memory = memory
+    }
+    
+
+    output {
+        Array[File] splitted_vcf = SubsetandSplitVcf.splitted_vcf
+        Array[File] splitted_vcf_tbi = SubsetandSplitVcf.splitted_vcf_tbi
+    }
+}
+
+struct RuntimeAttr {
+    Float? mem_gb
+    Int? cpu_cores
+    Int? disk_gb
+    Int? boot_disk_gb
+    Int? preemptible_tries
+    Int? max_retries
+    String? docker
+}
+
+
+task SubsetandSplitVcf {
+
+    input {
+        File vcf_gz
+        File vcf_gz_tbi
+        String locus
+        Int memory
+        RuntimeAttr? runtime_attr_override
+    }
+
+    meta {
+        description: "Subset a VCF file to a given locus and split"
+    }
+
+    parameter_meta {
+        vcf_gz: {
+            description: "VCF file to be subsetted",
+            localization_optional: true
+        }
+        vcf_gz_tbi: {
+            description: "Tabix index for the VCF file",
+            localization_optional: true
+        }
+        locus: "Locus to be subsetted"
+        runtime_attr_override: "Override default runtime attributes"
+    }
+
     command <<<
         set -euxo pipefail
+
+        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
+
         mkdir output
-        bcftools +split -Oz -o output ~{joint_vcf}
+
+        bcftools view --no-version ~{vcf_gz} --regions ~{locus} | \
+             bcftools +split -Oz -o output 
+        
         cd output
         for vcf in $(find . -name "*.vcf.gz"); do
-            tabix -p vcf "$vcf"
-            gsutil cp "$vcf" ~{gcs_output_dir}
+            vcf_basename=$(basename "$vcf")
+            bcftools view "$vcf" -Oz -o "$vcf_basename.~{locus}.vcf.gz"
+            bcftools index -t "$vcf_basename.~{locus}.vcf.gz"
+            rm "$vcf" 
         done
         cd -
 
     >>>
 
     output {
+        Array[File] splitted_vcf = glob("output/*.vcf.gz")
+        Array[File] splitted_vcf_tbi = glob("output/*.vcf.gz.tbi")
 
     }
     ###################
     runtime {
-        cpu: 4
+        cpu: 1
         memory: memory + " GiB"
         disks: "local-disk 500 LOCAL"
         bootDiskSizeGb: 10
-        preemptible_tries:     1
-        max_retries:           0
+        preemptible_tries:     3
+        max_retries:           1
         docker:"us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.20"
     }
 }
