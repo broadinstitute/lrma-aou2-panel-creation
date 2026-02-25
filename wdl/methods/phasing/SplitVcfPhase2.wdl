@@ -5,22 +5,21 @@ workflow SplitCohortVcf {
     input {
         File joint_vcf
         File joint_vcf_tbi
-        String locus 
-        Int memory
+        String locus
     }
 
 
     call SubsetandSplitVcf{ input:
         vcf_gz = joint_vcf,
         vcf_gz_tbi = joint_vcf_tbi,
-        locus = locus,
-        memory = memory
+        locus = locus
     }
     
 
     output {
         Array[File] splitted_vcf = SubsetandSplitVcf.splitted_vcf
         Array[File] splitted_vcf_tbi = SubsetandSplitVcf.splitted_vcf_tbi
+        Float number_of_call = SubsetandSplitVcf.number_of_call
     }
 }
 
@@ -29,6 +28,7 @@ struct RuntimeAttr {
     Int? cpu_cores
     Int? disk_gb
     Int? boot_disk_gb
+    Boolean? use_ssd
     Int? preemptible_tries
     Int? max_retries
     String? docker
@@ -79,6 +79,10 @@ task SubsetandSplitVcf {
             bcftools index -t "$vcf_basename.~{locus}.vcf.gz"
             rm "$vcf" 
         done
+
+
+        bcftools view -H "$vcf_basename.~{locus}.vcf.gz" | wc -l > number.txt
+
         cd -
 
     >>>
@@ -86,16 +90,28 @@ task SubsetandSplitVcf {
     output {
         Array[File] splitted_vcf = glob("output/*.vcf.gz")
         Array[File] splitted_vcf_tbi = glob("output/*.vcf.gz.tbi")
+        Float number_of_call = read_float("coverage.txt")
 
     }
     ###################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          1,
+        mem_gb:             4,
+        disk_gb:            10,
+        boot_disk_gb:       10,
+        use_ssd:            false,
+        preemptible_tries:  3,
+        max_retries:        1,
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.20"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
-        cpu: 1
-        memory: memory + " GiB"
-        disks: "local-disk 500 LOCAL"
-        bootDiskSizeGb: 10
-        preemptible_tries:     3
-        max_retries:           1
-        docker:"us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.20"
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 }
