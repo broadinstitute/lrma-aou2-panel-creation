@@ -67,6 +67,8 @@ task SubsetandSplitVcf {
     command <<<
         set -euxo pipefail
 
+        gsutil cp ~{vcf_gz_tbi} .
+
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
         mkdir output
