@@ -44,6 +44,7 @@ task SubsetandSplitVcf {
         File vcf_gz_tbi
         String locus
         String output_prefix
+        String gcs_output
         RuntimeAttr? runtime_attr_override
     }
 
@@ -85,16 +86,20 @@ task SubsetandSplitVcf {
             rm "$vcf" 
         done
 
-
         bcftools view -H "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz" | wc -l > number.txt
 
         cd -
 
+        gcloud storage cp output/*.vcf.gz "~{gcs_output}/~{output_prefix}/vcf/"
+        gcloud storage cp output/*.vcf.gz.tbi "~{gcs_output}/~{output_prefix}/tbi/"
+        gsutil ls "~{gcs_output}/~{output_prefix}/vcf/" > output_vcf.txt
+        gsutil ls "~{gcs_output}/~{output_prefix}/tbi/" > output_vcf_tbi.txt
+
     >>>
 
     output {
-        Array[File] splitted_vcf = glob("output/*.vcf.gz")
-        Array[File] splitted_vcf_tbi = glob("output/*.vcf.gz.tbi")
+        Array[String] splitted_vcf = read_lines("output_vcf.txt")
+        Array[String] splitted_vcf_tbi = read_lines("output_vcf_tbi.txt")
         Float number_of_call = read_float("number.txt")
 
     }
