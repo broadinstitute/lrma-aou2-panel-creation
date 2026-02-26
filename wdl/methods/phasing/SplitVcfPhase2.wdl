@@ -105,7 +105,7 @@ task SubsetandSplitVcf {
         use_ssd:            false,
         preemptible_tries:  3,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.20"
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.2"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
