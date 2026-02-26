@@ -107,8 +107,8 @@ task SubsetandSplitVcf {
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
         mem_gb:             8,
-        disk_gb:            10,
-        boot_disk_gb:       100,
+        disk_gb:            100,
+        boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  3,
         max_retries:        1,
