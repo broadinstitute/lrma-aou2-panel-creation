@@ -93,7 +93,7 @@ task SubsetandSplitVcf {
     output {
         Array[File] splitted_vcf = glob("output/*.vcf.gz")
         Array[File] splitted_vcf_tbi = glob("output/*.vcf.gz.tbi")
-        Float number_of_call = read_float("coverage.txt")
+        Float number_of_call = read_float("number.txt")
 
     }
     ###################
