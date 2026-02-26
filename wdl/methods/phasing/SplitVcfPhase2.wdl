@@ -6,13 +6,15 @@ workflow SplitCohortVcf {
         File joint_vcf
         File joint_vcf_tbi
         String locus
+        String output_prefix
     }
 
 
     call SubsetandSplitVcf{ input:
         vcf_gz = joint_vcf,
         vcf_gz_tbi = joint_vcf_tbi,
-        locus = locus
+        locus = locus,
+        output_prefix = output_prefix
     }
     
 
@@ -41,7 +43,7 @@ task SubsetandSplitVcf {
         File vcf_gz
         File vcf_gz_tbi
         String locus
-        Int memory
+        String output_prefix
         RuntimeAttr? runtime_attr_override
     }
 
@@ -68,20 +70,21 @@ task SubsetandSplitVcf {
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
         mkdir output
+        bcftools view --no-version ~{vcf_gz} --regions ~{locus} -Oz -o ~{output_prefix}.vcf.gz
+        bcftools index -t ~{output_prefix}.vcf.gz
 
-        bcftools view --no-version ~{vcf_gz} --regions ~{locus} | \
-             bcftools +split -Oz -o output 
+        bcftools +split -Oz -o output ~{output_prefix}.vcf.gz
         
         cd output
         for vcf in $(find . -name "*.vcf.gz"); do
             vcf_basename=$(basename "$vcf")
-            bcftools view "$vcf" -Oz -o "$vcf_basename.~{locus}.vcf.gz"
-            bcftools index -t "$vcf_basename.~{locus}.vcf.gz"
+            bcftools view "$vcf" -Oz -o "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz"
+            bcftools index -t "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz"
             rm "$vcf" 
         done
 
 
-        bcftools view -H "$vcf_basename.~{locus}.vcf.gz" | wc -l > number.txt
+        bcftools view -H "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz" | wc -l > number.txt
 
         cd -
 
