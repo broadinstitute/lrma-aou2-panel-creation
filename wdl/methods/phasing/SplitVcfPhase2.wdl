@@ -20,7 +20,6 @@ workflow SplitCohortVcf {
 
     output {
         Array[File] splitted_vcf = SubsetandSplitVcf.splitted_vcf
-        Array[File] splitted_vcf_tbi = SubsetandSplitVcf.splitted_vcf_tbi
         Float number_of_call = SubsetandSplitVcf.number_of_call
     }
 }
@@ -81,25 +80,20 @@ task SubsetandSplitVcf {
         cd output
         for vcf in $(find . -name "*.vcf.gz"); do
             vcf_basename=$(basename "$vcf")
-            bcftools view "$vcf" -Oz -o "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz"
-            bcftools index -t "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz"
-            rm "$vcf" 
+            mv "$vcf" "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz"
         done
-
-        bcftools view -H "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz" | wc -l > number.txt
 
         cd -
 
         gcloud storage cp output/*.vcf.gz "~{gcs_output}/~{output_prefix}/vcf/"
-        gcloud storage cp output/*.vcf.gz.tbi "~{gcs_output}/~{output_prefix}/tbi/"
         gsutil ls "~{gcs_output}/~{output_prefix}/vcf/" > output_vcf.txt
-        gsutil ls "~{gcs_output}/~{output_prefix}/tbi/" > output_vcf_tbi.txt
+
+        bcftools view -H "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz" | wc -l > number.txt
 
     >>>
 
     output {
         Array[String] splitted_vcf = read_lines("output_vcf.txt")
-        Array[String] splitted_vcf_tbi = read_lines("output_vcf_tbi.txt")
         Float number_of_call = read_float("number.txt")
 
     }
