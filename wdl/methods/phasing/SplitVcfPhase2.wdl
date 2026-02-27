@@ -73,7 +73,7 @@ task SubsetandSplitVcf {
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
         mkdir output
-        bcftools view --no-version ~{vcf_gz} --regions ~{locus} --verbosity 8 -Oz -o ~{output_prefix}.vcf.gz
+        bcftools view --no-version ~{vcf_gz} --regions ~{locus} --regions-overlap 0 --verbosity 8 -Oz -o ~{output_prefix}.vcf.gz
         bcftools index -t ~{output_prefix}.vcf.gz
 
         bcftools +split -Oz -o output ~{output_prefix}.vcf.gz
