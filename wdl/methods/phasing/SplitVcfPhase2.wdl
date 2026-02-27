@@ -83,18 +83,20 @@ task SubsetandSplitVcf {
             mv "$vcf" "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz"
         done
 
+        bcftools view -H "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz" | wc -l > number.txt
+
         cd -
 
         gcloud storage cp output/*.vcf.gz "~{gcs_output}/~{output_prefix}/vcf/"
         gsutil ls "~{gcs_output}/~{output_prefix}/vcf/" > output_vcf.txt
 
-        bcftools view -H "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz" | wc -l > number.txt
+        
 
     >>>
 
     output {
         Array[String] splitted_vcf = read_lines("output_vcf.txt")
-        Float number_of_call = read_float("number.txt")
+        Float number_of_call = read_float("output/number.txt")
 
     }
     ###################
