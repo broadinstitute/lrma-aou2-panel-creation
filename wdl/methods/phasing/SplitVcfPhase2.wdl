@@ -46,7 +46,7 @@ task SubsetAndSplitVcf {
         String locus
         String output_prefix
         String gcs_output_dir
-        Int view_verbosity = 3
+        Int view_verbosity = 8
         RuntimeAttr? runtime_attr_override
     }
 
