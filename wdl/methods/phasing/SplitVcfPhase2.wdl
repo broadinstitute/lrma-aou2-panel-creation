@@ -44,7 +44,7 @@ task SubsetAndSplitVcf {
         File vcf_gz
         File vcf_gz_tbi
         String locus
-        String output_prefix
+        String output_tag
         String gcs_output_dir
         Int view_verbosity = 8
         RuntimeAttr? runtime_attr_override
@@ -77,12 +77,12 @@ task SubsetAndSplitVcf {
             bcftools +split -Ob -o output
         
         cd output
-        for bcf in $(find . -name *.bcf); do
+        for bcf in *.bcf; do
             bcf_basename=$(basename $bcf)
-            mv $bcf $bcf_basename.~{output_prefix}.bcf
+            mv $bcf $bcf_basename.~{output_tag}.bcf
         done
 
-        bcftools view -H $bcf_basename.~{output_prefix}.bcf | wc -l > number_of_calls.txt
+        bcftools view -H $bcf_basename.~{output_tag}.bcf | wc -l > number_of_calls.txt
 
         cd -
 
