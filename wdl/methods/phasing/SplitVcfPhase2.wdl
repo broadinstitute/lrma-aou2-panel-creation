@@ -86,8 +86,8 @@ task SubsetAndSplitVcf {
 
         cd -
 
-        gcloud storage cp output/*.bcf ~{gcs_output}/
-        gsutil ls ~{gcs_output}/*bcf > output_vcf_paths.txt
+        gcloud storage cp output/*.bcf ~{gcs_output_dir}/
+        gsutil ls ~{gcs_output_dir}/*bcf > output_vcf_paths.txt
 
     >>>
 
