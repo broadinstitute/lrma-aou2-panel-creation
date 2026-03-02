@@ -78,7 +78,7 @@ task SubsetAndSplitVcf {
         
         cd output
         for bcf in *.bcf; do
-            bcf_basename=$(basename $bcf)
+            bcf_basename=$(basename $bcf .bcf)
             mv $bcf $bcf_basename.~{output_tag}.bcf
         done
 
