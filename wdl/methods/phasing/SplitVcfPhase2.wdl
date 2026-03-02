@@ -82,7 +82,7 @@ task SubsetAndSplitVcf {
             mv $bcf $bcf_basename.~{output_prefix}.bcf
         done
 
-        bcftools view -H $bcf_basename.~{output_prefix}.bcf" | wc -l > number_of_calls.txt
+        bcftools view -H $bcf_basename.~{output_prefix}.bcf | wc -l > number_of_calls.txt
 
         cd -
 
