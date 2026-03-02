@@ -6,6 +6,7 @@ workflow SplitCohortVcf {
         File joint_vcf
         File joint_vcf_tbi
         String locus
+        String gcs_output_dir
         String output_prefix
     }
 
@@ -14,6 +15,7 @@ workflow SplitCohortVcf {
         vcf_gz = joint_vcf,
         vcf_gz_tbi = joint_vcf_tbi,
         locus = locus,
+        gcs_output_dir = gcs_output_dir,
         output_prefix = output_prefix
     }
     
@@ -43,7 +45,7 @@ task SubsetAndSplitVcf {
         File vcf_gz_tbi
         String locus
         String output_prefix
-        String gcs_output
+        String gcs_output_dir
         Int view_verbosity = 3
         RuntimeAttr? runtime_attr_override
     }
@@ -71,27 +73,27 @@ task SubsetAndSplitVcf {
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
         mkdir output
-        bcftools view --no-version ~{vcf_gz} --regions ~{locus} --regions-overlap 0 --verbosity ~{vcf_gz} -Ou | \
+        bcftools view --no-version ~{vcf_gz} --regions ~{locus} --regions-overlap 0 --verbosity ~{view_verbosity} -Ou | \
             bcftools +split -Ob -o output
         
         cd output
-        for bcf in $(find . -name "*.bcf"); do
-            bcf_basename=$(basename "$bcf")
-            mv "$bcf" "$bcf_basename.~{output_prefix}.bcf"
+        for bcf in $(find . -name *.bcf); do
+            bcf_basename=$(basename $bcf)
+            mv $bcf $bcf_basename.~{output_prefix}.bcf
         done
 
-        bcftools view -H "$bcf_basename.~{output_prefix}.bcf" | wc -l > number.txt
+        bcftools view -H $bcf_basename.~{output_prefix}.bcf" | wc -l > number_of_calls.txt
 
         cd -
 
-        gcloud storage cp output/*.bcf "~{gcs_output}/~{output_prefix}"
-        gsutil ls "~{gcs_output}/~{output_prefix}/*bcf" > output_vcf.txt
+        gcloud storage cp output/*.bcf ~{gcs_output}/
+        gsutil ls ~{gcs_output}/*bcf > output_vcf_paths.txt
 
     >>>
 
     output {
-        Array[String] split_vcf_paths = read_lines("output_vcf.txt")
-        Float number_of_calls = read_float("output/number.txt")
+        Array[String] split_vcf_paths = read_lines("output_vcf_paths.txt")
+        Float number_of_calls = read_float("output/number_of_calls.txt")
 
     }
     ###################
