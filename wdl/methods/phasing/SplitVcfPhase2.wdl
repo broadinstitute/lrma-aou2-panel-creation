@@ -7,7 +7,7 @@ workflow SplitCohortVcf {
         File joint_vcf_tbi
         String locus
         String gcs_output_dir
-        String output_prefix
+        String output_tag
     }
 
 
@@ -16,7 +16,7 @@ workflow SplitCohortVcf {
         vcf_gz_tbi = joint_vcf_tbi,
         locus = locus,
         gcs_output_dir = gcs_output_dir,
-        output_prefix = output_prefix
+        output_tag = output_tag
     }
     
 
@@ -44,8 +44,8 @@ task SubsetAndSplitVcf {
         File vcf_gz
         File vcf_gz_tbi
         String locus
-        String output_tag
         String gcs_output_dir
+        String output_tag
         Int view_verbosity = 8
         RuntimeAttr? runtime_attr_override
     }
