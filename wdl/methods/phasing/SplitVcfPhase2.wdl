@@ -10,7 +10,7 @@ workflow SplitCohortVcf {
     }
 
 
-    call SubsetandSplitVcf{ input:
+    call SubsetAndSplitVcf{ input:
         vcf_gz = joint_vcf,
         vcf_gz_tbi = joint_vcf_tbi,
         locus = locus,
@@ -19,8 +19,8 @@ workflow SplitCohortVcf {
     
 
     output {
-        Array[File] splitted_vcf = SubsetandSplitVcf.splitted_vcf
-        Float number_of_call = SubsetandSplitVcf.number_of_call
+        Array[String] split_vcf_paths = SubsetAndSplitVcf.split_vcf_paths
+        Float number_of_calls = SubsetAndSplitVcf.number_of_calls
     }
 }
 
@@ -36,7 +36,7 @@ struct RuntimeAttr {
 }
 
 
-task SubsetandSplitVcf {
+task SubsetAndSplitVcf {
 
     input {
         File vcf_gz
@@ -44,6 +44,7 @@ task SubsetandSplitVcf {
         String locus
         String output_prefix
         String gcs_output
+        Int view_verbosity = 3
         RuntimeAttr? runtime_attr_override
     }
 
@@ -67,43 +68,37 @@ task SubsetandSplitVcf {
     command <<<
         set -euxo pipefail
 
-        gsutil cp ~{vcf_gz_tbi} .
-
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
         mkdir output
-        bcftools view --no-version ~{vcf_gz} --regions ~{locus} --regions-overlap 0 --verbosity 8 -Oz -o ~{output_prefix}.vcf.gz
-        bcftools index -t ~{output_prefix}.vcf.gz
-
-        bcftools +split -Oz -o output ~{output_prefix}.vcf.gz
+        bcftools view --no-version ~{vcf_gz} --regions ~{locus} --regions-overlap 0 --verbosity ~{vcf_gz} -Ou | \
+            bcftools +split -Ob -o output
         
         cd output
-        for vcf in $(find . -name "*.vcf.gz"); do
-            vcf_basename=$(basename "$vcf")
-            mv "$vcf" "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz"
+        for bcf in $(find . -name "*.bcf"); do
+            bcf_basename=$(basename "$bcf")
+            mv "$bcf" "$bcf_basename.~{output_prefix}.bcf"
         done
 
-        bcftools view -H "$vcf_basename.~{output_prefix}.~{locus}.vcf.gz" | wc -l > number.txt
+        bcftools view -H "$bcf_basename.~{output_prefix}.bcf" | wc -l > number.txt
 
         cd -
 
-        gcloud storage cp output/*.vcf.gz "~{gcs_output}/~{output_prefix}/vcf/"
-        gsutil ls "~{gcs_output}/~{output_prefix}/vcf/" > output_vcf.txt
-
-        
+        gcloud storage cp output/*.bcf "~{gcs_output}/~{output_prefix}"
+        gsutil ls "~{gcs_output}/~{output_prefix}/*bcf" > output_vcf.txt
 
     >>>
 
     output {
-        Array[String] splitted_vcf = read_lines("output_vcf.txt")
-        Float number_of_call = read_float("output/number.txt")
+        Array[String] split_vcf_paths = read_lines("output_vcf.txt")
+        Float number_of_calls = read_float("output/number.txt")
 
     }
     ###################
     RuntimeAttr default_attr = object {
-        cpu_cores:          2,
-        mem_gb:             8,
-        disk_gb:            100,
+        cpu_cores:          1,
+        mem_gb:             4,
+        disk_gb:            50,
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  3,
@@ -114,7 +109,7 @@ task SubsetandSplitVcf {
     runtime {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " LOCAL"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
         bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
