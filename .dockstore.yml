@@ -15,3 +15,6 @@ workflows:
 - name: VcfdistAndSwitchEvaluation
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistAndSwitchEvaluation.wdl
+- name: NaiveConcatVcf
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/NaiveConcatVcf.wdl
