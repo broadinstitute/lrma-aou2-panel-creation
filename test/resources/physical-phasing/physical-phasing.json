@@ -1,0 +1,12 @@
+{
+  "PhysicalPhasing.all_chr_bam": "__REPO_DIR__/test/resources/large/physical-phasing/HG00096_15x_70-71M.bam",
+  "PhysicalPhasing.all_chr_bai": "__REPO_DIR__/test/resources/large/physical-phasing/HG00096_15x_70-71M.bam.bai",
+  "PhysicalPhasing.reference_fasta": "__REPO_DIR__/test/resources/large/statistical-phasing/GRCh38_full_analysis_set_plus_decoy_hla.ch46-70M-80M.fa",
+  "PhysicalPhasing.reference_fasta_fai": "__REPO_DIR__/test/resources/large/statistical-phasing/GRCh38_full_analysis_set_plus_decoy_hla.ch46-70M-80M.fa.fai",
+  "PhysicalPhasing.small_vcfs_directory": "__REPO_DIR__/test/resources/large/physical-phasing/short/",
+  "PhysicalPhasing.sv_vcfs_directory": "__REPO_DIR__/test/resources/large/physical-phasing/sv/",
+  "PhysicalPhasing.hiphase_memory": 1,
+  "PhysicalPhasing.hiphase_extra_args": "",
+  "PhysicalPhasing.sample_id": "HG00096_70-71M",
+  "PhysicalPhasing.region": "chr6:70000000-71000000"
+}
