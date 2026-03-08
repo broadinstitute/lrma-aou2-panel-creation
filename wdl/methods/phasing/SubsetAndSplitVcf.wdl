@@ -4,15 +4,15 @@ workflow SubsetAndSplitVcf {
 
     input {
         File joint_vcf
-        File joint_vcf_tbi
+        File joint_vcf_idx
         String region
         String gcs_output_dir
-        String output_tag
+        String output_tag           # per-sample BCFs will be copied to gcs_output_dir/{sample_name}.{output_tag}.bcf
     }
 
     call SubsetAndSplitVcf { input:
         vcf_gz = joint_vcf,
-        vcf_gz_tbi = joint_vcf_tbi,
+        vcf_gz_tbi = joint_vcf_idx,
         region = region,
         gcs_output_dir = gcs_output_dir,
         output_tag = output_tag
