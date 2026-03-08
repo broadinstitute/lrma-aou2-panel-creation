@@ -92,7 +92,7 @@ task SubsetAndSplitVcf {
         use_ssd:            true,
         preemptible_tries:  3,
         max_retries:        0,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/bcftools-patched/bcftools:1.23"      # see https://github.com/broadinstitute/bcftools-patched
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lr-bcftools-patched-gcloud/lr-bcftools-patched-gcloud:1.23"      # see https://github.com/broadinstitute/bcftools-patched
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
