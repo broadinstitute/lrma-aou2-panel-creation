@@ -5,7 +5,7 @@ workflow SubsetAndSplitVcf {
     input {
         File joint_vcf
         File joint_vcf_tbi
-        String locus
+        String region
         String gcs_output_dir
         String output_tag
     }
@@ -13,7 +13,7 @@ workflow SubsetAndSplitVcf {
     call SubsetAndSplitVcf { input:
         vcf_gz = joint_vcf,
         vcf_gz_tbi = joint_vcf_tbi,
-        locus = locus,
+        region = region,
         gcs_output_dir = gcs_output_dir,
         output_tag = output_tag
     }
@@ -40,7 +40,7 @@ task SubsetAndSplitVcf {
     input {
         File vcf_gz
         File vcf_gz_tbi
-        String locus
+        String region
         String gcs_output_dir
         String output_tag
         Int view_verbosity = 8
@@ -64,7 +64,7 @@ task SubsetAndSplitVcf {
         ( while true ; do curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token > /tmp/token_fifo ; done ) &
         export HTS_AUTH_LOCATION="/tmp/token_fifo"
 
-        bcftools view --no-version ~{vcf_gz} --regions ~{locus} --regions-overlap 0 --verbosity ~{view_verbosity} -Ou | \
+        bcftools view --no-version ~{vcf_gz} --regions ~{region} --regions-overlap 0 --verbosity ~{view_verbosity} -Ou | \
             bcftools +split -Ob -o output
 
         for bcf in output/*.bcf; do
