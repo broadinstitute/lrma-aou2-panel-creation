@@ -73,7 +73,7 @@ task SubsetAndSplitVcf {
         done
 
         # check number of calls in the last sample
-        bcftools view -H output/$bcf_basename.~{output_tag}.bcf | wc -l > number_of_calls.txt
+        bcftools view -H output/$bcf_basename.~{output_tag}.bcf | wc -l > number_of_sites.txt
 
         gcloud storage cp output/*.bcf ~{gcs_output_dir}/
         gsutil ls ~{gcs_output_dir}/*bcf > output_vcf_paths.txt
@@ -81,7 +81,7 @@ task SubsetAndSplitVcf {
 
     output {
         Array[String] split_vcf_paths = read_lines("output_vcf_paths.txt")
-        Float number_of_calls = read_float("number_of_calls.txt")
+        Float number_of_sites = read_float("number_of_sites.txt")
     }
     ###################
     RuntimeAttr default_attr = object {
