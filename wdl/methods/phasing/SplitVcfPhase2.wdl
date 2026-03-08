@@ -1,6 +1,6 @@
 version 1.0
 
-workflow SplitCohortVcf {
+workflow SplitVcfPhase2 {
 
     input {
         File joint_vcf
@@ -10,15 +10,13 @@ workflow SplitCohortVcf {
         String output_tag
     }
 
-
-    call SubsetAndSplitVcf{ input:
+    call SubsetAndSplitVcf { input:
         vcf_gz = joint_vcf,
         vcf_gz_tbi = joint_vcf_tbi,
         locus = locus,
         gcs_output_dir = gcs_output_dir,
         output_tag = output_tag
     }
-    
 
     output {
         Array[String] split_vcf_paths = SubsetAndSplitVcf.split_vcf_paths
@@ -37,7 +35,6 @@ struct RuntimeAttr {
     String? docker
 }
 
-
 task SubsetAndSplitVcf {
 
     input {
@@ -50,62 +47,52 @@ task SubsetAndSplitVcf {
         RuntimeAttr? runtime_attr_override
     }
 
-    meta {
-        description: "Subset a VCF file to a given locus and split"
-    }
-
     parameter_meta {
         vcf_gz: {
-            description: "VCF file to be subsetted",
             localization_optional: true
         }
         vcf_gz_tbi: {
-            description: "Tabix index for the VCF file",
             localization_optional: true
         }
-        locus: "Locus to be subsetted"
-        runtime_attr_override: "Override default runtime attributes"
     }
 
     command <<<
         set -euxo pipefail
 
-        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
+        # see https://github.com/samtools/htslib/issues/803#issuecomment-444514336, https://github.com/broadinstitute/bcftools-patched
+        mkfifo /tmp/token_fifo
+        ( while true ; do curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token > /tmp/token_fifo ; done ) &
+        export HTS_AUTH_LOCATION="/tmp/token_fifo"
 
-        mkdir output
         bcftools view --no-version ~{vcf_gz} --regions ~{locus} --regions-overlap 0 --verbosity ~{view_verbosity} -Ou | \
             bcftools +split -Ob -o output
-        
-        cd output
-        for bcf in *.bcf; do
+
+        for bcf in output/*.bcf; do
             bcf_basename=$(basename $bcf .bcf)
-            mv $bcf $bcf_basename.~{output_tag}.bcf
+            mv $bcf output/$bcf_basename.~{output_tag}.bcf
         done
 
-        bcftools view -H $bcf_basename.~{output_tag}.bcf | wc -l > number_of_calls.txt
-
-        cd -
+        # check number of calls in the last sample
+        bcftools view -H output/$bcf_basename.~{output_tag}.bcf | wc -l > number_of_calls.txt
 
         gcloud storage cp output/*.bcf ~{gcs_output_dir}/
         gsutil ls ~{gcs_output_dir}/*bcf > output_vcf_paths.txt
-
     >>>
 
     output {
         Array[String] split_vcf_paths = read_lines("output_vcf_paths.txt")
-        Float number_of_calls = read_float("output/number_of_calls.txt")
-
+        Float number_of_calls = read_float("number_of_calls.txt")
     }
     ###################
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
-        mem_gb:             4,
+        mem_gb:             6,
         disk_gb:            50,
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  3,
         max_retries:        0,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/bcftools-patched/bcftools:1.23"      # see https://github.com/broadinstitute/bcftools-patched
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
