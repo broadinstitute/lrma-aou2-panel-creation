@@ -61,7 +61,7 @@ task SubsetAndSplitVcf {
         ( while true ; do curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token > /tmp/token_fifo ; done ) &
         export HTS_AUTH_LOCATION="/tmp/token_fifo"
 
-        bcftools view --no-version ~{vcf}##idx##~{vcf_idx} --regions ~{region} --regions-overlap 0 --verbosity ~{view_verbosity} -Ou | \
+        bcftools view --no-version "~{vcf}##idx##~{vcf_idx}" --regions ~{region} --regions-overlap 0 --verbosity ~{view_verbosity} -Ou | \
             bcftools +split -Ob -o output
 
         for bcf in output/*.bcf; do
