@@ -20,7 +20,7 @@ workflow SubsetAndSplitVcf {
 
     output {
         Array[String] split_vcf_paths = SubsetAndSplitVcf.split_vcf_paths
-        Float number_of_calls = SubsetAndSplitVcf.number_of_calls
+        Float number_of_sites = SubsetAndSplitVcf.number_of_sites
     }
 }
 
@@ -72,7 +72,7 @@ task SubsetAndSplitVcf {
             mv $bcf output/$bcf_basename.~{output_tag}.bcf
         done
 
-        # check number of calls in the last sample
+        # check number of sites in the last sample
         bcftools view -H output/$bcf_basename.~{output_tag}.bcf | wc -l > number_of_sites.txt
 
         gcloud storage cp output/*.bcf ~{gcs_output_dir}/
