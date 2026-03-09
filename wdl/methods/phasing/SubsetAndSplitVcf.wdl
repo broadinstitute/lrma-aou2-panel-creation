@@ -61,16 +61,22 @@ task SubsetAndSplitVcf {
         ( while true ; do curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token > /tmp/token_fifo ; done ) &
         export HTS_AUTH_LOCATION="/tmp/token_fifo"
 
-        bcftools view --no-version "~{vcf}##idx##~{vcf_idx}" --regions ~{region} --regions-overlap 0 --verbosity ~{view_verbosity} -Ob -o ~{output_tag}.bcf
+        # we stream to an intermediate file, since piping directly to bcftools +split still results in GOAWAY/Libcurl issues
+        bcftools view --no-version "~{vcf}##idx##~{vcf_idx}" \
+            --regions ~{region} \
+            --regions-overlap 0 \
+            --verbosity ~{view_verbosity} \
+            -Ob -o ~{output_tag}.bcf
+
+        # check number of sites to guard against streaming errors
+        bcftools view -H ~{output_tag}.bcf | wc -l > number_of_sites.txt
+
         bcftools +split ~{output_tag}.bcf -Ob -o output
 
         for bcf in output/*.bcf; do
             bcf_basename=$(basename $bcf .bcf)
             mv $bcf output/$bcf_basename.~{output_tag}.bcf
         done
-
-        # check number of sites in the last sample
-        bcftools view -H output/$bcf_basename.~{output_tag}.bcf | wc -l > number_of_sites.txt
 
         gcloud storage cp output/*.bcf ~{gcs_output_dir}/
         gsutil ls ~{gcs_output_dir}/*bcf > output_vcf_paths.txt
