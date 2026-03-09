@@ -57,9 +57,10 @@ task SubsetAndSplitVcf {
         set -euxo pipefail
 
         # see https://github.com/samtools/htslib/issues/803#issuecomment-444514336, https://github.com/broadinstitute/bcftools-patched
-        mkfifo /tmp/token_fifo
-        ( while true ; do curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token > /tmp/token_fifo ; done ) &
-        export HTS_AUTH_LOCATION="/tmp/token_fifo"
+        # mkfifo /tmp/token_fifo
+        # ( while true ; do curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token > /tmp/token_fifo ; done ) &
+        # export HTS_AUTH_LOCATION="/tmp/token_fifo"
+        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
         bcftools view --no-version "~{vcf}##idx##~{vcf_idx}" --regions ~{region} --regions-overlap 0 --verbosity ~{view_verbosity} -Ou | \
             bcftools +split -Ob -o output
