@@ -43,7 +43,7 @@ task SubsetAndSplitVcf {
         String region
         String gcs_output_dir
         String output_tag
-        Int view_verbosity = 3
+        Int view_verbosity = 8
         RuntimeAttr? runtime_attr_override
     }
 
