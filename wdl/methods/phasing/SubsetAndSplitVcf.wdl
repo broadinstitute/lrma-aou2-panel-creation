@@ -65,7 +65,7 @@ task SubsetAndSplitVcf {
             --regions ~{region} \
             --regions-overlap 0 \
             --verbosity ~{view_verbosity} \
-            -Ou | bcftools +split ~{output_tag}.bcf -Ob -o output
+            -Ou | bcftools +split -Ob -o output
 
         for bcf in output/*.bcf; do
             bcf_basename=$(basename $bcf .bcf)
