@@ -26,7 +26,7 @@ workflow SubsetAndSplitVcf {
         Int num_batches = length(read_lines(select_first([sample_batches_tsv])))
         scatter (i in range(num_batches)) {
             call SubsetAndSplitVcf as SubsetAndSplitVcfBatch { input:
-                vcf = gcs_output_dir + "/batches/batch-" + i + ".bcf",
+                vcf = gcs_output_dir + "/batches/batch-" + i + "." + output_tag + ".bcf",
                 gcs_output_dir = gcs_output_dir,
                 wait_for_me = SubsetAndSplitVcf.number_of_sites,
                 output_tag = output_tag
