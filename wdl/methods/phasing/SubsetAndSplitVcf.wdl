@@ -18,6 +18,7 @@ workflow SubsetAndSplitVcf {
         vcf_idx = joint_vcf_idx,
         region = region,
         gcs_output_dir = if defined(sample_batches_tsv) then gcs_output_dir + "/batches" else gcs_output_dir,
+        sample_batches_tsv = sample_batches_tsv,
         output_tag = output_tag
     }
     
@@ -58,6 +59,7 @@ task SubsetAndSplitVcf {
         String? region      # only needed for initial stream, not for batches
         String gcs_output_dir
         String output_tag
+        File? sample_batches_tsv
         Int view_verbosity = 8
         RuntimeAttr? runtime_attr_override
     }
@@ -81,6 +83,7 @@ task SubsetAndSplitVcf {
         # we stream to an intermediate file, since piping directly to bcftools +split still results in GOAWAY/Libcurl issues
         bcftools view --no-version ~{view_input_arg} \
             ~{"--regions " + region} \
+            ~{"--samples-file " + sample_batches_tsv} \
             --regions-overlap 0 \
             --verbosity ~{view_verbosity} \
             -Ob -o ~{output_tag}.bcf
