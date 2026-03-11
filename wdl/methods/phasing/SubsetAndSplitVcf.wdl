@@ -8,19 +8,34 @@ workflow SubsetAndSplitVcf {
         String region
         String gcs_output_dir
         String output_tag           # per-sample BCFs will be copied to gcs_output_dir/{sample_name}.{output_tag}.bcf
+
+        # optional hierarchical split
+        File? sample_batches_tsv      # see bcftools +split --help; e.g., contains rows: {sample_name_1},{sample_name_2},...\t-\tbatch-0
     }
 
     call SubsetAndSplitVcf { input:
         vcf = joint_vcf,
         vcf_idx = joint_vcf_idx,
         region = region,
-        gcs_output_dir = gcs_output_dir,
+        gcs_output_dir = if defined(sample_batches_tsv) then gcs_output_dir + "/batches" else gcs_output_dir,
         output_tag = output_tag
+    }
+    
+    if (defined(sample_batches_tsv)) {
+        Int num_batches = length(read_lines(select_first([sample_batches_tsv])))
+        scatter (i in range(num_batches)) {
+            call SubsetAndSplitVcf as SubsetAndSplitVcfBatch { input:
+                vcf = gcs_output_dir + "/batches/batch-" + i + ".bcf",
+                gcs_output_dir = gcs_output_dir,
+                output_tag = output_tag
+            }
+        }
     }
 
     output {
-        Array[String] split_vcf_paths = SubsetAndSplitVcf.split_vcf_paths
         Float number_of_sites = SubsetAndSplitVcf.number_of_sites
+        Array[String] split_vcf_paths = select_first([flatten(select_first([SubsetAndSplitVcfBatch.split_vcf_paths])), 
+                                                      SubsetAndSplitVcf.split_vcf_paths])
     }
 }
 
@@ -39,8 +54,8 @@ task SubsetAndSplitVcf {
 
     input {
         File vcf
-        File vcf_idx
-        String region
+        File? vcf_idx       # only needed for initial stream, not for batches
+        String? region      # only needed for initial stream, not for batches
         String gcs_output_dir
         String output_tag
         Int view_verbosity = 8
@@ -52,6 +67,8 @@ task SubsetAndSplitVcf {
             localization_optional: true
         }
     }
+    
+    String view_input_arg = if defined(vcf_idx) then "\"~{vcf}##idx##~{vcf_idx}\"" else "~{vcf}"
 
     command <<<
         set -euxo pipefail
@@ -62,8 +79,8 @@ task SubsetAndSplitVcf {
         export HTS_AUTH_LOCATION="/tmp/token_fifo"
 
         # we stream to an intermediate file, since piping directly to bcftools +split still results in GOAWAY/Libcurl issues
-        bcftools view --no-version "~{vcf}##idx##~{vcf_idx}" \
-            --regions ~{region} \
+        bcftools view --no-version ~{view_input_arg} \
+            ~{"--regions " + region} \
             --regions-overlap 0 \
             --verbosity ~{view_verbosity} \
             -Ob -o ~{output_tag}.bcf
