@@ -28,13 +28,14 @@ workflow SubsetAndSplitVcf {
             call SubsetAndSplitVcf as SubsetAndSplitVcfBatch { input:
                 vcf = gcs_output_dir + "/batches/batch-" + i + ".bcf",
                 gcs_output_dir = gcs_output_dir,
+                wait_for_me = SubsetAndSplitVcf.number_of_sites,
                 output_tag = output_tag
             }
         }
     }
 
     output {
-        Float number_of_sites = SubsetAndSplitVcf.number_of_sites
+        Int number_of_sites = SubsetAndSplitVcf.number_of_sites
         Array[String] split_vcf_paths = select_first([flatten(select_first([SubsetAndSplitVcfBatch.split_vcf_paths])), 
                                                       SubsetAndSplitVcf.split_vcf_paths])
     }
@@ -60,6 +61,7 @@ task SubsetAndSplitVcf {
         String gcs_output_dir
         String output_tag
         File? sample_batches_tsv
+        Int? wait_for_me    # dummy input to gate scatter until initial split is done
         Int view_verbosity = 8
         RuntimeAttr? runtime_attr_override
     }
@@ -104,7 +106,7 @@ task SubsetAndSplitVcf {
 
     output {
         Array[String] split_vcf_paths = read_lines("output_vcf_paths.txt")
-        Float number_of_sites = read_float("number_of_sites.txt")
+        Int number_of_sites = read_int("number_of_sites.txt")
     }
     ###################
     RuntimeAttr default_attr = object {
