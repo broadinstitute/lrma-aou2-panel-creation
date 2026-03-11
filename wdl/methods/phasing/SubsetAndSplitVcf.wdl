@@ -85,7 +85,6 @@ task SubsetAndSplitVcf {
         # we stream to an intermediate file, since piping directly to bcftools +split still results in GOAWAY/Libcurl issues
         bcftools view --no-version ~{view_input_arg} \
             ~{"--regions " + region} \
-            ~{"--samples-file " + sample_batches_tsv} \
             --regions-overlap 0 \
             --verbosity ~{view_verbosity} \
             -Ob -o ~{output_tag}.bcf
@@ -93,7 +92,7 @@ task SubsetAndSplitVcf {
         # check number of sites to guard against streaming errors
         bcftools view -H ~{output_tag}.bcf | wc -l > number_of_sites.txt
 
-        bcftools +split ~{output_tag}.bcf -Ob -o output
+        bcftools +split ~{output_tag}.bcf ~{"--samples-file " + sample_batches_tsv} -Ob -o output
 
         for bcf in output/*.bcf; do
             bcf_basename=$(basename $bcf .bcf)
