@@ -27,6 +27,7 @@ workflow VcfdistAndSwitchEvaluation {
         String region
         File reference_fasta
         File reference_fasta_fai
+        Boolean do_naively_phase = false    # convert / to | in unphased inputs, e.g. PanGenie
 
         Array[File] vcfdist_bed_files
         Array[String] labels_per_stratification
@@ -50,7 +51,8 @@ workflow VcfdistAndSwitchEvaluation {
             sample = sample,
             region = region,
             bed_file = confident_regions_bed_files[i],
-            reference_fasta_fai = reference_fasta_fai
+            reference_fasta_fai = reference_fasta_fai,
+            do_naively_phase = do_naively_phase
         }
 
         call SubsetSampleFromVcf as SubsetSampleFromVcfTruth { input:
@@ -59,7 +61,8 @@ workflow VcfdistAndSwitchEvaluation {
             sample = sample,
             region = region,
             bed_file = confident_regions_bed_files[i],
-            reference_fasta_fai = reference_fasta_fai
+            reference_fasta_fai = reference_fasta_fai,
+            do_naively_phase = false
         }
 
         call switch { input: 
@@ -113,6 +116,7 @@ task SubsetSampleFromVcf {
         String region
         File? bed_file
         File reference_fasta_fai
+        Boolean do_naively_phase = false
     }
 
     command <<<
@@ -127,10 +131,9 @@ task SubsetSampleFromVcf {
             -s ~{original_sample_name} \
             -r ~{region} \
             ~{"-T " + bed_file} \
-            -Oz -o ~{sample}.subset.g.vcf.gz
-        echo ~{sample} > sample_name.txt
+            ~{if (do_naively_phase) then "-Ou | bcftools +setGT -Oz -o " + sample + ".subset.g.vcf.gz -- -t a -n p" else "-Oz -o " + sample + ".subset.g.vcf.gz"}
         bcftools reheader ~{sample}.subset.g.vcf.gz \
-            -s sample_name.txt \
+            -s ~{sample} \
             --fai ~{reference_fasta_fai} \
             -o ~{sample}.subset.reheadered.g.vcf.gz
         bcftools index -t ~{sample}.subset.reheadered.g.vcf.gz
