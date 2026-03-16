@@ -132,8 +132,9 @@ task SubsetSampleFromVcf {
             -r ~{region} \
             ~{"-T " + bed_file} \
             ~{if (do_naively_phase) then "-Ou | bcftools +setGT -Oz -o " + sample + ".subset.g.vcf.gz -- -t a -n p" else "-Oz -o " + sample + ".subset.g.vcf.gz"}
+        echo ~{sample} > sample_name.txt
         bcftools reheader ~{sample}.subset.g.vcf.gz \
-            -s ~{sample} \
+            -s sample_name.txt \
             --fai ~{reference_fasta_fai} \
             -o ~{sample}.subset.reheadered.g.vcf.gz
         bcftools index -t ~{sample}.subset.reheadered.g.vcf.gz
