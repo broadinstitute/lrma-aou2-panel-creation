@@ -150,9 +150,9 @@ task SubsetSampleFromVcf {
         memory: "4 GiB"
         disks: "local-disk 100 HDD"
         bootDiskSizeGb: 10
-        preemptible: 0
+        preemptible: 2
         maxRetries: 1
-        docker: "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.1"
+        docker: "us.gcr.io/broad-dsde-methods/slee/lr-bcftools-patched-gcloud/lr-bcftools-patched-gcloud:1.23"
     }
 }
 
