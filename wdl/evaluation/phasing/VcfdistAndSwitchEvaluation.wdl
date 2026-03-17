@@ -35,6 +35,7 @@ workflow VcfdistAndSwitchEvaluation {
         Int? vcfdist_mem_gb
         String vcfdist_docker
 
+        Boolean do_switch = false
         String? switch_filter_args
 
         String summarize_evaluations_docker
@@ -65,15 +66,17 @@ workflow VcfdistAndSwitchEvaluation {
             do_naively_phase = false
         }
 
-        call switch { input: 
-            truth_bcf = SubsetSampleFromVcfTruth.single_sample_vcf,
-            truth_bcf_index = SubsetSampleFromVcfTruth.single_sample_vcf_tbi,
-            test_bcf = SubsetSampleFromVcfEval.single_sample_vcf,
-            test_bcf_index = SubsetSampleFromVcfEval.single_sample_vcf_tbi,
-            region = region,
-            outputprefix = sample,
-            filter_args = switch_filter_args,
-            num_threads = 4
+        if (do_switch) {
+            call switch { input: 
+                truth_bcf = SubsetSampleFromVcfTruth.single_sample_vcf,
+                truth_bcf_index = SubsetSampleFromVcfTruth.single_sample_vcf_tbi,
+                test_bcf = SubsetSampleFromVcfEval.single_sample_vcf,
+                test_bcf_index = SubsetSampleFromVcfEval.single_sample_vcf_tbi,
+                region = region,
+                outputprefix = sample,
+                filter_args = switch_filter_args,
+                num_threads = 4
+            }
         }
     }
 
@@ -103,7 +106,7 @@ workflow VcfdistAndSwitchEvaluation {
         Array[Array[VcfdistOutputs]] vcfdist_summary = Vcfdist.outputs
         File evaluation_summary_tsv = SummarizeEvaluations.evaluation_summary_tsv
         # per sample
-        Array[Array[File]] switch_output_files = switch.output_files
+        Array[Array[File]?] switch_output_files = switch.output_files
     }
 }
 
