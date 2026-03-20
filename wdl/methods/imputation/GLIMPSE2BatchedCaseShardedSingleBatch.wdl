@@ -278,9 +278,9 @@ task GLIMPSE2Phase {
 
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
         
-        # TODO keep only biallelic SNVs for now
+        # TODO keep only biallelic SNV/indels for now, remove SVs?
         # TODO move LPL->PL upstream
-        bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} -m2 -M2 -v snps ~{input_vcf_gz} -Ou | \
+        bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} -m2 -M2 ~{input_vcf_gz} -Ou | \
             bcftools annotate --no-version -c FORMAT/PL:=FORMAT/LPL \
                 -Ob -o ~{output_prefix}.biSNV.bcf
         bcftools index ~{output_prefix}.biSNV.bcf
