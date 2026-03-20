@@ -280,7 +280,7 @@ task GLIMPSE2Phase {
         
         # TODO keep only biallelic SNVs for now
         # TODO move LPL->PL upstream
-        bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} -m2 -M2 -v snps ~{input_vcf_gz} | \
+        bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} -m2 -M2 -v snps ~{input_vcf_gz} -Ou | \
             bcftools annotate --no-version -c FORMAT/PL:=FORMAT/LPL \
                 -Ob -o ~{output_prefix}.biSNV.bcf
         bcftools index ~{output_prefix}.biSNV.bcf
