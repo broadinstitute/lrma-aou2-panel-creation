@@ -279,8 +279,10 @@ task GLIMPSE2Phase {
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
         
         # TODO keep only biallelic SNVs for now
-        bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} -m2 -M2 -v snps ~{input_vcf_gz} \
-            -Ob -o ~{output_prefix}.biSNV.bcf
+        # TODO move LPL->PL upstream
+        bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} -m2 -M2 -v snps ~{input_vcf_gz} | \
+            bcftools annotate --no-version -c FORMAT/PL:=FORMAT/LPL \
+                -Ob -o ~{output_prefix}.biSNV.bcf
         bcftools index ~{output_prefix}.biSNV.bcf
 
         wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_phase_static
