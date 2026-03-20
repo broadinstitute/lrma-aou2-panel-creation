@@ -81,7 +81,7 @@ task PanGeniePanelCreation {
         bcftools norm --no-version -r ~{region} --regions-overlap 0 --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} | \
             pypy ~{prepare_vcf_script} --missing ~{frac_missing} | \
             pypy ~{add_ids_script} | \
-            bcftools norm --no-version -m-any -Ou | tee \
+            bcftools norm --no-version -m-any | tee \
         >(  bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.bcf ) | \
          (  pypy ~{merge_vcfs_script} merge \
                 -header header.txt \
