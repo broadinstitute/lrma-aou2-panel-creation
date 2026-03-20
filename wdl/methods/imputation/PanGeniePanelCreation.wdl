@@ -35,6 +35,8 @@ workflow PanGeniePanelCreation {
     output {
         File panel_vcf = PanGeniePanelCreation.panel_vcf
         File panel_vcf_idx = PanGeniePanelCreation.panel_vcf_idx
+        File panel_id_split_vcf = PanGeniePanelCreation.panel_id_split_vcf
+        File panel_id_split_vcf_idx = PanGeniePanelCreation.panel_id_split_vcf_idx
     }
 }
 
@@ -79,13 +81,13 @@ task PanGeniePanelCreation {
         bcftools norm --no-version -r ~{region} --regions-overlap 0 --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} | \
             pypy ~{prepare_vcf_script} --missing ~{frac_missing} | \
             pypy ~{add_ids_script} | \
-            bcftools norm --no-version -m-any | \
-            pypy ~{merge_vcfs_script} merge \
+            bcftools norm --no-version -m-any -Ou | tee \
+        >(  bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.bcf ) | \
+         (  pypy ~{merge_vcfs_script} merge \
                 -header header.txt \
                 -r ~{reference_fasta} \
                 -ploidy 2 | \
-            bcftools view --no-version -Ob -o ~{output_prefix}.prepare.id.split.mergehap.bcf
-        bcftools index ~{output_prefix}.prepare.id.split.mergehap.bcf
+            bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.mergehap.bcf )
 
         bcftools stats ~{output_prefix}.prepare.id.split.mergehap.bcf > ~{output_prefix}.prepare.id.split.mergehap.stats.txt
     >>>
@@ -117,5 +119,7 @@ task PanGeniePanelCreation {
         File panel_stats = "~{output_prefix}.prepare.id.split.mergehap.stats.txt"
         File panel_vcf = "~{output_prefix}.prepare.id.split.mergehap.bcf"
         File panel_vcf_idx = "~{output_prefix}.prepare.id.split.mergehap.bcf.csi"
+        File panel_id_split_vcf = "~{output_prefix}.prepare.id.split.bcf"
+        File panel_id_split_vcf_idx = "~{output_prefix}.prepare.id.split.bcf.csi"
     }
 }
