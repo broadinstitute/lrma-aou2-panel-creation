@@ -82,6 +82,8 @@ task PopGLIMPSE2 {
     command <<<
         set -euox pipefail
 
+        pip install tqdm
+
         bcftools annotate -r ~{chromosome} -a ~{panel_split_vcf_gz} ~{posteriors_vcf_gz} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID \
             --write-index=tbi \
