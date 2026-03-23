@@ -23,6 +23,8 @@ workflow PopGLIMPSE2 {
 
         Array[String] output_prefixes
 
+        File pop_python_script
+
         String docker = "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation:v1"
     }
 
@@ -37,6 +39,7 @@ workflow PopGLIMPSE2 {
                     panel_split_vcf_gz_tbi = panel_split_vcf_gz_tbis[j],
                     panel_id_split_vcf_gz = panel_id_split_vcf_gzs[j],
                     panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbis[j],
+                    pop_python_script = pop_python_script,
                     chromosome = chromosomes[j],
                     output_prefix = output_prefixes[i] + "." + chromosomes[j],
                     docker = docker
@@ -68,6 +71,7 @@ task PopGLIMPSE2 {
         File panel_split_vcf_gz_tbi
         File panel_id_split_vcf_gz
         File panel_id_split_vcf_gz_tbi
+        File pop_python_script
         String chromosome
         String output_prefix
 
@@ -91,119 +95,10 @@ task PopGLIMPSE2 {
 
         # modified version of convert-to-biallelic.py
         # DO NOT apply bcftools norm -m+ before using this, pass a biallelic VCF instead!
-        # output piped directly to bcftools sort
-        python - --panel_id_split_vcf_gz ~{panel_id_split_vcf_gz} \
-                 --input_vcf_gz ~{output_prefix}.annotated.vcf.gz \
-                 <<-'EOF' | bcftools sort --max-mem ~{sort_mem_gb} -Oz -o ~{output_prefix}.popped.vcf.gz
-        import sys
-        import argparse
-        from collections import defaultdict
-        import gzip
-        import tqdm
-
-        def main():
-            parser = argparse.ArgumentParser()
-
-            parser.add_argument('--panel_id_split_vcf_gz',
-                                type=str)
-            parser.add_argument('--input_vcf_gz',
-                                type=str)
-
-            args = parser.parse_args()
-
-            # chromosome ->  ID -> [start, REF, ALT] per chromosome
-            chrom_to_variants = defaultdict(lambda: defaultdict(list))
-
-            # read the biallelic panel VCF containing REF/ALT for all variant IDs and store them in list of assigned IDs
-            for line in tqdm.tqdm(gzip.open(args.panel_id_split_vcf_gz, 'rt')):
-                if line.startswith('#'):
-                    continue
-                fields = line.split()
-                info_field = { i.split('=')[0] : i.split('=')[1] for i in fields[7].split(';') if "=" in i}
-                assert 'ID' in info_field
-                ids = info_field['ID'].split(',')
-                assert len(ids) == 1
-                chrom_to_variants[fields[0]][ids[0]] = [fields[1], fields[3], fields[4]]
-
-            for line in tqdm.tqdm(gzip.open(args.input_vcf_gz, 'rt')):
-                if line.startswith('#'):
-                    # header line
-                    #if any([i in line for i in ['INFO=<ID=AF', 'INFO=<ID=AK', 'FORMAT=<ID=GL', 'FORMAT=<ID=KC']]):
-                    #    # these fields will not be contained in biallelic VCF
-                    #    continue
-                    print(line[:-1])
-                    continue
-                fields = line.split()
-                assert len(fields) > 7
-                # parse the INFO field
-                info_field = { i.split('=')[0] : i.split('=')[1] for i in fields[7].split(';') if "=" in i}
-                assert 'ID' in info_field
-                # determine ID string belonging to each allele (keep empty string for REF, as it does not have an ID)
-                allele_to_ids = [''] + info_field['ID'].split(',')
-                info_ids = info_field['ID'].split(',')
-                # allow bi-allelic records with unknown IDs (that are not in annotation VCF)
-                # if (len(info_ids) == 1) and any([x not in chrom_to_variants[fields[0]] for x in info_ids[0].split(':')]):
-                #    # unknown ID, leave record as is
-                #    print(line[:-1])
-                #    continue
-                # collect all variant IDs in this region
-                ids = set([])
-                if len(info_field['ID'].split(',')) > 1:
-                    raise 'VCF should be biallelic'
-                bubble_id = info_field['ID']
-                for assigned_id in bubble_id.split(':'):
-                    variants = chrom_to_variants[fields[0]][assigned_id]
-                    if variants:
-                        ids.add((assigned_id, int(variants[0])))
-                # sort the ids by the starting coordinate (to ensure the VCF is sorted)
-                ids = list(ids)
-                ids.sort(key=lambda x : x[1])
-                # create a single, biallelic VCF record for each ID
-                for (var_id, coord) in ids:
-                    vcf_line = fields[:9]
-                    # set start coordinate
-                    vcf_line[1] = str(coord)
-                    # also add assigned ID to ID column of the VCF
-                    vcf_line[2] = var_id
-                    # set REF
-                    vcf_line[3] = chrom_to_variants[fields[0]][var_id][1]
-                    # set ALT
-                    vcf_line[4] = chrom_to_variants[fields[0]][var_id][2]
-                    # set INFO/ID to bubble ID
-                    vcf_line[7] = 'ID=' + bubble_id
-                    # also add other INFO fields (except ID which was replaced)
-                    for k,v in info_field.items():
-                        if k == 'ID':
-                            continue
-                        if k in ['MA', 'UK']:
-                            values = ';' + k + '=' + v
-                            vcf_line[7] = vcf_line[7] + values
-                    vcf_line[8] = fields[8]
-                    # determine the genotype of each sample
-                    for sample_field in fields[9:]:
-                        # determine position of GT from FORMAT
-                        assert 'GT' in fields[8]
-                        format_field = fields[8].split(':')
-                        index_of_gt = format_field.index('GT')
-                        genotype = sample_field.split(':')
-                        biallelic_genotype = []
-                        for allele in genotype[index_of_gt].split('|'):
-                            if allele == '.':
-                                # missing allele
-                                biallelic_genotype.append('.')
-                            else:
-                                if var_id in allele_to_ids[int(allele)].split(':'):
-                                    biallelic_genotype.append('1')
-                                else:
-                                    biallelic_genotype.append('0')
-                        # append other FORMAT fields
-                        vcf_line.append('|'.join(biallelic_genotype) + ':' + ':'.join(genotype[1:]))
-                    print('\t'.join(vcf_line))
-
-        if __name__ == '__main__':
-            main()
-        EOF
-
+        python ~{pop_python_script} \
+            --panel_id_split_vcf_gz ~{panel_id_split_vcf_gz} \
+            --input_vcf_gz ~{output_prefix}.annotated.vcf.gz | \
+            bcftools view -Oz -o ~{output_prefix}.popped.vcf.gz
         bcftools index -t ~{output_prefix}.popped.vcf.gz
     >>>
 
