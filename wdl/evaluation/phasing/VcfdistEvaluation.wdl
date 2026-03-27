@@ -51,7 +51,7 @@ workflow VcfdistEvaluation {
 
         call SubsetSampleFromVcf as SubsetSampleFromVcfTruth { input:
             vcf = truth_vcfs[i],
-            vcf_idx = truth_vcf_idxs[i],
+            vcf_idx = if defined(truth_vcf_idxs) then select_first([truth_vcf_idxs])[i]  else truth_vcf_idxs,
             original_sample_name = truth_sample_names[i],
             sample_name = eval_sample_names[i],     # rename truth to match eval
             region = region,
