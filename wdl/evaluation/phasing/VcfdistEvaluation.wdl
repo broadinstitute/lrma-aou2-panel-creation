@@ -213,7 +213,7 @@ task Vcfdist {
         use_ssd:            false,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "timd1/vcfdist:v2.5.3"
+        docker:             "timd1/vcfdist:v2.6.4"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
