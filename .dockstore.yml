@@ -3,6 +3,6 @@ workflows:
 - name: StatisticalPhasing
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing.wdl
-- name: VcfdistAndSwitchEvaluation
+- name: VcfdistEvaluation
   subclass: wdl
-  primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistAndSwitchEvaluation.wdl
+  primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistEvaluation.wdl

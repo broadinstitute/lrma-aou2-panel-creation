@@ -184,6 +184,7 @@ struct RuntimeAttr {
     String? docker
 }
 
+# TODO shard by variant count, remove python dependency
 task CreateShards {
     input {
         String region
