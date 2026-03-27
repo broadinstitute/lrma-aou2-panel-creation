@@ -20,7 +20,7 @@ workflow VcfdistEvaluation {
         File eval_vcf
         File eval_vcf_idx
         Array[File] truth_vcfs
-        Array[File] truth_vcf_idxs
+        Array[File]? truth_vcf_idxs
 
         Array[File] confident_regions_bed_files
 
