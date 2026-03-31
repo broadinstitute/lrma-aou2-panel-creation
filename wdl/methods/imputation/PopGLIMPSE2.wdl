@@ -1,16 +1,5 @@
 version 1.0
 
-struct RuntimeAttributes {
-    Int? cpu
-    Int? command_mem_gb
-    Int? additional_mem_gb
-    Int? disk_size_gb
-    Int? boot_disk_size_gb
-    Boolean? use_ssd
-    Int? preemptible
-    Int? max_retries
-}
-
 workflow PopGLIMPSE2 {
     input {
         Array[File] posteriors_vcf_gzs          # whole-genome, per-batch
@@ -24,8 +13,6 @@ workflow PopGLIMPSE2 {
         Array[String] output_prefixes
 
         File pop_python_script
-
-        String docker = "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation:v1"
     }
 
     scatter (i in range(length(posteriors_vcf_gzs)))
@@ -41,8 +28,7 @@ workflow PopGLIMPSE2 {
                     panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbis[j],
                     pop_python_script = pop_python_script,
                     chromosome = chromosomes[j],
-                    output_prefix = output_prefixes[i] + "." + chromosomes[j],
-                    docker = docker
+                    output_prefix = output_prefixes[i] + "." + chromosomes[j]
             }
         }
 
@@ -51,8 +37,7 @@ workflow PopGLIMPSE2 {
             input:
                 vcf_gzs = ChromosomePopGLIMPSE2.popped_vcf_gz,
                 vcf_gz_tbis = ChromosomePopGLIMPSE2.popped_vcf_gz_tbi,
-                output_prefix = output_prefixes[i],
-                docker = docker
+                output_prefix = output_prefixes[i]
         }
     }
 
@@ -60,6 +45,17 @@ workflow PopGLIMPSE2 {
         Array[File] popped_vcf_gzs = ConcatVcfs.vcf_gz
         Array[File] popped_vcf_gz_tbis = ConcatVcfs.vcf_gz_tbi
     }
+}
+
+struct RuntimeAttr {
+    Float? mem_gb
+    Int? cpu_cores
+    Int? disk_gb
+    Int? boot_disk_gb
+    Boolean? use_ssd
+    Int? preemptible_tries
+    Int? max_retries
+    String? docker
 }
 
 task PopGLIMPSE2 {
@@ -75,13 +71,11 @@ task PopGLIMPSE2 {
         String chromosome
         String output_prefix
 
-        String docker
-        File? monitoring_script
-        RuntimeAttributes runtime_attributes = {"use_ssd": true}
+        RuntimeAttr? runtime_attr_override = {"mem_gb": 6}
     }
 
-    Int disk_size_gb = 3 * ceil(size(posteriors_vcf_gz, "GB"))
-    Int sort_mem_gb = select_first([runtime_attributes.command_mem_gb, 6])
+    Int disk_gb = 3 * ceil(size(posteriors_vcf_gz, "GB"))
+    Int sort_mem_gb = select_first([select_first([runtime_attr_override]).mem_gb, 6])
 
     command <<<
         set -euox pipefail
@@ -107,14 +101,26 @@ task PopGLIMPSE2 {
         File popped_vcf_gz_tbi = "~{output_prefix}.popped.vcf.gz.tbi"
     }
 
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          1,
+        mem_gb:             runtime_attr_override.mem_gb,
+        disk_gb:            disk_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation:v1"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
-        docker: docker
-        cpu: select_first([runtime_attributes.cpu, 1])
-        memory: select_first([runtime_attributes.command_mem_gb, 6]) + select_first([runtime_attributes.additional_mem_gb, 1]) + " GB"
-        disks: "local-disk " + select_first([runtime_attributes.disk_size_gb, disk_size_gb]) + if select_first([runtime_attributes.use_ssd, false]) then " SSD" else " HDD"
-        bootDiskSizeGb: select_first([runtime_attributes.boot_disk_size_gb, 15])
-        preemptible: select_first([runtime_attributes.preemptible, 2])
-        maxRetries: select_first([runtime_attributes.max_retries, 1])
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 }
 
@@ -124,22 +130,13 @@ task ConcatVcfs {
         Array[File] vcf_gz_tbis
         String output_prefix
 
-        String docker
-        File? monitoring_script
-
-        RuntimeAttributes runtime_attributes = {"use_ssd": true}
+        RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 3 * ceil(size(vcf_gzs, "GB"))
+    Int disk_gb = 3 * ceil(size(vcf_gzs, "GB"))
 
     command {
         set -euox pipefail
-
-        # Create a zero-size monitoring log file so it exists even if we don't pass a monitoring script
-        touch monitoring.log
-        if [ -s ~{monitoring_script} ]; then
-            bash ~{monitoring_script} > monitoring.log &
-        fi
 
         mkdir inputs
         mv ~{sep=' ' vcf_gzs} inputs
@@ -156,19 +153,30 @@ task ConcatVcfs {
         fi
     }
 
-    runtime {
-        docker: docker
-        cpu: select_first([runtime_attributes.cpu, 1])
-        memory: select_first([runtime_attributes.command_mem_gb, 6]) + select_first([runtime_attributes.additional_mem_gb, 1]) + " GB"
-        disks: "local-disk " + select_first([runtime_attributes.disk_size_gb, disk_size_gb]) + if select_first([runtime_attributes.use_ssd, false]) then " SSD" else " HDD"
-        bootDiskSizeGb: select_first([runtime_attributes.boot_disk_size_gb, 15])
-        preemptible: select_first([runtime_attributes.preemptible, 2])
-        maxRetries: select_first([runtime_attributes.max_retries, 1])
-    }
-
     output {
-        File monitoring_log = "monitoring.log"
         File vcf_gz = "~{output_prefix}.vcf.gz"
         File vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          1,
+        mem_gb:             6,
+        disk_gb:            disk_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation:v1"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 }
