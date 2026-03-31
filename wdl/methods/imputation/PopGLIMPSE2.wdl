@@ -71,7 +71,7 @@ task PopGLIMPSE2 {
         String chromosome
         String output_prefix
 
-        RuntimeAttr? runtime_attr_override = {"mem_gb": 6}
+        RuntimeAttr? runtime_attr_override
     }
 
     Int disk_gb = 3 * ceil(size(posteriors_vcf_gz, "GB"))
@@ -104,7 +104,7 @@ task PopGLIMPSE2 {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
-        mem_gb:             runtime_attr_override.mem_gb,
+        mem_gb:             6,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
