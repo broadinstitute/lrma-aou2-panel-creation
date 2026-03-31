@@ -75,7 +75,7 @@ task PopGLIMPSE2 {
     }
 
     Int disk_gb = 3 * ceil(size(posteriors_vcf_gz, "GB"))
-    Int sort_mem_gb = select_first([select_first([runtime_attr_override]).mem_gb, 6])
+    Int sort_mem_gb = runtime_attr.mem_gb
 
     command <<<
         set -euox pipefail
