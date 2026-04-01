@@ -79,7 +79,7 @@ task PopGLIMPSE2 {
     command <<<
         set -euox pipefail
 
-        pip install tqdm
+        pypy -m pip install tqdm
 
         bcftools annotate -r ~{chromosome} -a ~{panel_split_vcf_gz} ~{posteriors_vcf_gz} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID \
@@ -88,7 +88,7 @@ task PopGLIMPSE2 {
 
         # modified version of convert-to-biallelic.py
         # DO NOT apply bcftools norm -m+ before using this, pass a biallelic VCF instead!
-        python ~{pop_python_script} \
+        pypy ~{pop_python_script} \
             --panel_id_split_vcf_gz ~{panel_id_split_vcf_gz} \
             --input_vcf_gz ~{output_prefix}.annotated.vcf.gz | \
             bcftools view -Oz -o ~{output_prefix}.popped.vcf.gz
