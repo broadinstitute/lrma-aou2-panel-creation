@@ -9,3 +9,6 @@ workflows:
 - name: PopGLIMPSE2
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/PopGLIMPSE2.wdl
+- name: PopPanGeniePanel
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/PopPanGeniePanel.wdl
