@@ -35,7 +35,6 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         Int is_weight_format_field
 
         String docker
-        File? monitoring_script
 
         RuntimeAttributes concat_runtime_attributes = {"use_ssd": true}
         RuntimeAttributes glimpse2_phase_runtime_attributes = {}
@@ -87,7 +86,6 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".phased",
                     extra_phase_args = extra_phase_args,
                     docker = docker,
-                    monitoring_script = monitoring_script,
                     runtime_attributes = glimpse2_phase_runtime_attributes
 #                    command_mem_gb = command_mem_gb
             }
@@ -98,8 +96,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                 phased_bcfs = ChunkedGLIMPSE2Phase.phased_bcf,
                 phased_bcf_csis = ChunkedGLIMPSE2Phase.phased_bcf_csi,
                 prefix = output_prefix + "." + chromosome + ".ligated",
-                docker = docker,
-                monitoring_script = monitoring_script
+                docker = docker
         }
 
         call FixVariantCollisions as ChromosomeGLIMPSE2PosteriorsCollisionless { input:
@@ -109,8 +106,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             operation = operation,
             weight_tag = weight_tag,
             is_weight_format_field = is_weight_format_field,
-            output_prefix = output_prefix + "." + chromosome + ".glimpse2.collisionless",
-            monitoring_script = monitoring_script
+            output_prefix = output_prefix + "." + chromosome + ".glimpse2.collisionless"
         }
     }
 
@@ -119,8 +115,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             vcf_gzs = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz,
             vcf_gz_tbis = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz_tbi,
             output_prefix = output_prefix + ".glimpse2.posteriors",
-            docker = docker,
-            monitoring_script = monitoring_script
+            docker = docker
     }
 
     call ConcatVcfs as GLIMPSE2PosteriorsCollisionlessConcatVcfs {
@@ -128,8 +123,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             vcf_gzs = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf_gz,
             vcf_gz_tbis = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf_gz_tbi,
             output_prefix = output_prefix + ".glimpse2.collisionless",
-            docker = docker,
-            monitoring_script = monitoring_script
+            docker = docker
     }
 
     output {
@@ -250,7 +244,6 @@ task GLIMPSE2Phase {
         String? extra_phase_args
 
         String docker
-        File? monitoring_script
 
         RuntimeAttributes runtime_attributes = {}
         Int? command_mem_gb = 7
@@ -270,17 +263,11 @@ task GLIMPSE2Phase {
     command {
         set -euox pipefail
 
-        # Create a zero-size monitoring log file so it exists even if we don't pass a monitoring script
-        touch monitoring.log
-        if [ -s ~{monitoring_script} ]; then
-            bash ~{monitoring_script} > monitoring.log &
-        fi
-
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
         
-        # TODO keep only biallelic SNV/indels for now, remove SVs?
+        # TODO keep only SNV/indels for now; normalize, remove SVs, bubble likelihoods?
         # TODO move LPL->PL upstream
-        bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} -m2 -M2 ~{input_vcf_gz} -Ou | \
+        bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} ~{input_vcf_gz} -Ou | \
             bcftools annotate --no-version -c FORMAT/PL:=FORMAT/LPL \
                 -Ob -o ~{output_prefix}.biSNV.bcf
         bcftools index ~{output_prefix}.biSNV.bcf
@@ -315,7 +302,6 @@ task GLIMPSE2Phase {
     }
 
     output {
-        File monitoring_log = "monitoring.log"
         File phased_bcf = "~{output_prefix}.bcf"
         File phased_bcf_csi = "~{output_prefix}.bcf.csi"
     }
@@ -328,7 +314,6 @@ task GLIMPSE2Ligate {
         String prefix
 
         String docker
-        File? monitoring_script
 
         RuntimeAttributes runtime_attributes = {}
     }
@@ -338,12 +323,6 @@ task GLIMPSE2Ligate {
     command <<<
         set -euox pipefail
 
-        # Create a zero-size monitoring log file so it exists even if we don't pass a monitoring script
-        touch monitoring.log
-        if [ -s ~{monitoring_script} ]; then
-            bash ~{monitoring_script} > monitoring.log &
-        fi
-
         wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_ligate_static
         chmod +x GLIMPSE2_ligate_static
 
@@ -351,7 +330,6 @@ task GLIMPSE2Ligate {
     >>>
 
     output {
-        File monitoring_log = "monitoring.log"
         File ligated_vcf_gz = "~{prefix}.vcf.gz"
         File ligated_vcf_gz_tbi = "~{prefix}.vcf.gz.tbi"
     }
@@ -378,8 +356,6 @@ task FixVariantCollisions {
         Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the sample column (1) or in the INFO field (0)
         String output_prefix
 
-        File? monitoring_script
-
         RuntimeAttributes runtime_attributes = {}
     }
 
@@ -387,12 +363,6 @@ task FixVariantCollisions {
 
     command <<<
         set -euox pipefail
-
-        # Create a zero-size monitoring log file so it exists even if we don't pass a monitoring script
-        touch monitoring.log
-        if [ -s ~{monitoring_script} ]; then
-            bash ~{monitoring_script} > monitoring.log &
-        fi
 
         java ~{fix_variant_collisions_java} \
             ~{vcf_gz} \
@@ -412,7 +382,6 @@ task FixVariantCollisions {
     >>>
 
     output {
-        File monitoring_log = "monitoring.log"
         File collisionless_vcf_gz = "~{output_prefix}.vcf.gz"
         File collisionless_vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
         File windows = "windows.txt"
@@ -437,7 +406,6 @@ task ConcatVcfs {
         String output_prefix
 
         String docker
-        File? monitoring_script
 
         RuntimeAttributes runtime_attributes = {"use_ssd": true}
     }
@@ -446,12 +414,6 @@ task ConcatVcfs {
 
     command {
         set -euox pipefail
-
-        # Create a zero-size monitoring log file so it exists even if we don't pass a monitoring script
-        touch monitoring.log
-        if [ -s ~{monitoring_script} ]; then
-            bash ~{monitoring_script} > monitoring.log &
-        fi
 
         # TODO FIX LEXICOGRAPHICAL BUG!
         mkdir inputs
@@ -479,7 +441,6 @@ task ConcatVcfs {
     }
 
     output {
-        File monitoring_log = "monitoring.log"
         File vcf_gz = "~{output_prefix}.vcf.gz"
         File vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
     }
