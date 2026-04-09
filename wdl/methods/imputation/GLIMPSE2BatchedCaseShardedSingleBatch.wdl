@@ -268,24 +268,25 @@ task GLIMPSE2Phase {
         # TODO keep only SNV/indels for now; normalize, remove SVs, bubble likelihoods?
         # TODO move LPL->PL upstream
         bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} ~{input_vcf_gz} -Ou | \
-            bcftools annotate --no-version -c FORMAT/PL:=FORMAT/LPL \
-                -Ob -o ~{output_prefix}.biSNV.bcf
-        bcftools index ~{output_prefix}.biSNV.bcf
+            bcftools +tag2tag --no-version  \
+                -Ob -o ~{output_prefix}.input.bcf \
+                -- --LPL-to-PL
+        bcftools index ~{output_prefix}.input.bcf
 
         wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_phase_static
         chmod +x GLIMPSE2_phase_static
 
         ./GLIMPSE2_phase_static \
-            --input-gl ~{output_prefix}.biSNV.bcf \
+            --input-gl ~{output_prefix}.input.bcf \
             -R ~{panel_split_chunk_bin} \
             --thread $(nproc) \
             ~{extra_phase_args} \
             --output ~{output_prefix}.raw.bcf
 
         # take input VCF header and add GLIMPSE INFO and FORMAT lines (GLIMPSE header only contains a single chromosome and breaks bcftools concat --naive)
-        bcftools view --no-version -h ~{output_prefix}.biSNV.bcf | grep '^##' > input.header.txt
+        bcftools view --no-version -h ~{output_prefix}.input.bcf | grep '^##' > input.header.txt
         bcftools view --no-version -h ~{output_prefix}.raw.bcf | grep -E '^##INFO|^##FORMAT|^##NMAIN|^##FPLOIDY' > glimpse2.header.txt
-        bcftools view --no-version -h ~{output_prefix}.biSNV.bcf | grep '^#CHROM' > input.columns.txt
+        bcftools view --no-version -h ~{output_prefix}.input.bcf | grep '^#CHROM' > input.columns.txt
         cat input.header.txt glimpse2.header.txt input.columns.txt > header.txt
         bcftools reheader -h header.txt ~{output_prefix}.raw.bcf -o ~{output_prefix}.bcf
         bcftools index ~{output_prefix}.bcf
