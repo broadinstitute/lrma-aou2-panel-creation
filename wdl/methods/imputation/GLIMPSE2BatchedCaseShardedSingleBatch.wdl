@@ -78,6 +78,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                 input:
                     input_vcf_gz = input_vcf_gz,
                     input_vcf_gz_tbi = input_vcf_gz_tbi,
+                    panel_split_vcf_gz = panel_split_vcf_gz[j],
+                    panel_split_vcf_gz_tbi = panel_split_vcf_gz_tbi[j],
                     panel_split_chunk_bin = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,
                     input_region = input_regions[k],
                     output_region = output_regions[k],
@@ -235,6 +237,8 @@ task GLIMPSE2Phase {
     input {
         File input_vcf_gz
         File input_vcf_gz_tbi
+        File panel_split_vcf_gz
+        File panel_split_vcf_gz_tbi
         File panel_split_chunk_bin
         String input_region
         String output_region
@@ -267,7 +271,7 @@ task GLIMPSE2Phase {
         
         # TODO keep only SNV/indels for now; normalize, remove SVs, bubble likelihoods?
         # TODO move LPL->PL upstream
-        bcftools view --no-version -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} ~{input_vcf_gz} -Ou | \
+        bcftools view --no-version -T {panel_split_vcf_gz} --regions-overlap variant -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} ~{input_vcf_gz} -Ou | \
             bcftools +tag2tag --no-version  \
                 -Ob -o ~{output_prefix}.input.bcf \
                 -- --LPL-to-PL
