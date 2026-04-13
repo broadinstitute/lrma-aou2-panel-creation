@@ -271,7 +271,7 @@ task GLIMPSE2Phase {
         
         # TODO keep only SNV/indels for now; normalize, remove SVs, bubble likelihoods?
         # TODO move LPL->PL upstream
-        bcftools view --no-version -T {panel_split_vcf_gz} --regions-overlap variant -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} ~{input_vcf_gz} -Ou | \
+        bcftools view --no-version -T ~{panel_split_vcf_gz} --regions-overlap variant -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} ~{input_vcf_gz} -Ou | \
             bcftools +tag2tag --no-version  \
                 -Ob -o ~{output_prefix}.input.bcf \
                 -- --LPL-to-PL
