@@ -275,6 +275,7 @@ task GLIMPSE2SplitReference {
     }
 }
 
+
 task PreprocessPLs {
     input {
         File input_vcf
@@ -293,19 +294,15 @@ task PreprocessPLs {
         RuntimeAttr? runtime_attr_override
     }
 
-    parameter_meta {
-        input_vcf: { localization_optional: true}
-        input_vcf_idx: { localization_optional: true }
-        panel_split_vcf: { localization_optional: true }
-        panel_split_vcf_idx: { localization_optional: true }
-    }
+    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_vcf], "GB"))
 
     command {
         set -euxo pipefail
 
-        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
-        
-        # TODO remove SVs, complex bubble likelihoods?
+       # TODO add gcloud to Docker
+#        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
+
+        # TODO stream
         bcftools view --no-version ~{input_vcf} \
             --regions-overlap pos -r ~{output_region} \
             -S ~{write_lines(sample_names)} \
@@ -313,7 +310,8 @@ task PreprocessPLs {
         bcftools view --no-version ~{panel_split_vcf} \
             --regions-overlap pos -r ~{output_region} \
             --write-index=tbi -Oz -o panel.subset.vcf.gz
-            
+
+        # TODO remove SVs, complex bubble likelihoods?
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
             --input input.subset.vcf.gz \
             --bubble panel.subset.vcf.gz | \
@@ -369,7 +367,7 @@ task GLIMPSE2Phase {
 
         RuntimeAttr? runtime_attr_override
     }
-    
+
     Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_chunk_bin], "GB"))
 
     command {
