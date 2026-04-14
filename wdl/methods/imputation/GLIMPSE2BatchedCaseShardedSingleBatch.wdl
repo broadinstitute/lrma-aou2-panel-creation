@@ -13,15 +13,15 @@ struct RuntimeAttributes {
 
 workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     input {
-        File input_vcf_gz
-        File input_vcf_gz_tbi
+        File input_vcf
+        File input_vcf_idx
         Array[String] sample_names
 
         # per chromosome
         Array[String]+ chromosomes
         Array[File]+ genetic_maps
-        Array[File] panel_split_vcf_gz          # "split" here means "split to biallelic"; "split" below means "chunked"
-        Array[File] panel_split_vcf_gz_tbi
+        Array[File] panel_split_vcf          # "split" here means "split to biallelic"; "split" below means "chunked"
+        Array[File] panel_split_vcf_idx
 
         String extra_chunk_args = "--thread $(nproc) --window-mb 5 --buffer-mb 0.5 --sequential"
         String extra_split_args = "--keep-monomorphic-ref-sites"
@@ -35,10 +35,6 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         Int is_weight_format_field
 
         String docker
-
-        RuntimeAttributes concat_runtime_attributes = {"use_ssd": true}
-        RuntimeAttributes glimpse2_phase_runtime_attributes = {}
-#        Map[String, Int]? chromosome_to_glimpse2_command_mem_gb      # for running per-chromosome by choosing large chunk size; this will override glimpse2_phase_runtime_attributes
     }
 
     scatter (j in range(length(chromosomes))) {
@@ -46,11 +42,11 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
         call GLIMPSE2Chunk as ChromosomeGLIMPSE2Chunk {
             input:
-                vcf = panel_split_vcf_gz[j],
-                tbi = panel_split_vcf_gz_tbi[j],
+                vcf = panel_split_vcf[j],
+                vcf_idx = panel_split_vcf_idx[j],
                 region = chromosome,
                 genetic_map = genetic_maps[j],
-                prefix = output_prefix + "." + chromosome,
+                output_prefix = output_prefix + "." + chromosome,
                 extra_chunk_args = extra_chunk_args,
                 docker = docker
         }
@@ -58,14 +54,11 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         Array[String] input_regions = read_lines(ChromosomeGLIMPSE2Chunk.input_regions)
         Array[String] output_regions = read_lines(ChromosomeGLIMPSE2Chunk.output_regions)
 
-#        if (defined(chromosome_to_glimpse2_command_mem_gb)) {
-#            Int command_mem_gb = select_first([chromosome_to_glimpse2_command_mem_gb])[chromosome]
-#        }
         scatter (k in range(length(input_regions))) {
             call GLIMPSE2SplitReference as ChunkedGLIMPSE2SplitReference {
                 input:
-                    panel_split_vcf_gz = panel_split_vcf_gz[j],
-                    panel_split_vcf_gz_tbi = panel_split_vcf_gz_tbi[j],
+                    panel_split_vcf = panel_split_vcf[j],
+                    panel_split_vcf_idx = panel_split_vcf_idx[j],
                     input_region = input_regions[k],
                     output_region = output_regions[k],
                     genetic_map = genetic_maps[j],
@@ -76,10 +69,10 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
             call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
                 input:
-                    input_vcf_gz = input_vcf_gz,
-                    input_vcf_gz_tbi = input_vcf_gz_tbi,
-                    panel_split_vcf_gz = panel_split_vcf_gz[j],
-                    panel_split_vcf_gz_tbi = panel_split_vcf_gz_tbi[j],
+                    input_vcf = input_vcf,
+                    input_vcf_idx = input_vcf_idx,
+                    panel_split_vcf = panel_split_vcf[j],
+                    panel_split_vcf_idx = panel_split_vcf_idx[j],
                     panel_split_chunk_bin = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,
                     input_region = input_regions[k],
                     output_region = output_regions[k],
@@ -87,9 +80,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     genetic_map = genetic_maps[j],
                     output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".phased",
                     extra_phase_args = extra_phase_args,
-                    docker = docker,
-                    runtime_attributes = glimpse2_phase_runtime_attributes
-#                    command_mem_gb = command_mem_gb
+                    docker = docker
             }
         }
 
@@ -97,7 +88,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             input:
                 phased_bcfs = ChunkedGLIMPSE2Phase.phased_bcf,
                 phased_bcf_csis = ChunkedGLIMPSE2Phase.phased_bcf_csi,
-                prefix = output_prefix + "." + chromosome + ".ligated",
+                output_prefix = output_prefix + "." + chromosome + ".ligated",
                 docker = docker
         }
 
@@ -114,16 +105,16 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     call ConcatVcfs as GLIMPSE2PosteriorsConcatVcfs {
         input:
-            vcf_gzs = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz,
-            vcf_gz_tbis = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz_tbi,
+            vcfs = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz,
+            vcf_idxs = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz_tbi,
             output_prefix = output_prefix + ".glimpse2.posteriors",
             docker = docker
     }
 
     call ConcatVcfs as GLIMPSE2PosteriorsCollisionlessConcatVcfs {
         input:
-            vcf_gzs = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf_gz,
-            vcf_gz_tbis = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf_gz_tbi,
+            vcfs = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf_gz,
+            vcf_idxs = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf_gz_tbi,
             output_prefix = output_prefix + ".glimpse2.collisionless",
             docker = docker
     }
@@ -137,20 +128,31 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     }
 }
 
+struct RuntimeAttr {
+    Float? mem_gb
+    Int? cpu_cores
+    Int? disk_gb
+    Int? boot_disk_gb
+    Boolean? use_ssd
+    Int? preemptible_tries
+    Int? max_retries
+    String? docker
+}
+
 task GLIMPSE2Chunk {
     input {
         File vcf
-        File tbi
+        File vcf_idx
         String region
         File genetic_map
-        String prefix
+        String output_prefix
         String? extra_chunk_args
         String docker
 
-        RuntimeAttributes runtime_attributes = {}
+        RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2*ceil(size([vcf, tbi], "GB")) + 1
+    Int disk_size_gb = 2 * ceil(size(vcf, "GB"))
 
     command <<<
         set -euxo pipefail
@@ -163,33 +165,45 @@ task GLIMPSE2Chunk {
             --region ~{region} \
             --map ~{genetic_map} \
             ~{extra_chunk_args} \
-            -O chunks.txt
+            -O chunks.tsv
 
         # cut chunks + buffers
-        cut -f 3 chunks.txt > input-regions.txt
-        cut -f 4 chunks.txt > output-regions.txt
+        cut -f 3 chunks.tsv > ~{output_prefix}.input-regions.tsv
+        cut -f 4 chunks.tsv > ~{output_prefix}.output-regions.tsv
     >>>
 
     output {
-        File input_regions = "input-regions.txt"
-        File output_regions = "output-regions.txt"
+        File input_regions = "~{output_prefix}.input-regions.tsv"
+        File output_regions = "~{output_prefix}.output-regions.tsv"
     }
 
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          4,
+        mem_gb:             7,
+        disk_gb:            disk_size_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             docker
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
-        docker: docker
-        cpu: select_first([runtime_attributes.cpu, 4])
-        memory: select_first([runtime_attributes.command_mem_gb, 6]) + select_first([runtime_attributes.additional_mem_gb, 1]) + " GB"
-        disks: "local-disk " + select_first([runtime_attributes.disk_size_gb, disk_size_gb]) + if select_first([runtime_attributes.use_ssd, false]) then " SSD" else " HDD"
-        bootDiskSizeGb: select_first([runtime_attributes.boot_disk_size_gb, 10])
-        preemptible: select_first([runtime_attributes.preemptible, 2])
-        maxRetries: select_first([runtime_attributes.max_retries, 1])
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 }
 
 task GLIMPSE2SplitReference {
     input {
-        File panel_split_vcf_gz
-        File panel_split_vcf_gz_tbi
+        File panel_split_vcf
+        File panel_split_vcf_idx
         String input_region
         String output_region
         File genetic_map
@@ -197,10 +211,10 @@ task GLIMPSE2SplitReference {
         String? extra_split_args
         String docker
 
-        RuntimeAttributes runtime_attributes = {}
+        RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2*ceil(size([panel_split_vcf_gz, panel_split_vcf_gz_tbi], "GB")) + 1
+    Int disk_size_gb = 2 * ceil(size(panel_split_vcf, "GB"))
 
     command <<<
         set -euxo pipefail
@@ -209,7 +223,7 @@ task GLIMPSE2SplitReference {
         chmod +x GLIMPSE2_split_reference_static
 
         ./GLIMPSE2_split_reference_static \
-            -R ~{panel_split_vcf_gz} \
+            -R ~{panel_split_vcf} \
             --input-region ~{input_region} \
             --output-region ~{output_region} \
             --map ~{genetic_map} \
@@ -221,24 +235,36 @@ task GLIMPSE2SplitReference {
     output {
         File panel_split_chunk_bin = glob("~{output_prefix}_*bin")[0]       # TODO parse input region and construct ~{output_prefix}_chr_start_end.bin filename
     }
-
+    
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          4,
+        mem_gb:             7,
+        disk_gb:            disk_size_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             docker
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
-        docker: docker
-        cpu: select_first([runtime_attributes.cpu, 4])
-        memory: select_first([runtime_attributes.command_mem_gb, 6]) + select_first([runtime_attributes.additional_mem_gb, 1]) + " GB"
-        disks: "local-disk " + select_first([runtime_attributes.disk_size_gb, disk_size_gb]) + if select_first([runtime_attributes.use_ssd, false]) then " SSD" else " HDD"
-        bootDiskSizeGb: select_first([runtime_attributes.boot_disk_size_gb, 10])
-        preemptible: select_first([runtime_attributes.preemptible, 2])
-        maxRetries: select_first([runtime_attributes.max_retries, 1])
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 }
 
 task GLIMPSE2Phase {
     input {
-        File input_vcf_gz
-        File input_vcf_gz_tbi
-        File panel_split_vcf_gz
-        File panel_split_vcf_gz_tbi
+        File input_vcf
+        File input_vcf_idx
+        File panel_split_vcf
+        File panel_split_vcf_idx
         File panel_split_chunk_bin
         String input_region
         String output_region
@@ -249,29 +275,24 @@ task GLIMPSE2Phase {
 
         String docker
 
-        RuntimeAttributes runtime_attributes = {}
-        Int? command_mem_gb = 7
+        RuntimeAttr? runtime_attr_override
     }
 
     parameter_meta {
-        input_vcf_gz: {
-            description: "VCF file to be subsetted",
-            localization_optional: true
-        }
-        input_vcf_gz_tbi: {
-            description: "Tabix index for the VCF file",
-            localization_optional: true
-        }
+        input_vcf: { localization_optional: true}
+        input_vcf_idx: { localization_optional: true }
+        panel_split_vcf: { localization_optional: true }
+        panel_split_vcf_idx: { localization_optional: true }
     }
 
     command {
-        set -euox pipefail
+        set -euxo pipefail
 
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
         
         # TODO keep only SNV/indels for now; normalize, remove SVs, bubble likelihoods?
         # TODO move LPL->PL upstream
-        bcftools view --no-version -T ~{panel_split_vcf_gz} --regions-overlap variant -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} ~{input_vcf_gz} -Ou | \
+        bcftools view --no-version -T ~{panel_split_vcf} --regions-overlap variant -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} ~{input_vcf} -Ou | \
             bcftools +tag2tag --no-version  \
                 -Ob -o ~{output_prefix}.input.bcf \
                 -- --LPL-to-PL
@@ -296,19 +317,31 @@ task GLIMPSE2Phase {
         bcftools index ~{output_prefix}.bcf
     }
 
-    runtime {
-        docker: docker
-        cpu: select_first([runtime_attributes.cpu, 1])
-        memory: select_first([runtime_attributes.command_mem_gb, command_mem_gb]) + select_first([runtime_attributes.additional_mem_gb, 1]) + " GB"
-        disks: "local-disk " + select_first([runtime_attributes.disk_size_gb, 100]) + if select_first([runtime_attributes.use_ssd, false]) then " SSD" else " HDD"
-        bootDiskSizeGb: select_first([runtime_attributes.boot_disk_size_gb, 15])
-        preemptible: select_first([runtime_attributes.preemptible, 2])
-        maxRetries: select_first([runtime_attributes.max_retries, 1])
-    }
-
     output {
         File phased_bcf = "~{output_prefix}.bcf"
         File phased_bcf_csi = "~{output_prefix}.bcf.csi"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          1,
+        mem_gb:             7,
+        disk_gb:            100,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             docker
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 }
 
@@ -316,14 +349,14 @@ task GLIMPSE2Ligate {
     input {
         Array[File] phased_bcfs
         Array[File] phased_bcf_csis
-        String prefix
+        String output_prefix
 
         String docker
 
-        RuntimeAttributes runtime_attributes = {}
+        RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2*ceil(size(phased_bcfs, "GB")) + 1
+    Int disk_size_gb = 2 * ceil(size(phased_bcfs, "GB"))
 
     command <<<
         set -euox pipefail
@@ -331,27 +364,38 @@ task GLIMPSE2Ligate {
         wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_ligate_static
         chmod +x GLIMPSE2_ligate_static
 
-        ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{prefix}.vcf.gz --thread $(nproc)
+        ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.vcf.gz --thread $(nproc)
     >>>
 
     output {
-        File ligated_vcf_gz = "~{prefix}.vcf.gz"
-        File ligated_vcf_gz_tbi = "~{prefix}.vcf.gz.tbi"
+        File ligated_vcf_gz = "~{output_prefix}.vcf.gz"
+        File ligated_vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
     }
 
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          2,
+        mem_gb:             7,
+        disk_gb:            disk_size_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             docker
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
-        docker: docker
-        cpu: select_first([runtime_attributes.cpu, 2])
-        memory: select_first([runtime_attributes.command_mem_gb, 7]) + select_first([runtime_attributes.additional_mem_gb, 1]) + " GB"
-        disks: "local-disk " + select_first([runtime_attributes.disk_size_gb, disk_size_gb]) + if select_first([runtime_attributes.use_ssd, false]) then " SSD" else " HDD"
-        bootDiskSizeGb: select_first([runtime_attributes.boot_disk_size_gb, 10])
-        preemptible: select_first([runtime_attributes.preemptible, 2])
-        maxRetries: select_first([runtime_attributes.max_retries, 1])
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 }
 
 task FixVariantCollisions {
-
     input {
         File vcf_gz                         # biallelic
         File vcf_gz_tbi
@@ -361,13 +405,13 @@ task FixVariantCollisions {
         Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the sample column (1) or in the INFO field (0)
         String output_prefix
 
-        RuntimeAttributes runtime_attributes = {}
+        RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 100
+    Int disk_size_gb = 5 * ceil(size(vcf_gz, "GB"))
 
     command <<<
-        set -euox pipefail
+        set -euxo pipefail
 
         java ~{fix_variant_collisions_java} \
             ~{vcf_gz} \
@@ -393,37 +437,48 @@ task FixVariantCollisions {
         File histogram = "histogram.txt"
     }
 
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          1,
+        mem_gb:             15,
+        disk_gb:            disk_size_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             "us.gcr.io/broad-gatk/gatk:4.6.0.0"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
-        docker: "us.gcr.io/broad-gatk/gatk:4.6.0.0"
-        cpu: select_first([runtime_attributes.cpu, 1])
-        memory: select_first([runtime_attributes.command_mem_gb, 15]) + select_first([runtime_attributes.additional_mem_gb, 1]) + " GB"
-        disks: "local-disk " + select_first([runtime_attributes.disk_size_gb, disk_size_gb]) + if select_first([runtime_attributes.use_ssd, false]) then " SSD" else " HDD"
-        bootDiskSizeGb: select_first([runtime_attributes.boot_disk_size_gb, 15])
-        preemptible: select_first([runtime_attributes.preemptible, 2])
-        maxRetries: select_first([runtime_attributes.max_retries, 1])
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 }
 
 task ConcatVcfs {
     input {
-        Array[File] vcf_gzs
-        Array[File] vcf_gz_tbis
+        Array[File] vcfs
+        Array[File] vcf_idxs
         String output_prefix
-
         String docker
 
-        RuntimeAttributes runtime_attributes = {"use_ssd": true}
+        RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 3 * ceil(size(vcf_gzs, "GB"))
+    Int disk_size_gb = 3 * ceil(size(vcfs, "GB"))
 
     command {
         set -euox pipefail
 
         # TODO FIX LEXICOGRAPHICAL BUG!
         mkdir inputs
-        mv ~{sep=' ' vcf_gzs} inputs
-        mv ~{sep=' ' vcf_gz_tbis} inputs
+        mv ~{sep=' ' vcfs} inputs
+        mv ~{sep=' ' vcf_idxs} inputs
 
         if [ $(ls inputs/*.vcf.gz | wc -l) == 1 ]
         then
@@ -435,18 +490,30 @@ task ConcatVcfs {
         fi
     }
 
-    runtime {
-        docker: docker
-        cpu: select_first([runtime_attributes.cpu, 1])
-        memory: select_first([runtime_attributes.command_mem_gb, 6]) + select_first([runtime_attributes.additional_mem_gb, 1]) + " GB"
-        disks: "local-disk " + select_first([runtime_attributes.disk_size_gb, disk_size_gb]) + if select_first([runtime_attributes.use_ssd, false]) then " SSD" else " HDD"
-        bootDiskSizeGb: select_first([runtime_attributes.boot_disk_size_gb, 15])
-        preemptible: select_first([runtime_attributes.preemptible, 2])
-        maxRetries: select_first([runtime_attributes.max_retries, 1])
-    }
-
     output {
         File vcf_gz = "~{output_prefix}.vcf.gz"
         File vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          1,
+        mem_gb:             7,
+        disk_gb:            disk_size_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             docker
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
     }
 }
