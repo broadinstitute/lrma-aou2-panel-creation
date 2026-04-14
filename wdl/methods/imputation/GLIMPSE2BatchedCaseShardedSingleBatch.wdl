@@ -295,7 +295,6 @@ task PreprocessPLs {
     }
 
     Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_vcf], "GB"))
-    String view_input_arg = "\"~{vcf}##idx##~{vcf_idx}\""
 
     command {
         set -euxo pipefail
