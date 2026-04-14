@@ -309,7 +309,7 @@ task PreprocessPLs {
         bcftools view --no-version ~{input_vcf} \
             --regions-overlap pos -r ~{output_region} \
             -S ~{write_lines(sample_names)} \
-            --write-index=tbo -Oz -o input.subset.vcf.gz
+            --write-index=tbi -Oz -o input.subset.vcf.gz
         bcftools view --no-version ~{panel_split_vcf} \
             --regions-overlap pos -r ~{output_region} \
             --write-index=tbi -Oz -o panel.subset.vcf.gz
