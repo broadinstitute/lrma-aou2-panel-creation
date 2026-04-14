@@ -295,6 +295,7 @@ task PreprocessPLs {
     }
 
     Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_vcf], "GB"))
+    String view_input_arg = "\"~{vcf}##idx##~{vcf_idx}\""
 
     command {
         set -euxo pipefail
@@ -303,11 +304,11 @@ task PreprocessPLs {
 #        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
         # TODO stream
-        bcftools view --no-version ~{input_vcf}##idx##~{input_vcf_idx} \
+        bcftools view --no-version \"~{input_vcf}##idx##~{input_vcf_idx}\" \
             --regions-overlap pos -r ~{output_region} \
             -S ~{write_lines(sample_names)} \
             --write-index=tbi -Oz -o input.subset.vcf.gz
-        bcftools view --no-version -G ~{panel_split_vcf}##idx##~{panel_split_vcf_idx} \
+        bcftools view --no-version -G \"~{panel_split_vcf}##idx##~{panel_split_vcf_idx}\" \
             --regions-overlap pos -r ~{output_region} \
             --write-index=tbi -Oz -o panel.subset.sites.vcf.gz
 
