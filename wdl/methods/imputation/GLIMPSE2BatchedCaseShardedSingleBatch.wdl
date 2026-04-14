@@ -313,14 +313,15 @@ task PreprocessPLs {
             --write-index=tbi -Oz -o panel.subset.sites.vcf.gz
 
         # TODO remove SVs, complex bubble likelihoods?
+        pypy -m pip install --no-input tqdm
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
             --input input.subset.vcf.gz \
             --bubble panel.subset.sites.vcf.gz | \
-        bcftools --no-version +tag2tag -Ou -- --LPL-to-PL | \
-        bcftools --no-version norm -m-any -Ou | \
-        bcftools --no-version filter -i 'INFO/BMAP != "."' | \
+        bcftools +tag2tag -Ou -- --LPL-to-PL | \
+        bcftools norm -m-any -Ou | \
+        bcftools filter -i 'INFO/BMAP != "."' | \
         pypy ~{swap_alleles_python_script} | \
-        bcftools --no-version annotate -x INFO/BMAP,INFO/BUBBLE,INFO/BPOS,INFO/BREF,INFO/BALT \
+        bcftools annotate -x INFO/BMAP,INFO/BUBBLE,INFO/BPOS,INFO/BREF,INFO/BALT \
             --write-index=csi -Ob -o ~{output_prefix}.bcf
     }
 
