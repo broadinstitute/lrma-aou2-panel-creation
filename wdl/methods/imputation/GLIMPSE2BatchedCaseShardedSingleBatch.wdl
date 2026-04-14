@@ -302,19 +302,18 @@ task PreprocessPLs {
        # TODO add gcloud to Docker
 #        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
-        # TODO stream
-        bcftools view --no-version ~{input_vcf}##idx##~{input_vcf_idx} \
-            --regions-overlap pos -r ~{output_region} \
-            -S ~{write_lines(sample_names)} \
-            --write-index=tbi -Oz -o input.subset.vcf.gz
+        # TODO stream; or, once shards are fixed, prepare beforehand?
         bcftools view --no-version -G ~{panel_split_vcf}##idx##~{panel_split_vcf_idx} \
             --regions-overlap pos -r ~{output_region} \
             --write-index=tbi -Oz -o panel.subset.sites.vcf.gz
 
-        # TODO remove SVs, complex bubble likelihoods?
         pypy -m pip install --no-input tqdm
+
+        # TODO stream
+        bcftools view --no-version ~{input_vcf}##idx##~{input_vcf_idx} \
+            --regions-overlap pos -r ~{output_region} \
+            -S ~{write_lines(sample_names)} | \
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
-            --input input.subset.vcf.gz \
             --bubble panel.subset.sites.vcf.gz | \
         bcftools +tag2tag -Ou -- --LPL-to-PL | \
         bcftools norm -m-any -Ou | \
