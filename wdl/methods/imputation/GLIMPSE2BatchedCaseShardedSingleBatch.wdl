@@ -28,6 +28,10 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites"
         String output_prefix
 
+        # inputs for PreprocessPLs
+        File remap_simple_bubble_likelihoods_python_script
+        File swap_alleles_python_script
+
         # inputs for FixVariantCollisions
         File fix_variant_collisions_java
         Int operation
@@ -67,12 +71,24 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     docker = docker
             }
 
-            call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
+            call PreprocessPLs as ChunkedPreprocessPLs {
                 input:
                     input_vcf = input_vcf,
                     input_vcf_idx = input_vcf_idx,
                     panel_split_vcf = panel_split_vcf[j],
                     panel_split_vcf_idx = panel_split_vcf_idx[j],
+                    output_region = output_regions[k],
+                    sample_names = sample_names,
+                    output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".preprocessedPLs",
+                    remap_simple_bubble_likelihoods_python_script = remap_simple_bubble_likelihoods_python_script,
+                    swap_alleles_python_script = swap_alleles_python_script,
+                    docker = docker
+            }
+
+            call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
+                input:
+                    input_vcf = ChunkedPreprocessPLs.preprocessed_pls_bcf,
+                    input_vcf_idx = ChunkedPreprocessPLs.preprocessed_pls_bcf_csi,
                     panel_split_chunk_bin = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,
                     input_region = input_regions[k],
                     output_region = output_regions[k],
@@ -259,19 +275,18 @@ task GLIMPSE2SplitReference {
     }
 }
 
-task GLIMPSE2Phase {
+task PreprocessPLs {
     input {
         File input_vcf
         File input_vcf_idx
         File panel_split_vcf
         File panel_split_vcf_idx
-        File panel_split_chunk_bin
-        String input_region
         String output_region
         Array[String] sample_names
-        File genetic_map
         String output_prefix
-        String? extra_phase_args
+
+        File remap_simple_bubble_likelihoods_python_script
+        File swap_alleles_python_script
 
         String docker
 
@@ -290,19 +305,81 @@ task GLIMPSE2Phase {
 
         export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
         
-        # TODO keep only SNV/indels for now; normalize, remove SVs, bubble likelihoods?
-        # TODO move LPL->PL upstream
-        bcftools view --no-version -T ~{panel_split_vcf} --regions-overlap variant -r ~{input_region},~{output_region} -S ~{write_lines(sample_names)} ~{input_vcf} -Ou | \
-            bcftools +tag2tag --no-version  \
-                -Ob -o ~{output_prefix}.input.bcf \
-                -- --LPL-to-PL
-        bcftools index ~{output_prefix}.input.bcf
+        # TODO remove SVs, complex bubble likelihoods?
+        bcftools view --no-version ~{input_vcf} \
+            --regions-overlap pos -r ~{output_region} \
+            -S ~{write_lines(sample_names)} \
+            --write-index=tbo -Oz -o input.subset.vcf.gz
+        bcftools view --no-version ~{panel_split_vcf} \
+            --regions-overlap pos -r ~{output_region} \
+            --write-index=tbi -Oz -o panel.subset.vcf.gz
+            
+        pypy ~{remap_simple_bubble_likelihoods_python_script} \
+            --input input.subset.vcf.gz \
+            --bubble panel.subset.vcf.gz | \
+        bcftools --no-version +tag2tag -Ou -- --LPL-to-PL | \
+        bcftools --no-version norm -m-any -Ou | \
+        bcftools --no-version filter -i 'INFO/BMAP != "."' | \
+        pypy ~{swap_alleles_python_script} | \
+        bcftools --no-version annotate -x INFO/BMAP,INFO/BUBBLE,INFO/BPOS,INFO/BREF,INFO/BALT \
+            --write-index=csi -Ob -o ~{output_prefix}.bcf
+    }
+
+    output {
+        File preprocessed_pls_bcf = "~{output_prefix}.bcf"
+        File preprocessed_pls_bcf_csi = "~{output_prefix}.bcf.csi"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          1,
+        mem_gb:             7,
+        disk_gb:            50,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             docker
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+    }
+}
+
+task GLIMPSE2Phase {
+    input {
+        File input_vcf
+        File input_vcf_idx
+        File panel_split_chunk_bin
+        String input_region
+        String output_region
+        Array[String] sample_names
+        File genetic_map
+        String output_prefix
+        String? extra_phase_args
+
+        String docker
+
+        RuntimeAttr? runtime_attr_override
+    }
+    
+    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_chunk_bin], "GB"))
+
+    command {
+        set -euxo pipefail
 
         wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_phase_static
         chmod +x GLIMPSE2_phase_static
 
         ./GLIMPSE2_phase_static \
-            --input-gl ~{output_prefix}.input.bcf \
+            --input-gl ~{input_vcf} \
             -R ~{panel_split_chunk_bin} \
             --thread $(nproc) \
             ~{extra_phase_args} \
@@ -326,7 +403,7 @@ task GLIMPSE2Phase {
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
         mem_gb:             7,
-        disk_gb:            100,
+        disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
