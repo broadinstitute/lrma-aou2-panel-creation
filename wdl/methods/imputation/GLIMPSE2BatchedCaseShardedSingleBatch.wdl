@@ -309,12 +309,12 @@ task PreprocessPLs {
             --write-index=tbi -Oz -o input.subset.vcf.gz
         bcftools view --no-version -G ~{panel_split_vcf} \
             --regions-overlap pos -r ~{output_region} \
-            --write-index=tbi -Oz -o panel.subset.vcf.gz
+            --write-index=tbi -Oz -o panel.subset.sites.vcf.gz
 
         # TODO remove SVs, complex bubble likelihoods?
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
             --input input.subset.vcf.gz \
-            --bubble panel.subset.vcf.gz | \
+            --bubble panel.subset.sites.vcf.gz | \
         bcftools --no-version +tag2tag -Ou -- --LPL-to-PL | \
         bcftools --no-version norm -m-any -Ou | \
         bcftools --no-version filter -i 'INFO/BMAP != "."' | \
