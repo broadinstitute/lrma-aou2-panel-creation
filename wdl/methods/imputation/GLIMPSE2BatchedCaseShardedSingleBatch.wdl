@@ -311,14 +311,11 @@ task PreprocessPLs {
         pypy -m pip install --no-input tqdm
 
         # TODO stream
-        tabix ~{input_vcf}##idx##~{input_vcf_idx} \
-            ~{output_region} \
-            --print-header \
-            --threads $(nproc) | \
-        bcftools view \
-            -t ~{output_region} \
+        bcftools view ~{input_vcf}##idx##~{input_vcf_idx} \
+            -r ~{output_region} \
             --regions-overlap pos \
-            -S ~{write_lines(sample_names)} | \
+            -S ~{write_lines(sample_names)} \
+            --threads $(nproc) | \
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
             --bubble panel.subset.sites.vcf.gz | \
         bcftools +tag2tag -Ou -- --LPL-to-PL | \
