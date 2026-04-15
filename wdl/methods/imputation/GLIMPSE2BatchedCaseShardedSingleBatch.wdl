@@ -387,9 +387,9 @@ task GLIMPSE2Phase {
             --output ~{output_prefix}.raw.bcf
 
         # take input VCF header and add GLIMPSE INFO and FORMAT lines (GLIMPSE header only contains a single chromosome and breaks bcftools concat --naive)
-        bcftools view --no-version -h ~{output_prefix}.input.bcf | grep '^##' > input.header.txt
+        bcftools view --no-version -h ~{input_vcf} | grep '^##' > input.header.txt
         bcftools view --no-version -h ~{output_prefix}.raw.bcf | grep -E '^##INFO|^##FORMAT|^##NMAIN|^##FPLOIDY' > glimpse2.header.txt
-        bcftools view --no-version -h ~{output_prefix}.input.bcf | grep '^#CHROM' > input.columns.txt
+        bcftools view --no-version -h ~{input_vcf} | grep '^#CHROM' > input.columns.txt
         cat input.header.txt glimpse2.header.txt input.columns.txt > header.txt
         bcftools reheader -h header.txt ~{output_prefix}.raw.bcf -o ~{output_prefix}.bcf
         bcftools index ~{output_prefix}.bcf
