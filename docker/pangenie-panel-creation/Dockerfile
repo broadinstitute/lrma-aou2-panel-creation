@@ -1,21 +1,21 @@
-# pypy + bcftools
-# stage 0 from us.gcr.io/broad-dsp-lrma/lr-basic:0.1.3 (https://github.com/broadinstitute/long-read-pipelines/blob/e58af597ccfc28b2ea8afd4604ab8db26b0d666f/docker/lr-basic/Dockerfile),
-# but starting from pypy base
-
-# some basic bioinformatics utilities.
+# pypy + bcftools + gcloud
+# stage 0+1 from us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23.1 (https://github.com/broadinstitute/long-read-pipelines/blob/sh_update_gcloud_samtools_for_libcurl/docker/lr-gcloud-samtools/Dockerfile),
+# but starting from pypy base and using gpg instead of deprecated apt-key
 
 ############### stage 0: build samtools and bcftools from source
-FROM pypy:3.11-7.3.20-slim
+# FROM ubuntu:24.04 AS builder
+FROM pypy:3.11-7.3.20-slim AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG SAMTOOLS_VERSION=1.22.1
-ARG BCFTOOLS_VERSION=1.22
+ARG SAMTOOLS_VERSION=1.23.1
+ARG BCFTOOLS_VERSION=1.23.1
 RUN apt-get -qqy update --fix-missing && \
     apt-get -qqy dist-upgrade && \
     apt-get -qqy install --no-install-recommends \
                  ca-certificates \
                  libbz2-dev \
                  libcurl4-openssl-dev \
+                 libdeflate-dev \
                  liblzma-dev \
                  libncurses5-dev \
                  autoconf \
@@ -27,12 +27,18 @@ RUN apt-get -qqy update --fix-missing && \
                  zlib1g-dev && \
     wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSION}/samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
     tar xjf samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
-    cd samtools-${SAMTOOLS_VERSION} && ./configure --without-curses --enable-libcurl && make -s all all-htslib && make install install-htslib && cd - && \
-    rm -rf samtools-${SAMTOOLS_VERSION}* && \
+    cd samtools-${SAMTOOLS_VERSION} \
+        && ./configure --without-curses --enable-libcurl --with-libdeflate \
+        && make -j 4 -s all all-htslib \
+        && make install install-htslib && \
+    cd - && rm -rf samtools-${SAMTOOLS_VERSION}* && \
     wget https://github.com/samtools/bcftools/releases/download/${BCFTOOLS_VERSION}/bcftools-${BCFTOOLS_VERSION}.tar.bz2 && \
     tar xjf bcftools-${BCFTOOLS_VERSION}.tar.bz2 && \
-    cd bcftools-${BCFTOOLS_VERSION} && ./configure --without-curses && make -s && make install && cd - && \
-    rm -rf bcftools-${BCFTOOLS_VERSION}* && \
+    cd bcftools-${BCFTOOLS_VERSION} \
+        && ./configure --without-curses \
+        && make -j 4 -s \
+        && make install && \
+    cd - && rm -rf bcftools-${BCFTOOLS_VERSION}* && \
     apt-get -qqy purge autoconf automake bzip2 gcc make wget && \
     apt-get -qqy clean && \
     rm -rf /tmp/* \
@@ -44,7 +50,60 @@ RUN apt-get -qqy update --fix-missing && \
     samtools --help && \
     bcftools --help
 
+############### stage 1: other commonly used bioinformatics utilities
+# FROM ubuntu:24.04
+FROM pypy:3.11-7.3.20-slim
+
 ENV HOME=/root
 
 # Define default command.
 CMD ["bash"]
+
+# copy from previous stage the binaries from samtools build
+COPY --from=builder /usr/local/bin/* /usr/local/bin/
+COPY --from=builder /usr/local/libexec/bcftools /usr/local/libexec/bcftools
+
+#### Basic utilities
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get -qqy update --fix-missing && \
+    apt-get -qqy dist-upgrade && \
+    apt-get -qqy install --no-install-recommends \
+                 libcurl4t64 \
+                 libdeflate0 \
+                 liblzma5 \
+                 libbz2-1.0 \
+                 apt-transport-https \
+                 ca-certificates \
+                 gnupg \
+                 curl \
+                 wget \
+                 bc \
+                 bedtools \
+                 datamash \
+                 gawk \
+                 less \
+                 rename \
+                 pigz \
+                 tabix \
+                 tree \
+                 vcftools \
+                 zlib1g-dev && \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+    apt-get -qqy update && \
+    apt-get -qqy install --no-install-recommends google-cloud-cli && \
+    gcloud config set core/disable_usage_reporting true && \
+    gcloud config set component_manager/disable_update_check true && \
+    gcloud config set metrics/environment github_docker_image && \
+    apt-get -qqy purge gnupg && \
+    apt-get -qqy clean && \
+    rm -rf /tmp/* \
+           /var/tmp/* \
+           /var/cache/apt/* \
+           /var/lib/apt/lists/* \
+           /usr/share/man/?? \
+           /usr/share/man/??_* && \
+    samtools --version && \
+    bcftools --version
+
+COPY re-auth.sh /opt/
