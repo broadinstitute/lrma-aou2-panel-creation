@@ -316,7 +316,7 @@ task PreprocessPLs {
             --print-header \
             --threads $(nproc) | \
         bcftools view \
-            -r ~{output_region} \
+            -t ~{output_region} \
             --regions-overlap pos \
             -S ~{write_lines(sample_names)} | \
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
