@@ -168,7 +168,7 @@ task GLIMPSE2Chunk {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size(vcf, "GB"))
+    Int disk_size_gb = 2 * ceil(size(vcf, "GB")) + 10
 
     command <<<
         set -euxo pipefail
@@ -230,7 +230,7 @@ task GLIMPSE2SplitReference {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size(panel_split_vcf, "GB"))
+    Int disk_size_gb = 2 * ceil(size(panel_split_vcf, "GB")) + 10
 
     command <<<
         set -euxo pipefail
@@ -294,7 +294,7 @@ task PreprocessPLs {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_vcf], "GB"))
+    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_vcf], "GB")) + 10
 
     command {
         set -euxo pipefail
@@ -371,7 +371,7 @@ task GLIMPSE2Phase {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_chunk_bin], "GB"))
+    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_chunk_bin], "GB")) + 10
 
     command {
         set -euxo pipefail
@@ -434,7 +434,7 @@ task GLIMPSE2Ligate {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size(phased_bcfs, "GB"))
+    Int disk_size_gb = 2 * ceil(size(phased_bcfs, "GB")) + 10
 
     command <<<
         set -euox pipefail
@@ -486,7 +486,7 @@ task FixVariantCollisions {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 5 * ceil(size(vcf_gz, "GB"))
+    Int disk_size_gb = 5 * ceil(size(vcf_gz, "GB")) + 10
 
     command <<<
         set -euxo pipefail
@@ -548,7 +548,7 @@ task ConcatVcfs {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 3 * ceil(size(vcfs, "GB"))
+    Int disk_size_gb = 3 * ceil(size(vcfs, "GB")) + 10
 
     command {
         set -euox pipefail
