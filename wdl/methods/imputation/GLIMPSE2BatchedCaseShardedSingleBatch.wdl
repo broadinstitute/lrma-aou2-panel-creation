@@ -304,7 +304,8 @@ task PreprocessPLs {
 
         # TODO stream; or, once shards are fixed, prepare beforehand?
         bcftools view --no-version -G ~{panel_split_vcf}##idx##~{panel_split_vcf_idx} \
-            --regions-overlap pos -r ~{output_region} \
+            --regions-overlap pos -r ~{output_region} -Ou | \
+        bcftools norm -m+any -N \
             --write-index=tbi -Oz -o panel.subset.sites.vcf.gz
 
         pypy -m pip install --no-input tqdm
