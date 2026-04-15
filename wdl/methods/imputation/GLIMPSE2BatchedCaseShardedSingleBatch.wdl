@@ -312,8 +312,8 @@ task PreprocessPLs {
 
         # TODO stream
         tabix ~{input_vcf}##idx##~{input_vcf_idx} \
+            ~{output_region} \
             --print-header \
-            -r ~{output_region} \
             --threads $(nproc) | \
         bcftools view \
             -r ~{output_region} \
