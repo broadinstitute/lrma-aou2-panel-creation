@@ -310,8 +310,12 @@ task PreprocessPLs {
         pypy -m pip install --no-input tqdm
 
         # TODO stream
-        bcftools view --no-version ~{input_vcf}##idx##~{input_vcf_idx} \
-            --regions-overlap pos -r ~{output_region} \
+        tabix ~{input_vcf}##idx##~{input_vcf_idx} \
+            -r ~{output_region} \
+            --threads $(nproc) | \
+        bcftools view \
+            -r ~{output_region} \
+            --regions-overlap pos \
             -S ~{write_lines(sample_names)} | \
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
             --bubble panel.subset.sites.vcf.gz | \
