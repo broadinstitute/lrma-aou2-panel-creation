@@ -29,7 +29,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         String output_prefix
 
         # inputs for PreprocessPLs
-        Int max_pl
+        Int? max_pl
         File remap_simple_bubble_likelihoods_python_script
         File swap_alleles_python_script
 
@@ -287,7 +287,7 @@ task PreprocessPLs {
         String output_region
         Array[String] sample_names
         String output_prefix
-        Int max_pl
+        Int? max_pl
 
         File remap_simple_bubble_likelihoods_python_script
         File swap_alleles_python_script
@@ -321,7 +321,7 @@ task PreprocessPLs {
             --threads $(nproc) | \
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
             --bubble panel.subset.sites.vcf.gz \
-            --cap-pl ~{max_pl} | \
+            ~{"--cap-pl " + max_pl} | \
         bcftools +tag2tag -Ou -- --LPL-to-PL | \
         bcftools norm -m-any -Ou | \
         bcftools filter -i 'INFO/BMAP != "."' | \
