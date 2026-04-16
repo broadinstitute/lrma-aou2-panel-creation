@@ -486,7 +486,8 @@ task FixVariantCollisions {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 5 * ceil(size(vcf_gz, "GB")) + 10
+    # TODO pipe and compress output of Java
+#    Int disk_size_gb = 5 * ceil(size(vcf_gz, "GB")) + 10
 
     command <<<
         set -euxo pipefail
@@ -519,7 +520,7 @@ task FixVariantCollisions {
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
         mem_gb:             15,
-        disk_gb:            disk_size_gb,
+        disk_gb:            100, # TODO replace with disk_size_gb
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
