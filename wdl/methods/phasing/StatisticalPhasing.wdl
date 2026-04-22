@@ -25,7 +25,7 @@ workflow StatisticalPhasing {
         Int operation = 1
         String weight_tag = "SCORE"
         Int is_weight_format_field = 0
-        Float default_weight = 0.5
+        Float default_weight = 0.1
 
         String chunk_extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-count 100000 --buffer-count 5000 --window-mb 0.1 --buffer-mb 0.1 --window-cm 0.1 --buffer-cm 0.1 --sparse-maf 0" # we want counts to drive the constraints
 
