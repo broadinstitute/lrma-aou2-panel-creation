@@ -27,7 +27,7 @@ workflow StatisticalPhasing {
         Int is_weight_format_field = 0
         Float default_weight = 0.5
 
-        String chunk_extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-count 80000 --buffer-count 4000 --window-mb 0 --buffer-mb 0 --window-cm 0 --buffer-cm 0 --sparse-maf 0"
+        String chunk_extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-count 80000 --buffer-count 4000 --window-mb 0.1 --buffer-mb 0.1 --window-cm 0.1 --buffer-cm 0.1 --sparse-maf 0" # we want counts to drive the sharding
 
         Boolean do_shapeit5 = true
         String shapeit4_extra_args = "--thread $(nproc) --use-PS 0.0001"
@@ -534,7 +534,7 @@ task CreateShapeitChunks {
         File vcf_idx
         String region
         File genetic_map
-        String extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-count 80000 --buffer-count 4000 --window-mb 0 --buffer-mb 0 --window-cm 0 --buffer-cm 0 --sparse-maf 0"
+        String extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-count 80000 --buffer-count 4000 --window-mb 0.1 --buffer-mb 0.1 --window-cm 0.1 --buffer-cm 0.1 --sparse-maf 0" # we want counts to drive the sharding
 
         RuntimeAttr? runtime_attr_override
     }
