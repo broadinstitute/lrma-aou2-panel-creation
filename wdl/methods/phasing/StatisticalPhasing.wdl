@@ -27,7 +27,7 @@ workflow StatisticalPhasing {
         Int is_weight_format_field = 0
         Float default_weight = 0.5
 
-        String chunk_extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-mb 2 --buffer-mb 0.2"
+        String chunk_extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-count 100000 --buffer-count 1000"
 
         Boolean do_shapeit5 = true
         String shapeit4_extra_args = "--thread $(nproc) --use-PS 0.0001"
@@ -534,7 +534,7 @@ task CreateShapeitChunks {
         File vcf_idx
         String region
         File genetic_map
-        String extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-mb 2 --buffer-mb 0.2"
+        String extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-count 100000 --buffer-count 1000"
 
         RuntimeAttr? runtime_attr_override
     }
@@ -552,16 +552,18 @@ task CreateShapeitChunks {
             --region ~{region} \
             --map ~{genetic_map} \
             ~{extra_args} \
-            -O chunks.txt
+            -O chunks.tsv
 
         # cut chunks + buffers
-        cut -f 3 chunks.txt > common.chunks.regions.txt
-        cut -f 4 chunks.txt > rare.chunks.regions.txt
+        cut -f 3 chunks.tsv > common.chunks.regions.txt
+        cut -f 4 chunks.tsv > rare.chunks.regions.txt
     >>>
 
     output {
+        File chunks_tsv = "chunks.tsv"
         File common_chunks = "common.chunks.regions.txt"
         File rare_chunks = "rare.chunks.regions.txt"
+        
     }
 
     #########################
