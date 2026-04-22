@@ -27,7 +27,7 @@ workflow StatisticalPhasing {
         Int is_weight_format_field = 0
         Float default_weight = 0.5
 
-        String chunk_extra_args = "--thread $(nproc) --window-size 2000000 --buffer-size 200000"
+        String chunk_extra_args = "--thread $(nproc) --sequential --window-mb 2 --buffer-mb 0.2"
 
         Boolean do_shapeit5 = true
         String shapeit4_extra_args = "--thread $(nproc) --use-PS 0.0001"
@@ -534,7 +534,7 @@ task CreateShapeitChunks {
         File vcf_idx
         String region
         File genetic_map
-        String extra_args = "--thread $(nproc) --sequential --window-mb 5 --buffer-mb 0.5"
+        String extra_args = "--thread $(nproc) --sequential --window-mb 2 --buffer-mb 0.2"
 
         RuntimeAttr? runtime_attr_override
     }
