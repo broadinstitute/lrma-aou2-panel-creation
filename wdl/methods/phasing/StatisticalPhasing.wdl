@@ -180,7 +180,6 @@ struct RuntimeAttr {
     Int? preemptible_tries
     Int? max_retries
     String? docker
-    String? cpu_platform
 }
 
 task CreateShards {
@@ -724,8 +723,7 @@ task Shapeit4 {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/shapeit4:gemini-opt-v1-avx512",
-        cpu_platform:       "Intel Skylake"
+        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/shapeit4:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -736,7 +734,6 @@ task Shapeit4 {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-        cpuPlatform:            select_first([runtime_attr.cpu_platform,      default_attr.cpu_platform])
     }
 }
 
