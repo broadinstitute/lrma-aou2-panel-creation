@@ -724,7 +724,7 @@ task Shapeit4 {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/shapeit4:v1",
+        docker:             "us.gcr.io/broad-dsde-methods/slee/shapeit4:gemini-opt-v1-avx512",
         cpu_platform:       "Intel Skylake"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
