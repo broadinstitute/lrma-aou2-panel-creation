@@ -27,7 +27,7 @@ workflow StatisticalPhasing {
         Int is_weight_format_field = 0
         Float default_weight = 0.1
 
-        String chunk_extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-count 100000 --buffer-count 5000 --window-mb 0.1 --buffer-mb 0.1 --window-cm 0.1 --buffer-cm 0.1 --sparse-maf 0" # we want counts to drive the constraints
+        String chunk_extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 100000 --buffer-count 5000" # we want counts to drive the constraints
 
         Boolean do_shapeit5 = true
         String shapeit4_extra_args = "--thread $(nproc) --use-PS 0.0001"
@@ -97,7 +97,6 @@ workflow StatisticalPhasing {
         vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf,
         vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx,
         region = region,
-        genetic_map = genetic_maps_dict[chromosome],
         extra_args = chunk_extra_args
     }
 
@@ -533,8 +532,7 @@ task CreateShapeitChunks {
         File vcf
         File vcf_idx
         String region
-        File genetic_map
-        String extra_args = "--thread $(nproc) --sequential --uniform-number-variants --window-count 100000 --buffer-count 5000 --window-mb 0.1 --buffer-mb 0.1 --window-cm 0.1 --buffer-cm 0.1 --sparse-maf 0" # we want counts to drive the constraints
+        String extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 100000 --buffer-count 5000" # we want counts to drive the constraints
 
         RuntimeAttr? runtime_attr_override
     }
@@ -544,13 +542,12 @@ task CreateShapeitChunks {
     command <<<
         set -euxo pipefail
 
-        wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_chunk_static
-        chmod +x GLIMPSE2_chunk_static
+        wget https://github.com/odelaneau/GLIMPSE/releases/download/v1.1.1/GLIMPSE_chunk_static
+        chmod +x GLIMPSE_chunk_static
 
-        ./GLIMPSE2_chunk_static \
+        ./GLIMPSE_chunk_static \
             -I ~{vcf} \
             --region ~{region} \
-            --map ~{genetic_map} \
             ~{extra_args} \
             -O chunks.tsv
 
