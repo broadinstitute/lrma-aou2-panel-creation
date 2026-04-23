@@ -1,7 +1,7 @@
 {
  "StatisticalPhasing.filter_and_concat_shard_size": 5000000,
  "StatisticalPhasing.chromosome": "chr6",
- "StatisticalPhasing.chunk_extra_args": "--thread $(nproc) --sequential --window-mb 2.5 --buffer-mb 0.25",
+ "StatisticalPhasing.chunk_extra_args": "--thread $(nproc) --window-size 2500000 --buffer-size 250000",
  "StatisticalPhasing.filter_and_concat_short_view_args": "-i 'MAF>=0.03 && abs(strlen(ALT)-strlen(REF))<50'",
  "StatisticalPhasing.fix_variant_collisions_java": "__REPO_DIR__/test/resources/statistical-phasing/FixVariantCollisions.java",
  "StatisticalPhasing.genetic_maps_tsv": "__REPO_DIR__/test/resources/statistical-phasing/genetic_map_b38.mod.tsv",
