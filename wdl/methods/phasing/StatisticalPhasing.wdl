@@ -406,7 +406,7 @@ task FilterAndConcatVcfs {
 
         # split to biallelic and filter short (re-fill tags when needed)
         bcftools norm --no-version -r ~{region} \
-                -m-any -N -f ~{reference_fasta} ~{short_vcf} -Ou | \
+                -m-any -f ~{reference_fasta} ~{short_vcf} -Ou | \
             bcftools +fill-tags --no-version -Ou -- -t AF,AC,AN | \
             bcftools filter --no-version ~{filter_and_concat_short_filter_args} -Ou | \
             bcftools +fill-tags --no-version -Ou -- -t AF,AC,AN | \
