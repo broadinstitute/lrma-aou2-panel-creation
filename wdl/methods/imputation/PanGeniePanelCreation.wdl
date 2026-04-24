@@ -161,7 +161,8 @@ task PanGeniePanelCreation {
         bcftools stats -r ~{region} --regions-overlap 0 ~{phased_vcf} > ~{output_prefix}.stats.txt
         bcftools view --no-version -h ~{phased_vcf} > header.txt
 
-        # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, split to biallelic, and run PanGenie merge script
+        # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, split to biallelic, and run PanGenie merge script;
+        # everything should be normalized or in the desired representation at this point
         bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} | \
             pypy ~{prepare_vcf_script} --missing ~{frac_missing} | \
             pypy ~{add_ids_script} | \
