@@ -1,0 +1,17 @@
+[package]
+name = "pangenie_utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rust-htslib = "0.44.0"
+clap = { version = "4.0", features = ["derive"] }
+indexmap = "2.0.0"
+
+[[bin]]
+name = "merge_vcfs"
+path = "src/bin/merge_vcfs.rs"
+
+[[bin]]
+name = "prepare_vcf_and_add_ids"
+path = "src/bin/prepare_vcf_and_add_ids.rs"
