@@ -483,7 +483,7 @@ task FixVariantCollisions {
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
         # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        bcftools view ~{phased_vcf} --threads $(($(nproc) / 2 - 1)) | \
+        bcftools view ~{phased_vcf} --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
@@ -491,7 +491,7 @@ task FixVariantCollisions {
             ~{default_weight} \
             histogram.txt | \
         bcftools +setGT --no-version -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads $(($(nproc) / 2 - 1)) --write-index=csi -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
+            bcftools +fill-tags --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
     >>>
 
     output {
@@ -502,7 +502,7 @@ task FixVariantCollisions {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          8,
+        cpu_cores:          6,
         mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
