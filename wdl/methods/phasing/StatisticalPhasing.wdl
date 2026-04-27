@@ -748,7 +748,7 @@ task LigateVcfs {
         set -euxo pipefail
 
         ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.ligate.bcf
-        bcftools +fill-tags --no-version ~{output_prefix}.ligate.bcf \
+        bcftools +fill-tags --no-version --threads $(nproc) ~{output_prefix}.ligate.bcf \
             -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
         bcftools index ~{output_prefix}.bcf
     >>>
