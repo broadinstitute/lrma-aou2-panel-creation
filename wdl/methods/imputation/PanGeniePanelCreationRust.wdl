@@ -5,6 +5,7 @@ workflow PanGeniePanelCreation {
         File phased_vcf
         File phased_vcf_idx
         File reference_fasta
+        File reference_fasta_fai
         String region
         String output_prefix
 
@@ -35,6 +36,7 @@ workflow PanGeniePanelCreation {
         phased_vcf = FixVariantCollisions.phased_collisionless_vcf,
         phased_vcf_idx = FixVariantCollisions.phased_collisionless_vcf_idx,
         reference_fasta = reference_fasta,
+        reference_fasta_fai = reference_fasta_fai,
         region = region,
         prepare_vcf_and_add_ids_script = prepare_vcf_and_add_ids_script,
         merge_vcfs_script = merge_vcfs_script,
@@ -88,7 +90,7 @@ task FixVariantCollisions {
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
         # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        bcftools view ~{phased_vcf} --threads 2 | \
+        time bcftools view ~{phased_vcf} --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
@@ -133,6 +135,7 @@ task PanGeniePanelCreation {
         File phased_vcf
         File phased_vcf_idx
         File reference_fasta
+        File reference_fasta_fai
         String region
         String output_prefix
 
@@ -162,7 +165,7 @@ task PanGeniePanelCreation {
 
         # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, split to biallelic, and run PanGenie merge script;
         # everything should be normalized or in the desired representation at this point
-        bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} --threads 2 ~{phased_vcf} | \
+        time bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} --threads 2 ~{phased_vcf} | \
             ./pangenie-utils/target/release/prepare_vcf_and_add_ids --missing ~{frac_missing} | \
             bcftools norm --no-version -m-any --do-not-normalize | tee \
         >(  bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.bcf ) | \

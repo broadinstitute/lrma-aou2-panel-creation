@@ -85,7 +85,7 @@ task FixVariantCollisions {
     command <<<
         set -euxo pipefail
 
-        java ~{fix_variant_collisions_java} \
+        time java ~{fix_variant_collisions_java} \
             ~{phased_vcf} \
             ~{operation} \
             ~{weight_tag} \
@@ -160,12 +160,12 @@ task PanGeniePanelCreation {
 
         pypy -m pip install pyfaidx
 
-        bcftools stats -r ~{region} --regions-overlap 0 ~{phased_vcf} > ~{output_prefix}.stats.txt
+        bcftools stats -r ~{region} --regions-overlap 0 ~{phased_vcf} --threads 6 > ~{output_prefix}.stats.txt
         bcftools view --no-version -h ~{phased_vcf} > header.txt
 
         # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, split to biallelic, and run PanGenie merge script;
         # everything should be normalized or in the desired representation at this point
-        bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} -Ou | \
+        time bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} --threads 2 ~{phased_vcf} -Ou | \
             bcftools +setGT --no-version -Ou -- -t . -n 0p | \
             bcftools +fill-tags --no-version -- -t AF,AC,AN | \
             pypy ~{prepare_vcf_script} --missing ~{frac_missing} | \
@@ -176,15 +176,15 @@ task PanGeniePanelCreation {
                 -header header.txt \
                 -r ~{reference_fasta} \
                 -ploidy 2 | \
-            bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.mergehap.bcf )
+            bcftools view --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.mergehap.bcf )
 
-        bcftools stats ~{output_prefix}.prepare.id.split.mergehap.bcf > ~{output_prefix}.prepare.id.split.mergehap.stats.txt
+        bcftools stats --threads 6 ~{output_prefix}.prepare.id.split.mergehap.bcf > ~{output_prefix}.prepare.id.split.mergehap.stats.txt
     >>>
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          1,
-        mem_gb:             3,
+        cpu_cores:          6,
+        mem_gb:             6,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
