@@ -8,7 +8,7 @@ use std::str::FromStr;
 enum VariantType { Del, Inv, Dup, Ins, Snp, Replacement }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(usize)]
+#[repr(u8)]
 enum Genotype {
     Phased00 = 0, Phased01 = 1, Phased10 = 2, Phased11 = 3,
     Unphased00 = 4, Unphased01 = 5, Unphased10 = 6, Unphased11 = 7,
@@ -94,12 +94,13 @@ const REMOVE_HAP2_D: [Genotype; 18] = [Phased00,Phased0D,Phased10,Phased1D,Unpha
 
 #[derive(Clone)]
 struct Interval {
+    line: String,
+    tabs: [usize; 9],
     chr: i32,
     first: i32,
     last: i32,
     input_index: usize,
     weight: f64,
-    vcf_columns: Vec<String>,
     genotypes: Vec<Genotype>,
     
     in_independent_set: bool,
@@ -110,16 +111,31 @@ struct Interval {
 }
 
 impl Interval {
-    fn new(record: &str) -> Self {
-        let columns: Vec<String> = record.split('\t').map(|s| s.to_string()).collect();
-        let chr = parse_chr(&columns[0]);
-        let pos = i32::from_str(&columns[1]).unwrap_or(0);
-        let info = &columns[7];
-        let ref_allele = &columns[3];
-        let alt_allele = &columns[4];
+    fn new(line: String) -> Self {
+        let mut tabs = [0; 9];
+        let mut tab_idx = 0;
+        for (i, &b) in line.as_bytes().iter().enumerate() {
+            if b == b'\t' {
+                tabs[tab_idx] = i;
+                tab_idx += 1;
+                if tab_idx == 9 { break; }
+            }
+        }
+        
+        let col = |i: usize| -> &str {
+            let start = if i == 0 { 0 } else { tabs[i - 1] + 1 };
+            let end = tabs[i];
+            &line[start..end]
+        };
+
+        let chr = parse_chr(col(0));
+        let pos = i32::from_str(col(1)).unwrap_or(0);
+        let info = col(7);
+        let ref_allele = col(3);
+        let alt_allele = col(4);
         
         let variant_type = if let Some(svtype) = get_info_field(info, "SVTYPE") {
-            parse_svtype(&svtype)
+            parse_svtype(svtype)
         } else if ref_allele.len() == 1 {
             if alt_allele.len() > 1 { VariantType::Ins } else { VariantType::Snp }
         } else if alt_allele.len() == 1 {
@@ -129,7 +145,7 @@ impl Interval {
         };
         
         let length = if let Some(svlen_str) = get_info_field(info, "SVLEN") {
-            i32::from_str(&svlen_str).unwrap_or(0).abs()
+            i32::from_str(svlen_str).unwrap_or(0).abs()
         } else if variant_type == VariantType::Replacement {
             (ref_allele.len() - 1) as i32
         } else {
@@ -142,28 +158,59 @@ impl Interval {
             VariantType::Snp => (pos, pos),
         };
         
-        let n_samples = if columns.len() > 9 { columns.len() - 9 } else { 0 };
-        let mut genotypes = Vec::with_capacity(n_samples);
-        for i in 0..n_samples { genotypes.push(Genotype::from_str(&columns[9 + i])); }
+        let mut genotypes = Vec::new();
+        if tab_idx == 9 {
+            for sample_str in line[tabs[8] + 1..].split('\t') {
+                genotypes.push(Genotype::from_str(sample_str));
+            }
+        }
         
         Interval {
-            chr, first, last, input_index: 0, weight: 0.0, vcf_columns: columns, genotypes,
+            line, tabs,
+            chr, first, last, input_index: 0, weight: 0.0, genotypes,
             in_independent_set: false, independent_set_weight: 0.0,
             independent_set_previous: None, overlaps_is_hap1: false, overlaps_is_hap2: false,
         }
     }
 
+    fn col_info(&self) -> &str {
+        &self.line[self.tabs[6] + 1 .. self.tabs[7]]
+    }
+
+    fn col_format(&self) -> &str {
+        &self.line[self.tabs[7] + 1 .. self.tabs[8]]
+    }
+
+    fn sample_str(&self, sample_idx: usize) -> &str {
+        let rest = &self.line[self.tabs[8] + 1..];
+        let mut start = 0;
+        let mut tabs_seen = 0;
+        if sample_idx > 0 {
+            for (i, &b) in rest.as_bytes().iter().enumerate() {
+                if b == b'\t' {
+                    tabs_seen += 1;
+                    if tabs_seen == sample_idx {
+                        start = i + 1;
+                        break;
+                    }
+                }
+            }
+        }
+        let end = rest[start..].find('\t').map(|i| start + i).unwrap_or(rest.len());
+        &rest[start..end]
+    }
+
     fn set_weight(&mut self, sample: usize, weight_tag: &str, in_sample: bool, default_weight: f64) {
         let mut value = None;
         if in_sample {
-            let format_col = &self.vcf_columns[8];
+            let format_col = self.col_format();
             if let Some(p) = format_col.find(weight_tag) {
                 let mut j = 0;
                 for byte in format_col[..p].bytes() {
                     if byte == b':' { j += 1; }
                 }
                 
-                let gt = &self.vcf_columns[9 + sample];
+                let gt = self.sample_str(sample);
                 let gt_bytes = gt.as_bytes();
                 
                 for i in 0..gt_bytes.len() {
@@ -172,17 +219,17 @@ impl Interval {
                     if j > 0 { continue; }
                     
                     if let Some(q) = gt[i + 1..].find(':') {
-                        value = Some(gt[i + 1..i + 1 + q].to_string());
+                        value = Some(&gt[i + 1..i + 1 + q]);
                     } else {
-                        value = Some(gt[i + 1..].to_string());
+                        value = Some(&gt[i + 1..]);
                     }
                     break;
                 }
             }
         } else {
-            value = get_info_field(&self.vcf_columns[7], weight_tag);
+            value = get_info_field(self.col_info(), weight_tag);
         }
-        self.weight = value.and_then(|s| f64::from_str(&s).ok()).unwrap_or(default_weight);
+        self.weight = value.and_then(|s| f64::from_str(s).ok()).unwrap_or(default_weight);
     }
 
     fn is_present(&self, sample: usize) -> bool {
@@ -210,10 +257,8 @@ impl Interval {
         self.overlaps_is_hap2 = false;
     }
 
-    fn to_vcf_string(&self) -> String {
-        let mut out = self.vcf_columns[0..9].join("\t");
-        let format_str = &self.vcf_columns[8];
-        
+    fn write_vcf<W: Write>(&self, out: &mut W) -> io::Result<()> {
+        let format_str = self.col_format();
         let mut gt_index = 0;
         if let Some(p) = format_str.find("GT") {
             for byte in format_str[..p].bytes() {
@@ -221,15 +266,18 @@ impl Interval {
             }
         }
 
-        for (i, gt_enum) in self.genotypes.iter().enumerate() {
-            out.push('\t');
-            let gt = &self.vcf_columns[9 + i];
-            let gt_bytes = gt.as_bytes();
+        out.write_all(self.line[..self.tabs[8]].as_bytes())?;
+
+        let mut samples_iter = self.line[self.tabs[8] + 1..].split('\t');
+        for gt_enum in &self.genotypes {
+            out.write_all(b"\t")?;
+            let sample = samples_iter.next().unwrap();
+            let sample_bytes = sample.as_bytes();
             let mut k = 0;
             let mut p2 = 0;
             
-            for j in 0..gt_bytes.len() {
-                if gt_bytes[j] == b':' {
+            for j in 0..sample_bytes.len() {
+                if sample_bytes[j] == b':' {
                     k += 1;
                     if k == gt_index {
                         p2 = j + 1;
@@ -239,25 +287,35 @@ impl Interval {
             }
             
             if p2 > 0 {
-                out.push_str(&gt[0..p2]);
+                out.write_all(&sample_bytes[0..p2])?;
             }
-            out.push_str(gt_enum.to_str());
+            out.write_all(gt_enum.to_str().as_bytes())?;
             
-            if let Some(q) = gt[p2..].find(':') {
-                out.push_str(&gt[p2 + q..]);
+            if let Some(q) = sample[p2..].find(':') {
+                out.write_all(sample[p2 + q..].as_bytes())?;
             }
         }
-        out
+        out.write_all(b"\n")?;
+        Ok(())
     }
 }
 
-fn get_info_field(info: &str, field: &str) -> Option<String> {
-    let target = format!("{}=", field);
-    info.find(&target).map(|start| {
-        let val_start = start + target.len();
-        let val_end = info[val_start..].find(';').map(|i| i + val_start).unwrap_or(info.len());
-        info[val_start..val_end].to_string()
-    })
+// Zero-allocation field scanning
+fn get_info_field<'a>(info: &'a str, field: &str) -> Option<&'a str> {
+    let mut start = 0;
+    let info_bytes = info.as_bytes();
+    while start < info.len() {
+        if info[start..].starts_with(field) {
+            let after_field = start + field.len();
+            if after_field < info.len() && info_bytes[after_field] == b'=' {
+                let val_start = after_field + 1;
+                let val_end = info[val_start..].find(';').map(|i| i + val_start).unwrap_or(info.len());
+                return Some(&info[val_start..val_end]);
+            }
+        }
+        start = info[start..].find(';').map(|i| start + i + 1).unwrap_or(info.len());
+    }
+    None
 }
 
 fn parse_chr(chr_str: &str) -> i32 {
@@ -447,7 +505,7 @@ fn independent_set_2(window: &mut [Interval], sample: usize, weight_tag: &str, w
         let mut curr_trace = None;
         for i in (0..sample_window.len()).rev() {
             let idx = sample_window[i];
-            if window[idx].independent_set_weight == available_weight {
+            if (window[idx].independent_set_weight - available_weight).abs() < 1e-9 {
                 curr_trace = Some(idx);
                 break;
             }
@@ -496,7 +554,7 @@ fn process_window<W: Write>(window: &mut Vec<Interval>, method_2: bool, weight_t
 
     window.sort_by(|a, b| a.input_index.cmp(&b.input_index));
     for iv in window {
-        let _ = writeln!(output, "{}", iv.to_vcf_string());
+        let _ = iv.write_vcf(output);
     }
 }
 
@@ -526,11 +584,17 @@ fn main() -> std::io::Result<()> {
     let mut n_records = 0;
 
     while reader.read_line(&mut line)? > 0 {
-        let trimmed = line.trim_end();
-        if trimmed.starts_with('#') {
-            let _ = writeln!(out_vcf, "{}", trimmed);
+        let mut trimmed_len = line.len();
+        while trimmed_len > 0 && (line.as_bytes()[trimmed_len - 1] == b'\n' || line.as_bytes()[trimmed_len - 1] == b'\r') {
+            trimmed_len -= 1;
+        }
+        line.truncate(trimmed_len);
+        
+        if line.starts_with('#') {
+            let _ = writeln!(out_vcf, "{}", line);
         } else {
-            let iv = Interval::new(trimmed);
+            // Take ownership of the strictly sized cloned string, reuse original buffer
+            let iv = Interval::new(line.clone());
             window.push(iv);
             
             if !is_last_in_window(&window, window_last_pos) {
