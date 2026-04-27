@@ -503,7 +503,7 @@ fn process_window<W: Write>(window: &mut Vec<Interval>, method_2: bool, weight_t
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 5 {
-        eprintln!("Usage: ... <method> <weight_tag> <weight_loc> <default_w> [<out.windows> <out.hist>] < input.vcf > output.vcf");
+        eprintln!("Usage: ... <method> <weight_tag> <weight_loc> <default_w> [<out.hist>] < input.vcf > output.vcf");
         return Ok(());
     }
 
@@ -562,8 +562,8 @@ fn main() -> std::io::Result<()> {
     }
     out_vcf.flush()?; 
 
-    if args.len() > 6 && args[6] != "null" {
-        let mut hist_w = BufWriter::new(File::create(&args[6])?);
+    if args.len() > 5 && args[5] != "null" {
+        let mut hist_w = BufWriter::new(File::create(&args[5])?);
         let _ = writeln!(hist_w, "#nCollision \t nHaplotypes");
         for (i, &count) in histogram.iter().enumerate() {
             let _ = writeln!(hist_w, "{}\t{}", i, count);

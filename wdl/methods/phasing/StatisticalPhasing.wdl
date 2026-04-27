@@ -21,7 +21,7 @@ workflow StatisticalPhasing {
         String filter_and_concat_sv_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
 
         # inputs for FixVariantCollisions (see documentation for arguments in task)
-        File fix_variant_collisions_java
+        File fix_variant_collisions_script
         Int operation = 1
         String weight_tag = "SCORE"
         Int is_weight_format_field = 0
@@ -78,7 +78,7 @@ workflow StatisticalPhasing {
         # added variant collision fix step
         call FixVariantCollisions { input:
             phased_vcf = FilterAndConcatVcfs.filter_and_concat_vcf,
-            fix_variant_collisions_java = fix_variant_collisions_java,
+            fix_variant_collisions_script = fix_variant_collisions_script,
             operation = operation,
             weight_tag = weight_tag,
             is_weight_format_field = is_weight_format_field,
@@ -465,11 +465,11 @@ task FilterAndConcatVcfs {
 task FixVariantCollisions {
     input {
         File phased_vcf                     # biallelic
-        File fix_variant_collisions_java
+        File fix_variant_collisions_script
         Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
         String weight_tag = "SCORE"         # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
         Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
-        Float default_weight = 0.5          # default weight if the weight field is not found
+        Float default_weight = 0.1          # default weight if the weight field is not found
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
@@ -480,30 +480,23 @@ task FixVariantCollisions {
     command <<<
         set -euxo pipefail
 
-        java ~{fix_variant_collisions_java} \
-            ~{phased_vcf} \
+        rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
+
+        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
+        bcftools view ~{phased_vcf} --threads $(nproc) | \
+        ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
             ~{is_weight_format_field} \
             ~{default_weight} \
-            collisionless.vcf \
-            windows.txt \
-            histogram.txt \
-            null                            # do not output figures
-
-        # replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        bcftools +setGT --no-version collisionless.vcf -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads $(($(nproc)-1)) -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
-        bcftools index ~{output_prefix}.phased.collisionless.bcf
-#            bcftools +fill-tags --no-version --threads $(($(nproc)-1)) -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
-#        # use vcf.gz to avoid errors from missing header lines
-#        bcftools index -t ~{output_prefix}.phased.collisionless.vcf.gz
+            histogram.txt | \
+        bcftools +setGT --no-version -Ou -- -t . -n 0p | \
+            bcftools +fill-tags --no-version --threads $(nproc) --write-index=csi -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
     >>>
 
     output {
         File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.bcf"
         File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.bcf.csi"
-        File windows = "windows.txt"
         File histogram = "histogram.txt"
     }
 
@@ -516,7 +509,7 @@ task FixVariantCollisions {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-gatk/gatk:4.6.0.0"     # needs Java + bcftools
+        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {

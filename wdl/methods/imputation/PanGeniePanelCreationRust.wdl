@@ -9,21 +9,21 @@ workflow PanGeniePanelCreation {
         String output_prefix
 
         # inputs for FixVariantCollisions (see documentation for arguments in task)
-        File fix_variant_collisions_java
+        File fix_variant_collisions_script
         Int operation = 1
         String weight_tag = "AF"
         Int is_weight_format_field = 0
         Float default_weight = 0.1
 
-        File prepare_vcf_script
-        File add_ids_script
+        File prepare_vcf_and_add_ids_script
         File merge_vcfs_script
+        File cargo_toml
         Float frac_missing = 0.2
     }
 
     call FixVariantCollisions { input:
         phased_vcf = phased_vcf,
-        fix_variant_collisions_java = fix_variant_collisions_java,
+        fix_variant_collisions_script = fix_variant_collisions_script,
         operation = operation,
         weight_tag = weight_tag,
         is_weight_format_field = is_weight_format_field,
@@ -36,9 +36,9 @@ workflow PanGeniePanelCreation {
         phased_vcf_idx = FixVariantCollisions.phased_collisionless_vcf_idx,
         reference_fasta = reference_fasta,
         region = region,
-        prepare_vcf_script = prepare_vcf_script,
-        add_ids_script = add_ids_script,
+        prepare_vcf_and_add_ids_script = prepare_vcf_and_add_ids_script,
         merge_vcfs_script = merge_vcfs_script,
+        cargo_toml = cargo_toml,
         frac_missing = frac_missing,
         output_prefix = output_prefix
     }
@@ -70,7 +70,7 @@ struct RuntimeAttr {
 task FixVariantCollisions {
     input {
         File phased_vcf                     # biallelic
-        File fix_variant_collisions_java
+        File fix_variant_collisions_script
         Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
         String weight_tag = "AF"            # ID of the weight field; weights are assumed to be non-negative; TODO we set to AF for now, perhaps should annotate SVLEN or something else that would prefer SVs
         Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
@@ -85,32 +85,23 @@ task FixVariantCollisions {
     command <<<
         set -euxo pipefail
 
-        java ~{fix_variant_collisions_java} \
-            ~{phased_vcf} \
+        rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
+
+        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
+        bcftools view ~{phased_vcf} --threads $(nproc) | \
+        ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
             ~{is_weight_format_field} \
             ~{default_weight} \
-            collisionless.vcf \
-            windows.txt \
-            histogram.txt \
-            null                            # do not output figures
-
-        # TODO: THIS MAY BE BUGGED IN GATK DOCKER, BCFTOOLS VERSION TOO OLD AND NOT REPLACING ALL MISSING GTs?!
-        # REDUNDANTLY DONE IN PanGeniePanelCreation, NEED TO CHECK IN OTHER INSTANCES OF FixVariantCollisions
-        # replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        bcftools +setGT --no-version collisionless.vcf -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads $(nproc) -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
-        bcftools index ~{output_prefix}.phased.collisionless.bcf
-#            bcftools +fill-tags --no-version --threads $(nproc) -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
-#        # use vcf.gz to avoid errors from missing header lines
-#        bcftools index -t ~{output_prefix}.phased.collisionless.vcf.gz
+            histogram.txt | \
+        bcftools +setGT --no-version -Ou -- -t . -n 0p | \
+            bcftools +fill-tags --no-version --threads $(nproc) --write-index=csi -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
     >>>
 
     output {
         File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.bcf"
         File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.bcf.csi"
-        File windows = "windows.txt"
         File histogram = "histogram.txt"
     }
 
@@ -123,7 +114,7 @@ task FixVariantCollisions {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-gatk/gatk:4.6.0.0"     # needs Java + bcftools
+        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -145,9 +136,9 @@ task PanGeniePanelCreation {
         String region
         String output_prefix
 
-        File prepare_vcf_script
-        File add_ids_script
+        File prepare_vcf_and_add_ids_script
         File merge_vcfs_script
+        File cargo_toml
         Float frac_missing
 
         RuntimeAttr? runtime_attr_override
@@ -158,24 +149,27 @@ task PanGeniePanelCreation {
     command <<<
         set -euxo pipefail
 
-        pypy -m pip install pyfaidx
+        mkdir -p pangenie-utils/src/bin
+        cp ~{prepare_vcf_and_add_ids_script} pangenie-utils/src/bin
+        cp ~{merge_vcfs_script} pangenie-utils/src/bin
+        cp ~{cargo_toml} pangenie-utils
+        cd pangenie-utils
+        cargo build --release
+        cd ..
 
         bcftools stats -r ~{region} --regions-overlap 0 ~{phased_vcf} > ~{output_prefix}.stats.txt
         bcftools view --no-version -h ~{phased_vcf} > header.txt
 
         # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, split to biallelic, and run PanGenie merge script;
         # everything should be normalized or in the desired representation at this point
-        bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} -Ou | \
-            bcftools +setGT --no-version -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version -- -t AF,AC,AN | \
-            pypy ~{prepare_vcf_script} --missing ~{frac_missing} | \
-            pypy ~{add_ids_script} | \
+        bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} ~{phased_vcf} | \
+            ./pangenie-utils/target/release/prepare_vcf_and_add_ids --missing ~{frac_missing} | \
             bcftools norm --no-version -m-any --do-not-normalize | tee \
         >(  bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.bcf ) | \
-         (  pypy ~{merge_vcfs_script} merge \
-                -header header.txt \
+         (  ./pangenie-utils/target/release/merge_vcfs merge \
+                --header header.txt \
                 -r ~{reference_fasta} \
-                -ploidy 2 | \
+                --ploidy 2 | \
             bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.mergehap.bcf )
 
         bcftools stats ~{output_prefix}.prepare.id.split.mergehap.bcf > ~{output_prefix}.prepare.id.split.mergehap.stats.txt
@@ -190,7 +184,7 @@ task PanGeniePanelCreation {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation:v1"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {

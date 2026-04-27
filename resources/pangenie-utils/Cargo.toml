@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rust-htslib = "0.44.0"
+rust-htslib = { version = "0.44.0", features = ["libdeflate"] }
 clap = { version = "4.0", features = ["derive"] }
 indexmap = "2.0.0"
 
