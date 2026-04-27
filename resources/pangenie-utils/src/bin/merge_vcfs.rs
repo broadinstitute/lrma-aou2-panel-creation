@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use indexmap::IndexMap;
-use rust_htslib::faidx;
+use bio::io::fasta::IndexedReader;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
@@ -53,7 +53,6 @@ struct HaplotypeTable {
     samples: Vec<String>,
     ploidy: usize,
     chrom: Option<String>,
-    // BTreeMap guarantees iteration in 0, 1, 2... column/row order (matching Python Dict insertion order)
     haplotypes: BTreeMap<usize, Vec<i32>>,
     alleles: BTreeMap<usize, Vec<Allele>>,
     start: usize,
@@ -135,12 +134,17 @@ impl HaplotypeTable {
         ids.len()
     }
 
-    fn merge(&self, reader: &faidx::Reader) -> (Option<String>, usize) {
+    // Requires mutable access to the reader now
+    fn merge(&self, reader: &mut IndexedReader<File>) -> (Option<String>, usize) {
         if self.is_empty() { return (None, 0); }
 
         let chrom = self.chrom.as_ref().unwrap();
-        // FIX: end is inclusive in rust-htslib! To match Python's [start-1:end-1] exclusive slice, we must subtract 2.
-        let ref_allele = reader.fetch_seq(chrom, self.start - 1, self.end - 2).unwrap().to_ascii_uppercase();
+        
+        // bio::io::fasta uses 0-based exclusive end coordinates (exactly like python's slicing behavior)
+        reader.fetch(chrom, (self.start - 1) as u64, (self.end - 1) as u64).unwrap();
+        let mut ref_allele = Vec::new();
+        reader.read(&mut ref_allele).unwrap();
+        ref_allele.make_ascii_uppercase();
         let ref_allele_str = std::str::from_utf8(&ref_allele).unwrap();
 
         let mut hap_to_columns: IndexMap<Haplotype, Vec<usize>> = IndexMap::new();
@@ -265,7 +269,9 @@ fn main() {
             let chrom_filter: HashSet<String> = chromosomes.split(',')
                 .filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
             
-            let ref_reader = faidx::Reader::from_path(&reference).expect("Could not open reference");
+            // Replaced faidx::Reader with bio::io::fasta::IndexedReader
+            let mut ref_reader = IndexedReader::from_file(&reference).expect("Could not open reference");
+            
             let mut total_input = 0;
             let mut total_written = 0;
             let mut samples = Vec::new();
@@ -302,7 +308,7 @@ fn main() {
 
                 if let Some(ref mut t) = table {
                     if ((start >= prev_end) || (prev_chrom != chrom)) && !t.is_empty() {
-                        let (vcf, written) = t.merge(&ref_reader);
+                        let (vcf, written) = t.merge(&mut ref_reader);
                         if let Some(line) = vcf { println!("{}", line); }
                         total_written += written;
                         *t = HaplotypeTable::new(samples.clone(), ploidy);
@@ -317,7 +323,7 @@ fn main() {
             }
 
             if let Some(t) = table {
-                let (vcf, written) = t.merge(&ref_reader);
+                let (vcf, written) = t.merge(&mut ref_reader);
                 if let Some(line) = vcf { println!("{}", line); }
                 total_written += written;
             }

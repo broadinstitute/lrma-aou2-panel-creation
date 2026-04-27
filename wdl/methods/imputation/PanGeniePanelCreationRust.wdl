@@ -162,7 +162,7 @@ task PanGeniePanelCreation {
 
         # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, split to biallelic, and run PanGenie merge script;
         # everything should be normalized or in the desired representation at this point
-        bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref --threads 2 ~{reference_fasta} ~{phased_vcf} | \
+        bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} --threads 2 ~{phased_vcf} | \
             ./pangenie-utils/target/release/prepare_vcf_and_add_ids --missing ~{frac_missing} | \
             bcftools norm --no-version -m-any --do-not-normalize | tee \
         >(  bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.bcf ) | \
@@ -170,7 +170,7 @@ task PanGeniePanelCreation {
                 --header header.txt \
                 -r ~{reference_fasta} \
                 --ploidy 2 | \
-            bcftools view --no-version --threads 6 --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.mergehap.bcf )
+            bcftools view --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.mergehap.bcf )
 
         bcftools stats --threads 6 ~{output_prefix}.prepare.id.split.mergehap.bcf > ~{output_prefix}.prepare.id.split.mergehap.stats.txt
     >>>
