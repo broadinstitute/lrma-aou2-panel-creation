@@ -93,6 +93,12 @@ workflow StatisticalPhasing {
         output_prefix = output_prefix + ".collisionless"
     }
 
+    call CreateSitesOnlyVCF as CollisionlessBeforeShapeitSitesOnly { input:
+        vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf,
+        vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx,
+        output_prefix = output_prefix + ".collisionless.sites"
+    }
+
     call CreateShapeitChunks { input:
         vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf,
         vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx,
@@ -166,8 +172,8 @@ workflow StatisticalPhasing {
     }
 
     output {
-        File collisionless_vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf
-        File collisionless_vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx
+        File sites_only_vcf = CollisionlessBeforeShapeitSitesOnly.sites_only_vcf
+        File sites_only_vcf_idx = CollisionlessBeforeShapeitSitesOnly.sites_only_vcf_idx
         File phased_vcf = select_first([ConcatShapeit5.concatenated_vcf, LigateScaffold.ligated_vcf])
         File phased_vcf_idx = select_first([ConcatShapeit5.concatenated_vcf_idx, LigateScaffold.ligated_vcf_idx])
     }
@@ -611,6 +617,52 @@ task BcftoolsConcatNaive {
     RuntimeAttr default_attr = object {
         cpu_cores:          4,
         mem_gb:             8,
+        disk_gb:            disk_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+    }
+}
+
+task CreateSitesOnlyVCF {
+    input {
+        File vcf
+        File vcf_idx
+        String output_prefix
+
+        RuntimeAttr? runtime_attr_override
+    }
+
+    Int disk_gb = 10 + ceil(size(vcf, "GiB"))
+
+    command <<<
+        set -euxo pipefail
+
+        bcftools view --no-version --threads $(nproc) -G -Ob -o ~{output_prefix}.bcf
+        bcftools index ~{output_prefix}.bcf
+    >>>
+
+    output {
+        File sites_only_vcf = "~{output_prefix}.bcf"
+        File sites_only_vcf_idx = "~{output_prefix}.bcf.csi"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          2,
+        mem_gb:             4,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
