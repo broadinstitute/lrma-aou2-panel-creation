@@ -163,8 +163,8 @@ task PanGeniePanelCreation {
         set -euxo pipefail
 
         mkdir -p pangenie-utils/src/bin
-        cp ~{prepare_vcf_and_add_ids_script} pangenie-utils/src/bin
-        cp ~{merge_vcfs_script} pangenie-utils/src/bin
+        cp ~{prepare_vcf_and_add_ids_script} pangenie-utils/src/bin/prepare_vcf_and_add_ids.rs
+        cp ~{merge_vcfs_script} pangenie-utils/src/bin/merge_vcfs.rs
         cp ~{cargo_toml} pangenie-utils
         cd pangenie-utils
         cargo build --release

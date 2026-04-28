@@ -650,7 +650,7 @@ task CreateSitesOnlyVCF {
     command <<<
         set -euxo pipefail
 
-        bcftools view --no-version --threads $(nproc) -G -Ob -o ~{output_prefix}.bcf
+        bcftools view --no-version --threads $(nproc) ~{vcf} -G -Ob -o ~{output_prefix}.bcf
         bcftools index ~{output_prefix}.bcf
     >>>
 
