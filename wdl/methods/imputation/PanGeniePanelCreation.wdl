@@ -72,9 +72,9 @@ task FixVariantCollisions {
         File phased_vcf                     # biallelic
         File fix_variant_collisions_java
         Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
-        String weight_tag = "AF"            # ID of the weight field; weights are assumed to be non-negative; TODO we set to AF for now, perhaps should annotate SVLEN or something else that would prefer SVs
+        String weight_tag = "SCORE"         # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
         Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
-        Float default_weight = 0            # default weight if the weight field is not found
+        Float default_weight = 0.1          # default weight if the weight field is not found
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
@@ -84,6 +84,8 @@ task FixVariantCollisions {
 
     command <<<
         set -euxo pipefail
+
+        # TODO: annotate SCORE from concatenated VCF
 
         time java ~{fix_variant_collisions_java} \
             ~{phased_vcf} \

@@ -4,6 +4,8 @@ workflow PanGeniePanelCreation {
     input {
         File phased_vcf
         File phased_vcf_idx
+        File annotations_vcf        # output of FixVariantCollisions step before Shapeit4
+        File annotations_vcf_idx
         File reference_fasta
         File reference_fasta_fai
         String region
@@ -24,6 +26,9 @@ workflow PanGeniePanelCreation {
 
     call FixVariantCollisions { input:
         phased_vcf = phased_vcf,
+        phased_vcf_idx = phased_vcf_idx,
+        annotations_vcf = annotations_vcf,
+        annotations_vcf_idx = annotations_vcf_idx,
         fix_variant_collisions_script = fix_variant_collisions_script,
         operation = operation,
         weight_tag = weight_tag,
@@ -72,11 +77,14 @@ struct RuntimeAttr {
 task FixVariantCollisions {
     input {
         File phased_vcf                     # biallelic
+        File phased_vcf_idx
+        File annotations_vcf
+        File annotations_vcf_idx
         File fix_variant_collisions_script
         Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
-        String weight_tag = "AF"            # ID of the weight field; weights are assumed to be non-negative; TODO we set to AF for now, perhaps should annotate SVLEN or something else that would prefer SVs
+        String weight_tag = "SCORE"         # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
         Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
-        Float default_weight = 0            # default weight if the weight field is not found
+        Float default_weight = 0.1          # default weight if the weight field is not found
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
@@ -90,7 +98,7 @@ task FixVariantCollisions {
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
         # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        time bcftools view ~{phased_vcf} --threads 2 | \
+        time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \

@@ -166,6 +166,8 @@ workflow StatisticalPhasing {
     }
 
     output {
+        File collisionless_vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf
+        File collisionless_vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx
         File phased_vcf = select_first([ConcatShapeit5.concatenated_vcf, LigateScaffold.ligated_vcf])
         File phased_vcf_idx = select_first([ConcatShapeit5.concatenated_vcf_idx, LigateScaffold.ligated_vcf_idx])
     }
