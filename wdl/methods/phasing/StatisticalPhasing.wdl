@@ -413,11 +413,9 @@ task FilterAndConcatVcfs {
         set -euxo pipefail
 
         # split to biallelic and filter short (re-fill tags when needed)
-        # normalize representations and then re-join/split to try to recover duplicates
-        bcftools norm --no-version -r ~{region} \
-                -m-any -f ~{reference_fasta} ~{short_vcf} -Ou | \
-            bcftools norm --no-version -m+any -Ou | \
-            bcftools norm --no-version -m-any -Ou | \
+        # order of operations matters here!
+        bcftools norm --no-version -r ~{region} -m-any ~{short_vcf} -Ou | \
+            bcftools norm --no-version -f ~{reference_fasta} -Ou | \
             bcftools +fill-tags --no-version -Ou -- -t AF,AC,AN | \
             bcftools filter --no-version ~{filter_and_concat_short_filter_args} -Ou | \
             bcftools +fill-tags --no-version -Ou -- -t AF,AC,AN | \
