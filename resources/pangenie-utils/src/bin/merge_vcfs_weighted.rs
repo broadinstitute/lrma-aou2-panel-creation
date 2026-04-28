@@ -253,14 +253,18 @@ impl HaplotypeTable {
                 } else if let Some((kept_comps, kept_weight, pos)) = seq_to_kept_components.get_mut(seq) {
                     allele_idx = (*pos + 1) as i32;
                     
-                    if weight > kept_weight {
+                    // Priority 1: Fewer variants. Priority 2: Higher total weight.
+                    let replace = components.len() < kept_comps.len() 
+                        || (components.len() == kept_comps.len() && *weight > *kept_weight);
+
+                    if replace {
                         eprintln!("Different allele combinations lead to same sequence at {}:{}.", chrom, self.start);
-                        eprintln!("  Replacing kept combination with heavier alternative.");
-                        eprintln!("  New Kept combination components (Total Weight {}):", weight);
+                        eprintln!("  Replacing kept combination with one made of fewer variants (or heavier tie-breaker).");
+                        eprintln!("  New Kept combination components ({} variants, Total Weight {}):", components.len(), weight);
                         for c in components {
                             eprintln!("    CHROM: {} POS: {} REF: {} ALT: {} WEIGHT: {} ID: {}", chrom, c.start, c.ref_seq, c.seq, c.weight, c.id);
                         }
-                        eprintln!("  Skipped combination components (Total Weight {}):", kept_weight);
+                        eprintln!("  Skipped combination components ({} variants, Total Weight {}):", kept_comps.len(), kept_weight);
                         for c in kept_comps.iter() {
                             eprintln!("    CHROM: {} POS: {} REF: {} ALT: {} WEIGHT: {} ID: {}", chrom, c.start, c.ref_seq, c.seq, c.weight, c.id);
                         }
@@ -271,12 +275,12 @@ impl HaplotypeTable {
                         
                     } else if ids_list[*pos] != *id_str {
                         eprintln!("Different allele combinations lead to same sequence at {}:{}.", chrom, self.start);
-                        eprintln!("  Keeping existing combination. Skipping lighter alternative.");
-                        eprintln!("  Kept combination components (Total Weight {}):", kept_weight);
+                        eprintln!("  Keeping existing combination. Skipping alternative with more variants (or lighter tie-breaker).");
+                        eprintln!("  Kept combination components ({} variants, Total Weight {}):", kept_comps.len(), kept_weight);
                         for c in kept_comps.iter() {
                             eprintln!("    CHROM: {} POS: {} REF: {} ALT: {} WEIGHT: {} ID: {}", chrom, c.start, c.ref_seq, c.seq, c.weight, c.id);
                         }
-                        eprintln!("  Skipped combination components (Total Weight {}):", weight);
+                        eprintln!("  Skipped combination components ({} variants, Total Weight {}):", components.len(), weight);
                         for c in components {
                             eprintln!("    CHROM: {} POS: {} REF: {} ALT: {} WEIGHT: {} ID: {}", chrom, c.start, c.ref_seq, c.seq, c.weight, c.id);
                         }
