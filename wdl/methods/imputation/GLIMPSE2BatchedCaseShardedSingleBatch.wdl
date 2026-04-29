@@ -125,28 +125,26 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         }
     }
 
-    call ConcatVcfs as GLIMPSE2PosteriorsConcatVcfs {
+    call BcftoolsConcatNaive as GLIMPSE2PosteriorsConcatVcfs {
         input:
             vcfs = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz,
             vcf_idxs = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz_tbi,
-            output_prefix = output_prefix + ".glimpse2.posteriors",
-            docker = docker
+            output_prefix = output_prefix + ".glimpse2.posteriors"
     }
 
-    call ConcatVcfs as GLIMPSE2PosteriorsCollisionlessConcatVcfs {
+    call BcftoolsConcatNaive as GLIMPSE2PosteriorsCollisionlessConcatVcfs {
         input:
             vcfs = ChromosomeGLIMPSE2PosteriorsCollisionless.phased_collisionless_vcf,
             vcf_idxs = ChromosomeGLIMPSE2PosteriorsCollisionless.phased_collisionless_vcf_idx,
-            output_prefix = output_prefix + ".glimpse2.collisionless",
-            docker = docker
+            output_prefix = output_prefix + ".glimpse2.collisionless"
     }
 
     output {
         Array[Array[File]] chromosome_panel_split_chunk_bins = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin
-        File glimpse2_posteriors_vcf_gz = GLIMPSE2PosteriorsConcatVcfs.vcf_gz
-        File glimpse2_posteriors_vcf_gz_tbi = GLIMPSE2PosteriorsConcatVcfs.vcf_gz_tbi
-        File glimpse2_posteriors_collisionless_vcf_gz = GLIMPSE2PosteriorsCollisionlessConcatVcfs.vcf_gz
-        File glimpse2_posteriors_collisionless_vcf_gz_tbi = GLIMPSE2PosteriorsCollisionlessConcatVcfs.vcf_gz_tbi
+        File glimpse2_posteriors_vcf_gz = GLIMPSE2PosteriorsConcatVcfs.concatenated_vcf
+        File glimpse2_posteriors_vcf_gz_tbi = GLIMPSE2PosteriorsConcatVcfs.concatenated_vcf_idx
+        File glimpse2_posteriors_collisionless_vcf_gz = GLIMPSE2PosteriorsCollisionlessConcatVcfs.concatenated_vcf
+        File glimpse2_posteriors_collisionless_vcf_gz_tbi = GLIMPSE2PosteriorsCollisionlessConcatVcfs.concatenated_vcf_idx
     }
 }
 
@@ -543,51 +541,39 @@ task FixVariantCollisions {
     }
 }
 
-task ConcatVcfs {
+task BcftoolsConcatNaive {
     input {
         Array[File] vcfs
         Array[File] vcf_idxs
         String output_prefix
-        String docker
 
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 3 * ceil(size(vcfs, "GB")) + 10
+    Int disk_gb = 50 + 4 * ceil(size(vcfs, "GiB"))
 
-    command {
-        set -euox pipefail
+    command <<<
+        set -euxo pipefail
 
-        # TODO FIX LEXICOGRAPHICAL BUG!
-        mkdir inputs
-        mv ~{sep=' ' vcfs} inputs
-        mv ~{sep=' ' vcf_idxs} inputs
-
-        if [ $(ls inputs/*.vcf.gz | wc -l) == 1 ]
-        then
-            cp $(ls inputs/*.vcf.gz) ~{output_prefix}.vcf.gz
-            cp $(ls inputs/*.vcf.gz.tbi) ~{output_prefix}.vcf.gz.tbi
-        else
-            bcftools concat $(ls inputs/*.vcf.gz) --naive -Oz -o ~{output_prefix}.vcf.gz
-            bcftools index -t ~{output_prefix}.vcf.gz
-        fi
-    }
+        bcftools concat --no-version ~{sep=" " vcfs} --naive -Ob -o ~{output_prefix}.bcf
+        bcftools index ~{output_prefix}.bcf
+    >>>
 
     output {
-        File vcf_gz = "~{output_prefix}.vcf.gz"
-        File vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
+        File concatenated_vcf = "~{output_prefix}.bcf"
+        File concatenated_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          1,
-        mem_gb:             7,
-        disk_gb:            disk_size_gb,
+        cpu_cores:          4,
+        mem_gb:             8,
+        disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             docker
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
