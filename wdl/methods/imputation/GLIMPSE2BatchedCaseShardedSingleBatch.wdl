@@ -319,7 +319,7 @@ task PreprocessPLs {
             -r ~{output_region} \
             --regions-overlap pos \
             -S ~{write_lines(sample_names)} \
-            --threads $(nproc) | \
+            --threads 2 | \
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
             --bubble panel.subset.sites.vcf.gz | \
         bcftools +tag2tag -Ou -- --LPL-to-PL | \
