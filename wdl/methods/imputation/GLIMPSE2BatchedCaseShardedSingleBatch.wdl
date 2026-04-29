@@ -326,8 +326,8 @@ task PreprocessPLs {
         bcftools norm -m-any -Ou | \
         bcftools filter -i 'INFO/BMAP != "."' | \
         pypy ~{swap_alleles_python_script} | \
-        bcftools annotate -x INFO/BMAP,INFO/BUBBLE,INFO/BPOS,INFO/BREF,INFO/BALT \
-            --write-index=csi -Ob -o ~{output_prefix}.bcf
+        bcftools annotate -x INFO/BMAP,INFO/BUBBLE,INFO/BPOS,INFO/BREF,INFO/BALT | \
+        bcftools sort --write-index=csi -Ob -o ~{output_prefix}.bcf
     }
 
     output {
@@ -337,8 +337,8 @@ task PreprocessPLs {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          1,
-        mem_gb:             7,
+        cpu_cores:          4,
+        mem_gb:             6,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
