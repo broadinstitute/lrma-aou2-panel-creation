@@ -39,6 +39,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         Int operation
         String weight_tag
         Int is_weight_format_field
+        Float default_weight
 
         String docker
     }
@@ -119,6 +120,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             operation = operation,
             weight_tag = weight_tag,
             is_weight_format_field = is_weight_format_field,
+            default_weight = default_weight,
             output_prefix = output_prefix + "." + chromosome + ".glimpse2.collisionless"
         }
     }
