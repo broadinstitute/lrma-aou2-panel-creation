@@ -446,12 +446,12 @@ task GLIMPSE2Ligate {
         wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_ligate_static
         chmod +x GLIMPSE2_ligate_static
 
-        ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
+        ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.vcf.gz --thread $(nproc)
     >>>
 
     output {
-        File ligated_vcf = "~{output_prefix}.bcf"
-        File ligated_vcf_idx = "~{output_prefix}.bcf.csi"
+        File ligated_vcf = "~{output_prefix}.vcf.gz"
+        File ligated_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
     }
 
     #########################
@@ -509,12 +509,12 @@ task FixVariantCollisions {
             ~{default_weight} \
             histogram.txt | \
         bcftools +setGT --no-version -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
+            bcftools +fill-tags --no-version --threads 2 --write-index=csi -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
     >>>
 
     output {
-        File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.bcf"
-        File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.bcf.csi"
+        File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.vcf.gz"
+        File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.vcf.gz.tbi"
         File histogram = "histogram.txt"
     }
 
@@ -555,13 +555,13 @@ task BcftoolsConcatNaive {
     command <<<
         set -euxo pipefail
 
-        bcftools concat --no-version ~{sep=" " vcfs} --naive -Ob -o ~{output_prefix}.bcf
-        bcftools index ~{output_prefix}.bcf
+        bcftools concat --no-version ~{sep=" " vcfs} --naive -Oz -o ~{output_prefix}.vcf.gz
+        bcftools index -t ~{output_prefix}.vcf.gz
     >>>
 
     output {
-        File concatenated_vcf = "~{output_prefix}.bcf"
-        File concatenated_vcf_idx = "~{output_prefix}.bcf.csi"
+        File concatenated_vcf = "~{output_prefix}.vcf.gz"
+        File concatenated_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
     }
 
     #########################
