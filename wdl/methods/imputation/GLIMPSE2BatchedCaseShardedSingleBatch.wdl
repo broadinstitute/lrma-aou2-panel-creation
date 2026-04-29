@@ -112,8 +112,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         }
 
         call FixVariantCollisions as ChromosomeGLIMPSE2PosteriorsCollisionless { input:
-            phased_vcf = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz,
-            phased_vcf_idx = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz_tbi,
+            phased_vcf = ChromosomeGLIMPSE2Ligate.ligated_vcf,
+            phased_vcf_idx = ChromosomeGLIMPSE2Ligate.ligated_vcf_idx,
             annotations_vcf = annotations_vcf,
             annotations_vcf_idx = annotations_vcf_idx,
             fix_variant_collisions_script = fix_variant_collisions_script,
@@ -127,8 +127,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     call BcftoolsConcatNaive as GLIMPSE2PosteriorsConcatVcfs {
         input:
-            vcfs = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz,
-            vcf_idxs = ChromosomeGLIMPSE2Ligate.ligated_vcf_gz_tbi,
+            vcfs = ChromosomeGLIMPSE2Ligate.ligated_vcf,
+            vcf_idxs = ChromosomeGLIMPSE2Ligate.ligated_vcf_idx,
             output_prefix = output_prefix + ".glimpse2.posteriors"
     }
 
@@ -141,10 +141,10 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     output {
         Array[Array[File]] chromosome_panel_split_chunk_bins = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin
-        File glimpse2_posteriors_vcf_gz = GLIMPSE2PosteriorsConcatVcfs.concatenated_vcf
-        File glimpse2_posteriors_vcf_gz_tbi = GLIMPSE2PosteriorsConcatVcfs.concatenated_vcf_idx
-        File glimpse2_posteriors_collisionless_vcf_gz = GLIMPSE2PosteriorsCollisionlessConcatVcfs.concatenated_vcf
-        File glimpse2_posteriors_collisionless_vcf_gz_tbi = GLIMPSE2PosteriorsCollisionlessConcatVcfs.concatenated_vcf_idx
+        File glimpse2_posteriors_vcf = GLIMPSE2PosteriorsConcatVcfs.concatenated_vcf
+        File glimpse2_posteriors_vcf_idx = GLIMPSE2PosteriorsConcatVcfs.concatenated_vcf_idx
+        File glimpse2_posteriors_collisionless_vcf = GLIMPSE2PosteriorsCollisionlessConcatVcfs.concatenated_vcf
+        File glimpse2_posteriors_collisionless_vcf_idx = GLIMPSE2PosteriorsCollisionlessConcatVcfs.concatenated_vcf_idx
     }
 }
 
@@ -446,12 +446,12 @@ task GLIMPSE2Ligate {
         wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_ligate_static
         chmod +x GLIMPSE2_ligate_static
 
-        ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.vcf.gz --thread $(nproc)
+        ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
     >>>
 
     output {
-        File ligated_vcf_gz = "~{output_prefix}.vcf.gz"
-        File ligated_vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
+        File ligated_vcf = "~{output_prefix}.bcf"
+        File ligated_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
