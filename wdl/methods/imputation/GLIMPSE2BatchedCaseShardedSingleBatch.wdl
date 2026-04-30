@@ -33,8 +33,6 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File swap_alleles_python_script
 
         # inputs for FixVariantCollisions
-        File annotations_vcf
-        File annotations_vcf_idx
         File fix_variant_collisions_script
         Int operation
         String weight_tag
@@ -114,8 +112,6 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         call FixVariantCollisions as ChromosomeGLIMPSE2PosteriorsCollisionless { input:
             phased_vcf = ChromosomeGLIMPSE2Ligate.ligated_vcf,
             phased_vcf_idx = ChromosomeGLIMPSE2Ligate.ligated_vcf_idx,
-            annotations_vcf = annotations_vcf,
-            annotations_vcf_idx = annotations_vcf_idx,
             fix_variant_collisions_script = fix_variant_collisions_script,
             operation = operation,
             weight_tag = weight_tag,
@@ -485,9 +481,9 @@ task FixVariantCollisions {
         File annotations_vcf_idx
         File fix_variant_collisions_script
         Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
-        String weight_tag = "SCORE"         # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
+        String weight_tag = "AC"            # ID of the weight field; weights are assumed to be non-negative
         Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
-        Float default_weight = 0.1          # default weight if the weight field is not found
+        Float default_weight = 0            # default weight if the weight field is not found
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
@@ -500,8 +496,8 @@ task FixVariantCollisions {
 
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
-        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
+        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles
+        time bcftools +fill-AN-AC --no-version ~{phased_vcf} --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
@@ -509,7 +505,7 @@ task FixVariantCollisions {
             ~{default_weight} \
             histogram.txt | \
         bcftools +setGT --no-version -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads 2 --write-index=csi -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
+            bcftools +fill-tags --no-version --threads 2 --write-index=tbi -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
     >>>
 
     output {
