@@ -19,7 +19,7 @@ sed -e "s|__REPO_DIR__|$REPO_DIR|g" $REPO_DIR/test/resources/statistical-phasing
 java -jar $CROMWELL_JAR run $REPO_DIR/wdl/methods/phasing/StatisticalPhasing.wdl -i $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.mod.json -m $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.mod.output.json
 
 RESULT=$(jq -r '.outputs."StatisticalPhasing.phased_vcf"' $REPO_DIR/test/resources/statistical-phasing/statistical-phasing.mod.output.json)
-EXPECTED=$REPO_DIR/test/resources/large/statistical-phasing/expected/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.bcf
+EXPECTED=$REPO_DIR/test/resources/large/statistical-phasing/expected/40-HPRC-1kGP.chr6-70M-80M.shifted.phased.ligated.bcf
 
 diff <(bcftools view -h --no-version $EXPECTED | grep -v fileDate) <(bcftools view -h --no-version $RESULT | grep -v fileDate)
 diff <(bcftools view -H --no-version $EXPECTED) <(bcftools view -H --no-version $RESULT) | head -500
