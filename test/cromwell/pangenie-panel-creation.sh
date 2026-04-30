@@ -15,10 +15,22 @@ REPO_DIR=${REPO_DIR:=/home/runner/work/lrma-aou2-panel-creation/lrma-aou2-panel-
 # insert repo dir into resource files (this will create *.mod.* files, which may need to be cleaned up locally)
 sed -e "s|__REPO_DIR__|$REPO_DIR|g" $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.json > $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.json
 
-java -jar $CROMWELL_JAR run $REPO_DIR/wdl/methods/imputation/PanGeniePanelCreation.wdl -i $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.json -m $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.output.json
+java -jar $CROMWELL_JAR run $REPO_DIR/wdl/methods/imputation/PanGeniePanelCreationRust.wdl -i $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.json -m $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.output.json
+
+RESULT=$(jq -r '.outputs."PanGeniePanelCreation.phased_collisionless_vcf"' $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.output.json)
+EXPECTED=$REPO_DIR/test/resources/large/pangenie-panel-creation/expected/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.phased.collisionless.bcf
+
+diff <(bcftools view -h --no-version $EXPECTED | grep -v bcftools_viewCommand) <(bcftools view -h --no-version $RESULT | grep -v bcftools_viewCommand)
+diff <(bcftools view -H --no-version $EXPECTED) <(bcftools view -H --no-version $RESULT) | head -500
 
 RESULT=$(jq -r '.outputs."PanGeniePanelCreation.panel_vcf"' $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.output.json)
 EXPECTED=$REPO_DIR/test/resources/large/pangenie-panel-creation/expected/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.prepare.id.split.mergehap.bcf
+
+diff <(bcftools view -h --no-version $EXPECTED | grep -v bcftools_viewCommand) <(bcftools view -h --no-version $RESULT | grep -v bcftools_viewCommand)
+diff <(bcftools view -H --no-version $EXPECTED) <(bcftools view -H --no-version $RESULT) | head -500
+
+RESULT=$(jq -r '.outputs."PanGeniePanelCreation.panel_id_split_vcf"' $REPO_DIR/test/resources/pangenie-panel-creation/pangenie-panel-creation.mod.output.json)
+EXPECTED=$REPO_DIR/test/resources/large/pangenie-panel-creation/expected/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.prepare.id.split.bcf
 
 diff <(bcftools view -h --no-version $EXPECTED | grep -v bcftools_viewCommand) <(bcftools view -h --no-version $RESULT | grep -v bcftools_viewCommand)
 diff <(bcftools view -H --no-version $EXPECTED) <(bcftools view -H --no-version $RESULT) | head -500
