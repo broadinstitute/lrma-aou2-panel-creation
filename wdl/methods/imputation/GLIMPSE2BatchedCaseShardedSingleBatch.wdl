@@ -33,6 +33,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File swap_alleles_python_script
 
         # inputs for FixVariantCollisions
+        File annotations_vcf
+        File annotations_vcf_idx
         File fix_variant_collisions_script
         Int operation
         String weight_tag
@@ -112,6 +114,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         call FixVariantCollisions as ChromosomeGLIMPSE2PosteriorsCollisionless { input:
             phased_vcf = ChromosomeGLIMPSE2Ligate.ligated_vcf,
             phased_vcf_idx = ChromosomeGLIMPSE2Ligate.ligated_vcf_idx,
+            annotations_vcf = annotations_vcf,
+            annotations_vcf_idx = annotations_vcf_idx,
             fix_variant_collisions_script = fix_variant_collisions_script,
             operation = operation,
             weight_tag = weight_tag,
@@ -496,8 +500,8 @@ task FixVariantCollisions {
 
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
-        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles
-        time bcftools +fill-AN-AC --no-version ~{phased_vcf} --threads 2 | \
+        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
+        time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/AF,INFO/AC,INFO/AN, -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
