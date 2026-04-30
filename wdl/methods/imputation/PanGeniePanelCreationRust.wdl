@@ -47,6 +47,8 @@ workflow PanGeniePanelCreation {
         merge_vcfs_script = merge_vcfs_script,
         cargo_toml = cargo_toml,
         frac_missing = frac_missing,
+        weight_tag = weight_tag,
+        default_weight = default_weight,
         output_prefix = output_prefix
     }
 
@@ -151,7 +153,7 @@ task PanGeniePanelCreation {
         File merge_vcfs_script
         File cargo_toml
         Float frac_missing
-        String? weight_field
+        String? weight_tag
         Float? default_weight
 
         RuntimeAttr? runtime_attr_override
@@ -183,7 +185,7 @@ task PanGeniePanelCreation {
                 --header header.txt \
                 -r ~{reference_fasta} \
                 --ploidy 2 \
-                ~{"--weight " + weight_field} \
+                ~{"--weight " + weight_tag} \
                 ~{"--default-weight " + default_weight} | \
             bcftools view --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.mergehap.bcf )
 
