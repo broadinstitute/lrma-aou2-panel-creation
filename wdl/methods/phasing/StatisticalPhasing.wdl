@@ -1,5 +1,7 @@
 version 1.0
 
+import "StatisticalPhasing_Stage0_CreateShards.wdl" as CreateShards
+import "StatisticalPhasing_Stage1_FilterAndConcatVcfs.wdl" as FilterAndConcatVcfs
 
 workflow StatisticalPhasing {
 
@@ -15,18 +17,22 @@ workflow StatisticalPhasing {
         String region
         String output_prefix
 
+        # CreateFilterAndConcatShards
         Int filter_and_concat_shard_size = 2000000
+
+        # FilterAndConcat
         String? filter_and_concat_short_filter_args
         String filter_and_concat_short_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
         String filter_and_concat_sv_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
 
-        # inputs for FixVariantCollisions (see documentation for arguments in task)
+        # FixVariantCollisions (see documentation for arguments in task)
         File fix_variant_collisions_script
         Int operation = 1
         String weight_tag = "SCORE"
         Int is_weight_format_field = 0
         Float default_weight = 0.1
 
+        # CreateShapeitChunks
         String chunk_extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 50000 --buffer-count 500" # we want window counts to drive the constraints
 
         Boolean do_shapeit5 = true
@@ -37,44 +43,29 @@ workflow StatisticalPhasing {
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
 
-    call CreateShards { input:
+    call CreateShards.CreateShards as CreateFilterAndConcatShards { input:
         region = region,
-        bin_size = filter_and_concat_shard_size,
-        pad_size = 0,
+        shard_size = filter_and_concat_shard_size,
         output_prefix = output_prefix + ".shards"
     }
 
-    scatter (s in range(length(CreateShards.shard_regions))) {
-        String shard_region = CreateShards.shard_regions[s]
+    scatter (s in range(length(CreateFilterAndConcatShards.shard_regions))) {
+        String shard_region = CreateFilterAndConcatShards.shard_regions[s]
         
-        call SubsetVCFStreaming as SubsetVcfShort { input:
-            vcf = joint_short_vcf,
-            vcf_idx = joint_short_vcf_idx,
-            region = shard_region,
-            output_prefix = output_prefix + ".subsetShort.shard-" + s
-        }
-
-        call SubsetVCF as SubsetVcfSV { input:
-            vcf = select_first([joint_sv_vcf ]),
-            vcf_idx = select_first([joint_sv_vcf_idx]),
-            region = shard_region,
-            output_prefix = output_prefix + ".subsetSV.shard-" + s
-        }
-
-        call FilterAndConcatVcfs { input:
-            short_vcf = SubsetVcfShort.subset_vcf,
-            short_vcf_idx = SubsetVcfShort.subset_idx,
-            sv_vcf = SubsetVcfSV.subset_vcf,
-            sv_vcf_idx = SubsetVcfSV.subset_idx,
-            output_prefix = output_prefix + ".filterAndConcat.shard-" + s,
+        call FilterAndConcatVcfs.FilterAndConcatVcfs as FilterAndConcatVcfs { input:
+            short_vcf = joint_short_vcf,
+            short_vcf_idx = joint_short_vcf_idx,
+            sv_vcf = joint_sv_vcf,
+            sv_vcf_idx = joint_sv_vcf_idx,
+            output_prefix = output_prefix + ".shard-" + s,
             reference_fasta = reference_fasta,
             reference_fasta_fai = reference_fasta_fai,
             region = shard_region,
-            filter_and_concat_short_view_args = filter_and_concat_short_view_args,
-            filter_and_concat_short_filter_args = filter_and_concat_short_filter_args,
-            filter_and_concat_sv_view_args = filter_and_concat_sv_view_args
+            short_view_args = filter_and_concat_short_view_args,
+            short_filter_args = filter_and_concat_short_filter_args,
+            sv_view_args = filter_and_concat_sv_view_args
         }
-        
+
         # added variant collision fix step
         call FixVariantCollisions { input:
             phased_vcf = FilterAndConcatVcfs.filter_and_concat_vcf,
