@@ -206,8 +206,7 @@ task FilterShortVcf {
 
         # normalize then split to biallelic, then filter short (re-fill tags when needed)
         # order of operations matters for final variant representations, only change with caution!
-        bcftools norm --no-version -m-any ~{short_vcf} -Ou | \
-            bcftools norm --no-version -f ~{reference_fasta} -Ou | \
+        bcftools norm --no-version -m-any -f ~{reference_fasta} ~{short_vcf} -Ou | \
             bcftools +fill-tags --no-version -Ou -- -t AF,AC,AN | \
             bcftools filter --no-version ~{short_filter_args} -Ou | \
             bcftools +fill-tags --no-version -Ou -- -t AF,AC,AN | \
