@@ -212,7 +212,7 @@ task HiPhase {
         File reference_fasta_fai
 
         Boolean do_haplotagging = false
-        String extra_args = "--threads $(nproc) --global-realignment-cputime 300 --verbose"
+        String extra_args = "--threads $(nproc) --global-realignment-cputime 300"
 
         RuntimeAttr? runtime_attr_override
     }
