@@ -250,7 +250,7 @@ task HiPhase {
         File? hiphase_trgt_vcf = "~{sample_name}.hiphase.trgt.bcf"
         File? hiphase_trgt_vcf_idx = "~{sample_name}.hiphase.trgt.bcf.csi"
         File? haplotagged_bam = "~{sample_name}.hiphase.haplotagged.bam"
-        File? haplotagged_bam_idx = "~{sample_name}.hiphase.haplotagged.bam.bai"
+        File? haplotagged_bam_idx = "~{sample_name}.hiphase.haplotagged.bam.csi"
         Array[File] hiphase_metrics_files = glob("~{sample_name}.hiphase.*.*sv")
     }
 
