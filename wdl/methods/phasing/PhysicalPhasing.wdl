@@ -44,7 +44,7 @@ workflow PhysicalPhasing {
         File reference_fasta_fai
 
         Boolean do_haplotagging = false
-        String hiphase_extra_args = "--threads $(nproc) --global-realignment-cputime 300 --verbose"
+        String hiphase_extra_args = "--threads $(nproc) --global-realignment-cputime 300"
     }
 
     call PreProcessVCFs { input:
