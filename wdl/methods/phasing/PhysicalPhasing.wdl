@@ -145,7 +145,7 @@ task PreProcessVCFs {
                 -m-any -Ou | \
             bcftools view ~{short_view_args} -Ou | \
             bcftools filter ~{short_filter_args} -Ou | \
-            bcftools sort -Ou -W=csi -Ob -o ~{sample_name}.preprocessed.short.bcf
+            bcftools sort -W=csi -Ob -o ~{sample_name}.preprocessed.short.bcf
 
         # localize, concat, and subset sv
         gsutil -m cp ~{sv_vcf_shard_paths} .
