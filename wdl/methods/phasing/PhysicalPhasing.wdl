@@ -217,6 +217,7 @@ task HiPhase {
         RuntimeAttr? runtime_attr_override
     }
 
+    # TODO adjust based on do_haplotagging?
     Int disk_gb = 10 + 2 * ceil(size(select_all([bam, short_vcf, sv_vcf, trgt_vcf, reference_fasta]), "GB"))
 
     String haplotagging_args = if do_haplotagging then "--output-bam ~{sample_name}.hiphase.haplotagged.bam --haplotag-file ~{sample_name}.hiphase.haplotagged.tsv" else ""
