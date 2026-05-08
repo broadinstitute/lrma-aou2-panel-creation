@@ -233,6 +233,7 @@ task HiPhase {
         --output-vcf ~{sample_name}.hiphase.short.bcf \
         --vcf ~{sv_vcf} \
         --output-vcf ~{sample_name}.hiphase.sv.bcf \
+        --csi-index \
         --stats-file ~{sample_name}.hiphase.stats.csv \
         --blocks-file ~{sample_name}.hiphase.blocks.tsv \
         --summary-file ~{sample_name}.hiphase.summary.tsv \
