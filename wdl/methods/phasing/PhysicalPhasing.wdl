@@ -72,6 +72,7 @@ workflow PhysicalPhasing {
         bam_idx = bam_idx,
         reference_fasta = reference_fasta,
         reference_fasta_fai = reference_fasta_fai,
+        do_haplotagging = do_haplotagging,
         extra_args = hiphase_extra_args
     }
 
