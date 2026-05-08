@@ -35,7 +35,7 @@ workflow PhysicalPhasing {
         File? trgt_vcf                  # untested
         File? trgt_vcf_idx
 
-        String short_view_args = "-i 'QUAL<=20 && abs(ILEN)<20 && FILTER=\"PASS\"'"
+        String short_view_args = "-e 'QUAL<20 || abs(ILEN)>=20 || FILTER!=\"PASS\"'"
         String short_filter_args = "-S . -e 'GT=\"alt\" && ((TYPE=\"snp\" && GQ<20) || (TYPE!=\"snp\" && GQ<5))'"
 
         File bam
@@ -111,7 +111,7 @@ task PreProcessVCFs {
         File reference_fasta
         File reference_fasta_fai
 
-        String short_view_args = "-e 'QUAL<20 && abs(ILEN)>=20 && FILTER!=\"PASS\"'"
+        String short_view_args = "-e 'QUAL<20 || abs(ILEN)>=20 || FILTER!=\"PASS\"'"
         String short_filter_args = "-S . -e 'GT=\"alt\" && ((TYPE=\"snp\" && GQ<20) || (TYPE!=\"snp\" && GQ<5))'"
 
         RuntimeAttr? runtime_attr_override
