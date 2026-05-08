@@ -1,5 +1,8 @@
 version: 1.2
 workflows:
+- name: PhysicalPhasing
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/PhysicalPhasing.wdl
 - name: StatisticalPhasing
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing.wdl
