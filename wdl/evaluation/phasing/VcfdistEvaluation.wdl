@@ -31,7 +31,6 @@ workflow VcfdistEvaluation {
         Array[File] vcfdist_bed_files
         Array[String] labels_per_stratification
         String? vcfdist_extra_args
-        Int? vcfdist_mem_gb
 
         String summarize_evaluations_docker
     }
