@@ -221,10 +221,17 @@ task HiPhase {
     Int disk_gb = 10 + 2 * ceil(size(select_all([bam, short_vcf, sv_vcf, trgt_vcf, reference_fasta]), "GB"))
 
     String haplotagging_args = if do_haplotagging then "--output-bam ~{sample_name}.hiphase.haplotagged.bam --haplotag-file ~{sample_name}.hiphase.haplotagged.tsv" else ""
-    String trgt_args = if defined(trgt_vcf) then "--vcf ~{trgt_vcf} --output-vcf ~{sample_name}.hiphase.trgt.bcf" else ""
 
     command <<<
         set -euxo pipefail
+
+        # touch indices to avoid "older than" error messages
+        # TODO: update htslib to a more recent version that doesn't throw these?
+        touch ~{short_vcf_idx}
+        touch ~{sv_vcf_idx}
+        touch ~{bam_idx}
+        touch ~{reference_fasta_fai}
+        ~{if defined(trgt_vcf_idx) then "touch " + trgt_vcf_idx else ""}
 
         hiphase \
         --bam ~{bam} \
@@ -238,7 +245,7 @@ task HiPhase {
         --blocks-file ~{sample_name}.hiphase.blocks.tsv \
         --summary-file ~{sample_name}.hiphase.summary.tsv \
         ~{haplotagging_args} \
-        ~{trgt_args} \
+        ~{if defined(trgt_vcf) then "--vcf " + trgt_vcf + " --output-vcf " + sample_name + ".hiphase.trgt.bcf" else ""} \
         ~{extra_args}
     >>>
 
@@ -257,7 +264,7 @@ task HiPhase {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          4,
-        mem_gb:             8,
+        mem_gb:             12,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
