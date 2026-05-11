@@ -18,3 +18,6 @@ workflows:
 - name: VcfdistAndSwitchEvaluation
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistAndSwitchEvaluation.wdl
+- name: HierarchicallyMergeVcfs
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/HierarchicallyMergeVcfs.wdl
