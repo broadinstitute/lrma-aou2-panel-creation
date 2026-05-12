@@ -111,7 +111,7 @@ task CreateShards {
                         svlen = abs(val[0]) if isinstance(val, (tuple, list)) else abs(val)
                     else:
                         svlen = abs(rec.stop - rec.pos)
-                    
+
                     if svlen >= min_sv_len:
                         svs.append((rec.pos, rec.stop))
                 vcf.close()
@@ -125,7 +125,7 @@ task CreateShards {
 
             # Capture stderr to properly surface errors if the command fails (e.g., bcftools not installed)
             proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            
+
             pos_list = []
             for line in tqdm(proc.stdout, desc=f"Reading short vars for {chrom}", leave=False, unit=" vars"):
                 if line.strip():
@@ -147,10 +147,10 @@ task CreateShards {
         def calc_dist_to_svs(pos, sorted_svs, sv_starts, max_sv_len):
             if not sorted_svs:
                 return float('inf')
-                
+
             idx = bisect.bisect_left(sv_starts, pos)
             min_d = float('inf')
-            
+
             for i in range(idx, len(sorted_svs)):
                 s, e = sorted_svs[i]
                 if s <= pos <= e:
@@ -159,7 +159,7 @@ task CreateShards {
                 if d < min_d: min_d = d
                 if s - pos >= min_d: 
                     break
-                    
+
             for i in range(idx - 1, -1, -1):
                 s, e = sorted_svs[i]
                 if s <= pos <= e:
@@ -168,66 +168,67 @@ task CreateShards {
                 if d < min_d: min_d = d
                 if (pos - s) >= min_d + max_sv_len:
                     break
-                    
+
             return min_d
 
         def process_region(chrom, r_start, r_end, args, f_tsv, f_txt):
             raw_svs = get_sv_intervals(args.sv_vcf, chrom, r_start, r_end, args.min_sv_len)
             short_vars = get_all_short_variants(args.vcf, chrom, r_start, r_end)
-            
+
             sorted_svs = sorted(raw_svs, key=lambda x: x[0])
             sv_starts = [s[0] for s in sorted_svs]
             max_sv_len = max([e - s for s, e in sorted_svs]) if sorted_svs else 0
-            
+
             all_vars = sorted(sv_starts + short_vars)
-            
+
             shards = []
             current_start = r_start
             ideal_vars = (args.min_vars + args.max_vars) / 2
-            
+            shard_idx = 0
+
             with tqdm(total=r_end - r_start + 1, desc=f"Sharding {chrom}", unit=" bp") as pbar:
                 while current_start <= r_end:
                     remaining_bp = r_end - current_start + 1
-                    
+
                     idx = bisect.bisect_left(all_vars, current_start)
                     remaining_total_vars = len(all_vars) - idx
-                    
+
                     if remaining_total_vars <= args.max_vars:
                         d_start = calc_dist_to_svs(current_start, sorted_svs, sv_starts, max_sv_len)
                         d_end = calc_dist_to_svs(r_end, sorted_svs, sv_starts, max_sv_len)
-                        
+
                         shard_sv_count = bisect.bisect_right(sv_starts, r_end) - bisect.bisect_left(sv_starts, current_start)
                         shard_short_count = bisect.bisect_right(short_vars, r_end) - bisect.bisect_left(short_vars, current_start)
-                        
+
                         shards.append((current_start, r_end, remaining_bp, shard_sv_count, shard_short_count, d_start, d_end))
                         pbar.update(remaining_bp)
                         break
-                    
+
                     expected_shards_left = max(1, round(remaining_total_vars / ideal_vars))
                     target_total_vars = remaining_total_vars / expected_shards_left
-                    
+
                     k_min = idx + args.min_vars
                     k_max = min(idx + args.max_vars, len(all_vars))
-                    
+
                     if 0 < (len(all_vars) - k_max) < args.min_vars:
                         k_max = len(all_vars) - args.min_vars
                         if k_min > k_max: k_max = k_min
-                        
+
                     search_start = all_vars[k_min - 1]
                     search_end = all_vars[k_max] - 1 if k_max < len(all_vars) else r_end
-                    
+
                     search_start = max(current_start, search_start)
                     search_end = min(r_end, max(search_start, search_end))
 
                     candidates = set([search_start, search_end])
-                    
+
                     s_idx = bisect.bisect_left(sv_starts, search_start)
                     e_idx = bisect.bisect_right(sv_starts, search_end)
                     for i in range(max(0, s_idx - 1), min(len(sorted_svs) - 1, e_idx + 1)):
                         mid = (sorted_svs[i][1] + sorted_svs[i+1][0]) // 2
                         if search_start <= mid <= search_end:
                             candidates.add(mid)
-                            
+
                     for p in range(search_start, search_end + 1, 1000):
                         candidates.add(p)
 
@@ -235,40 +236,41 @@ task CreateShards {
                         c_var_count = bisect.bisect_right(all_vars, cand) - idx
                         var_diff = abs(c_var_count - target_total_vars)
                         dist = calc_dist_to_svs(cand, sorted_svs, sv_starts, max_sv_len)
-                        
+
                         return (-dist, var_diff, -cand)
 
                     valid_candidates = [c for c in candidates if calc_dist_to_svs(c, sorted_svs, sv_starts, max_sv_len) >= args.min_sv_dist]
-                    
+
                     if not valid_candidates:
                         valid_candidates = list(candidates)
 
                     valid_candidates = sorted(valid_candidates, key=score_candidate)
-                    
+
                     best_boundary = valid_candidates[0]
                     best_dist = calc_dist_to_svs(best_boundary, sorted_svs, sv_starts, max_sv_len)
-                    
+
                     shard_sv_count = bisect.bisect_right(sv_starts, best_boundary) - bisect.bisect_left(sv_starts, current_start)
                     shard_short_count = bisect.bisect_right(short_vars, best_boundary) - bisect.bisect_left(short_vars, current_start)
 
                     d_start = calc_dist_to_svs(current_start, sorted_svs, sv_starts, max_sv_len)
                     size_bp = best_boundary - current_start + 1
-                    
+
                     shards.append((current_start, best_boundary, size_bp, shard_sv_count, shard_short_count, d_start, best_dist))
-                    
+
                     current_start = best_boundary + 1
                     pbar.update(size_bp)
 
             for s in shards:
                 c_start, c_end, s_bp, n_svs, n_short, d_s, d_e = s
                 reg_str = f"{chrom}:{c_start}-{c_end}"
-                
+
                 min_d = min(d_s, d_e)
                 if min_d == float('inf'):
                     min_d = -1
-                
-                shard_id = f"{args.entity_name}_{chrom}_{c_start}_{c_end}"
-                
+
+                shard_id = f"{args.entity_name}.shard-{shard_idx:04d}.{chrom}-{c_start}-{c_end}"
+                shard_idx += 1
+
                 f_tsv.write(f"{shard_id}\t{reg_str}\t{s_bp}\t{n_svs}\t{n_short}\t{min_d}\n")
                 f_txt.write(reg_str + "\n")
 
@@ -318,11 +320,11 @@ task CreateShards {
 
             with open(tsv_file, 'w') as f_tsv, open(txt_file, 'w') as f_txt:
                 f_tsv.write(f"entity:{args.entity_name}_id\tregion\tsize_bp\tnumber_of_svs\tnumber_of_short_variants\tmin_sv_boundary_dist\n")
-                
+
                 for chrom, r_start, r_end in regions_to_process:
                     print(f"\nProcessing {chrom}:{r_start}-{r_end}")
                     process_region(chrom, r_start, r_end, args, f_tsv, f_txt)
-
+                    
         if __name__ == "__main__":
             main()
         EOF
