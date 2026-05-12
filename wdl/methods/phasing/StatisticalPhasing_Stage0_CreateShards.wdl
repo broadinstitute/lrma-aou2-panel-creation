@@ -268,7 +268,7 @@ task CreateShards {
                 if min_d == float('inf'):
                     min_d = -1
 
-                shard_id = f"{args.entity_name}.shard-{shard_idx:04d}.{chrom}-{c_start}-{c_end}"
+                shard_id = f"{args.output_prefix}.shard-{shard_idx:04d}.{chrom}-{c_start}-{c_end}"
                 shard_idx += 1
 
                 f_tsv.write(f"{shard_id}\t{reg_str}\t{s_bp}\t{n_svs}\t{n_short}\t{min_d}\n")
@@ -317,8 +317,8 @@ task CreateShards {
                         else:
                             print(f"Skipping '{chrom}' as it has no defined length in the header.")
 
-            tsv_file = args.output_prefix + ".tsv"
-            txt_file = args.output_prefix + ".txt"
+            tsv_file = args.output_prefix + ".shards.tsv"
+            txt_file = args.output_prefix + ".shards.txt"
 
             start_shard_idx = 0
             with open(tsv_file, 'w') as f_tsv, open(txt_file, 'w') as f_txt:
@@ -334,8 +334,8 @@ task CreateShards {
     >>>
 
     output {
-        Array[String] shard_regions = read_lines("~{output_prefix}.txt")
-        File shard_regions_terra_tsv = "~{output_prefix}.tsv"
+        Array[String] shard_regions = read_lines("~{output_prefix}.shards.txt")
+        File shard_regions_terra_tsv = "~{output_prefix}.shards.tsv"
     }
 
     #########################
