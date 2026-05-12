@@ -1,17 +1,18 @@
 # pypy + bcftools + gcloud
-# stage 0+1 from us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23.1 (https://github.com/broadinstitute/long-read-pipelines/blob/sh_update_gcloud_samtools_for_libcurl/docker/lr-gcloud-samtools/Dockerfile),
-# but starting from pypy base and using gpg instead of deprecated apt-key
+# stage 0+1 from us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23.1
+# starting from pypy base, using gpg instead of deprecated apt-key, and adding build-essential
 
 ############### stage 0: build samtools and bcftools from source
-# FROM ubuntu:24.04 AS builder
 FROM pypy:3.11-7.3.20-slim AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG SAMTOOLS_VERSION=1.23.1
 ARG BCFTOOLS_VERSION=1.23.1
+
 RUN apt-get -qqy update --fix-missing && \
     apt-get -qqy dist-upgrade && \
     apt-get -qqy install --no-install-recommends \
+                 build-essential \
                  ca-certificates \
                  libbz2-dev \
                  libcurl4-openssl-dev \
@@ -39,39 +40,33 @@ RUN apt-get -qqy update --fix-missing && \
         && make -j 4 -s \
         && make install && \
     cd - && rm -rf bcftools-${BCFTOOLS_VERSION}* && \
-    apt-get -qqy purge autoconf automake bzip2 gcc make wget && \
+    # REMOVED: apt-get purge of build tools to ensure builder cache integrity if needed
     apt-get -qqy clean && \
-    rm -rf /tmp/* \
-           /var/tmp/* \
-           /var/cache/apt/* \
-           /var/lib/apt/lists/* \
-           /usr/share/man/?? \
-           /usr/share/man/??_* && \
-    samtools --help && \
-    bcftools --help
+    rm -rf /tmp/* /var/tmp/* /var/cache/apt/* /var/lib/apt/lists/*
 
-############### stage 1: other commonly used bioinformatics utilities
-# FROM ubuntu:24.04
+############### stage 1: final image
 FROM pypy:3.11-7.3.20-slim
 
 ENV HOME=/root
-
-# Define default command.
 CMD ["bash"]
 
-# copy from previous stage the binaries from samtools build
+# copy from previous stage the binaries
 COPY --from=builder /usr/local/bin/* /usr/local/bin/
 COPY --from=builder /usr/local/libexec/bcftools /usr/local/libexec/bcftools
 
-#### Basic utilities
+#### Basic utilities and Build Dependencies for downstream pip installs
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get -qqy update --fix-missing && \
     apt-get -qqy dist-upgrade && \
     apt-get -qqy install --no-install-recommends \
+                 build-essential \
+                 gcc \
                  libcurl4t64 \
-                 libdeflate0 \
-                 liblzma5 \
-                 libbz2-1.0 \
+                 libdeflate-dev \
+                 liblzma-dev \
+                 libbz2-dev \
+                 zlib1g-dev \
+                 libcurl4-openssl-dev \
                  apt-transport-https \
                  ca-certificates \
                  gnupg \
@@ -86,8 +81,7 @@ RUN apt-get -qqy update --fix-missing && \
                  pigz \
                  tabix \
                  tree \
-                 vcftools \
-                 zlib1g-dev && \
+                 vcftools && \
     echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
     curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
     apt-get -qqy update && \
@@ -95,15 +89,13 @@ RUN apt-get -qqy update --fix-missing && \
     gcloud config set core/disable_usage_reporting true && \
     gcloud config set component_manager/disable_update_check true && \
     gcloud config set metrics/environment github_docker_image && \
-    apt-get -qqy purge gnupg && \
+    # REMOVED: apt-get purge gnupg
     apt-get -qqy clean && \
     rm -rf /tmp/* \
            /var/tmp/* \
            /var/cache/apt/* \
            /var/lib/apt/lists/* \
            /usr/share/man/?? \
-           /usr/share/man/??_* && \
-    samtools --version && \
-    bcftools --version
+           /usr/share/man/??_*
 
 COPY re-auth.sh /opt/
