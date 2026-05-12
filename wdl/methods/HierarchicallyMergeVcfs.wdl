@@ -226,7 +226,7 @@ task Ivcfmerge {
             cp $(ls compressed/*.bcf.csi) ~{output_prefix}.bcf.csi
         else
             mkdir decompressed
-            ls compressed/*.bcf | xargs -I % sh -c 'bcftools annotate --no-version ~{region_args} -x INFO % --threads 2 -Ov -o decompressed/$(basename % .gz)'
+            ls compressed/*.bcf | xargs -I % sh -c 'bcftools annotate --no-version ~{region_args} -x INFO % --threads 2 -Ov -o decompressed/$(basename % .bcf).vcf'
             time python ivcfmerge-1.0.0/ivcfmerge.py <(ls decompressed/*.vcf) ~{output_prefix}.vcf
             bcftools annotate --no-version -S ~{write_lines(sample_names)} -x FORMAT/FT ~{output_prefix}.vcf --threads 2 -W=csi -Ob -o ~{output_prefix}.bcf
         fi
