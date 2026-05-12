@@ -16,8 +16,8 @@ workflow FilterAndConcatVcfs {
         String output_prefix
 
         String? short_filter_args
-        String short_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
-        String sv_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
+        String short_view_args = "-i 'MAC>=2'"
+        String sv_view_args = "-i 'MAC>=2'"
     }
 
     call SubsetVCFStreaming as SubsetVcfShort { input:
@@ -194,7 +194,7 @@ task FilterShortVcf {
         String output_prefix
 
         String? short_filter_args
-        String short_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))<50'"
+        String short_view_args = "-i 'MAC>=2'"
 
         RuntimeAttr? runtime_attr_override
     }
