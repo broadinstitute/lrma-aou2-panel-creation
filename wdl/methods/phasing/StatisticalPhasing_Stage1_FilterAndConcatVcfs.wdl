@@ -20,7 +20,7 @@ workflow FilterAndConcatVcfs {
         String sv_view_args = "-i 'MAC>=2'"
     }
 
-    call SubsetVCFStreaming as SubsetVcfShort { input:
+    call SubsetVCF as SubsetVcfShort { input:
         vcf = short_vcf,
         vcf_idx = short_vcf_idx,
         region = region,
@@ -28,8 +28,8 @@ workflow FilterAndConcatVcfs {
     }
 
     call SubsetVCF as SubsetVcfSV { input:
-        vcf = select_first([sv_vcf ]),
-        vcf_idx = select_first([sv_vcf_idx]),
+        vcf = sv_vcf,
+        vcf_idx = sv_vcf_idx,
         region = region,
         output_prefix = output_prefix + ".subsetSV"
     }
@@ -104,74 +104,14 @@ task SubsetVCF {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          1,
-        mem_gb:             4,
+        cpu_cores:          2,
+        mem_gb:             6,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
-}
-
-task SubsetVCFStreaming {
-    parameter_meta {
-        vcf: {
-            localization_optional: true
-        }
-        vcf_idx: {
-            localization_optional: true
-        }
-    }
-
-    input {
-        File vcf
-        File vcf_idx
-        String region
-        String output_prefix
-
-        Int disk_gb = 10
-
-        RuntimeAttr? runtime_attr_override
-    }
-
-    command <<<
-        set -euxo pipefail
-
-        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
-
-        bcftools view --no-version ~{vcf} \
-            --regions ~{region} \
-            --regions-overlap 0 \
-            --write-index=csi -Ob -o ~{output_prefix}.bcf
-    >>>
-
-    output {
-        File subset_vcf = "~{output_prefix}.bcf"
-        File subset_idx = "~{output_prefix}.bcf.csi"
-    }
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          1,
-        mem_gb:             3,
-        disk_gb:            disk_gb,
-        boot_disk_gb:       10,
-        use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+        preemptible_tries:  3,
+        max_retries:        0,
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-python:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -226,9 +166,9 @@ task FilterShortVcf {
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+        preemptible_tries:  3,
+        max_retries:        0,
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-python:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -277,9 +217,9 @@ task FilterSVVcf {
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+        preemptible_tries:  3,
+        max_retries:        0,
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-python:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -329,9 +269,9 @@ task ConcatShortAndSVVcfs {
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+        preemptible_tries:  3,
+        max_retries:        0,
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-python:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
