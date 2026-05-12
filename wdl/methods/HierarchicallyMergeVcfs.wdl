@@ -156,7 +156,7 @@ task MergeVcfs {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 2 * ceil(size([vcfs], "GiB"))
+    Int disk_gb = 10 + 2 * ceil(size(vcfs, "GiB"))
 
     command <<<
         set -euox pipefail
@@ -209,7 +209,7 @@ task Ivcfmerge {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 2 * ceil(size([vcfs], "GiB"))
+    Int disk_gb = 10 + 2 * ceil(size(vcfs, "GiB"))
 
     command <<<
         set -euox pipefail
@@ -272,7 +272,7 @@ task ConcatVcfs {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 2 * ceil(size([vcfs], "GiB"))
+    Int disk_gb = 10 + 2 * ceil(size(vcfs, "GiB"))
 
     command <<<
         set -euox pipefail
