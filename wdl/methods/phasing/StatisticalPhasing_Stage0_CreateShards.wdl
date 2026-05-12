@@ -14,6 +14,7 @@ workflow CreateShards {
         String output_prefix
         String entity_name
 
+        # provide sites-only or single-sample VCFs to minimize runtime (especially for short, less critical for SV)
         File short_vcf
         File short_vcf_idx
         File sv_vcf
