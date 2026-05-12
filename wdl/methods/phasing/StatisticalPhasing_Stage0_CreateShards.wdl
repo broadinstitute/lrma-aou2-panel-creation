@@ -10,7 +10,7 @@ version 1.0
 workflow CreateShards {
 
     input {
-        String region
+        String? region
         String output_prefix
         String entity_name
 
@@ -59,7 +59,7 @@ struct RuntimeAttr {
 
 task CreateShardsTask {
     input {
-        String region
+        String? region
         String output_prefix
         String entity_name
         
@@ -82,9 +82,9 @@ task CreateShardsTask {
         python3 -m pip install tqdm pysam
 
         python3 - \
-            --region ~{region} \
-            --vcf ~{short_vcf} \
-            --sv_vcf ~{sv_vcf} \
+            ~{"--region '" + region + "'"} \
+            --vcf '~{short_vcf}##idx##~{short_vcf_idx}' \
+            --sv_vcf '~{sv_vcf}##idx##~{sv_vcf_idx}' \
             --min_vars ~{min_variants_per_shard} \
             --max_vars ~{max_variants_per_shard} \
             --min_sv_dist ~{min_boundary_dist_bp} \
@@ -102,7 +102,7 @@ task CreateShardsTask {
             svs = []
             try:
                 vcf = pysam.VariantFile(sv_vcf_path, drop_samples=True)
-                for rec in tqdm(vcf.fetch(chrom, start, end), desc="Reading SV VCF", unit=" SVs"):
+                for rec in tqdm(vcf.fetch(chrom, start, end), desc=f"Reading SVs for {chrom}", leave=False, unit=" SVs"):
                     svlen = 0
                     if "SVLEN" in rec.info:
                         val = rec.info["SVLEN"]
@@ -114,16 +114,15 @@ task CreateShardsTask {
                         svs.append((rec.pos, rec.stop))
                 vcf.close()
             except Exception as e:
-                print(f"Warning reading SVs: {e}")
+                print(f"Warning reading SVs for {chrom}: {e}")
             return svs
 
         def get_all_short_variants(vcf_path, chrom, r_start, r_end):
-            print(f"Loading short variants across {chrom}:{r_start}-{r_end} into memory...")
             cmd = f"bcftools query -f '%POS\n' -r {chrom}:{r_start}-{r_end} {vcf_path}"
             proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, text=True)
             
             pos_list = []
-            for line in tqdm(proc.stdout, desc="Reading short variants", unit=" vars"):
+            for line in tqdm(proc.stdout, desc=f"Reading short vars for {chrom}", leave=False, unit=" vars"):
                 if line.strip():
                     pos_list.append(int(line.strip()))
                     
@@ -131,9 +130,6 @@ task CreateShardsTask {
             return pos_list
 
         def calc_dist_to_svs(pos, sorted_svs, sv_starts, max_sv_len):
-            """
-            O(1) localized search for the nearest SV using binary search.
-            """
             if not sorted_svs:
                 return float('inf')
                 
@@ -160,32 +156,7 @@ task CreateShardsTask {
                     
             return min_d
 
-        def main():
-            parser = argparse.ArgumentParser()
-            parser.add_argument('--region', type=str, required=True)
-            parser.add_argument('--vcf', type=str, required=True)
-            parser.add_argument('--sv_vcf', type=str, required=True)
-            parser.add_argument('--min_vars', type=int, required=True)
-            parser.add_argument('--max_vars', type=int, required=True)
-            parser.add_argument('--min_sv_dist', type=int, required=True)
-            parser.add_argument('--min_sv_len', type=int, required=True)
-            parser.add_argument('--entity_name', type=str, required=True)
-            parser.add_argument('--output_prefix', type=str, required=True)
-            args = parser.parse_args()
-
-            if ":" in args.region and "-" in args.region:
-                chrom, span = args.region.split(":")
-                r_start, r_end = map(int, span.split("-"))
-            else:
-                chrom = args.region
-                r_start = 1
-                with pysam.VariantFile(args.sv_vcf, drop_samples=True) as vcf:
-                    if chrom in vcf.header.contigs:
-                        r_end = vcf.header.contigs[chrom].length
-                        print(f"Detected whole chromosome '{chrom}'. Extracted length: {r_end} bp")
-                    else:
-                        raise ValueError(f"Chromosome '{chrom}' not found in VCF header.")
-            
+        def process_region(chrom, r_start, r_end, args, f_tsv, f_txt):
             raw_svs = get_sv_intervals(args.sv_vcf, chrom, r_start, r_end, args.min_sv_len)
             short_vars = get_all_short_variants(args.vcf, chrom, r_start, r_end)
             
@@ -193,14 +164,13 @@ task CreateShardsTask {
             sv_starts = [s[0] for s in sorted_svs]
             max_sv_len = max([e - s for s, e in sorted_svs]) if sorted_svs else 0
             
-            # Unify all variant start positions to drive the boundary logic
             all_vars = sorted(sv_starts + short_vars)
             
             shards = []
             current_start = r_start
             ideal_vars = (args.min_vars + args.max_vars) / 2
             
-            with tqdm(total=r_end - r_start + 1, desc="Calculating Shard Boundaries", unit=" bp") as pbar:
+            with tqdm(total=r_end - r_start + 1, desc=f"Sharding {chrom}", unit=" bp") as pbar:
                 while current_start <= r_end:
                     remaining_bp = r_end - current_start + 1
                     
@@ -228,7 +198,6 @@ task CreateShardsTask {
                         k_max = len(all_vars) - args.min_vars
                         if k_min > k_max: k_max = k_min
                         
-                    # Map variant counts back to genomic coordinates
                     search_start = all_vars[k_min - 1]
                     search_end = all_vars[k_max] - 1 if k_max < len(all_vars) else r_end
                     
@@ -252,9 +221,6 @@ task CreateShardsTask {
                         var_diff = abs(c_var_count - target_total_vars)
                         dist = calc_dist_to_svs(cand, sorted_svs, sv_starts, max_sv_len)
                         
-                        # Priority 1: Maximize boundary distance to SV
-                        # Priority 2: Minimize total variant count difference vs target
-                        # Priority 3: Maximize size/candidate position greedily
                         return (-dist, var_diff, -cand)
 
                     valid_candidates = [c for c in candidates if calc_dist_to_svs(c, sorted_svs, sv_starts, max_sv_len) >= args.min_sv_dist]
@@ -278,25 +244,69 @@ task CreateShardsTask {
                     current_start = best_boundary + 1
                     pbar.update(size_bp)
 
-            # Write outputs
+            for s in shards:
+                c_start, c_end, s_bp, n_svs, n_short, d_s, d_e = s
+                reg_str = f"{chrom}:{c_start}-{c_end}"
+                
+                min_d = min(d_s, d_e)
+                if min_d == float('inf'):
+                    min_d = -1
+                
+                shard_id = f"{args.entity_name}_{chrom}_{c_start}_{c_end}"
+                
+                f_tsv.write(f"{shard_id}\t{reg_str}\t{s_bp}\t{n_svs}\t{n_short}\t{min_d}\n")
+                f_txt.write(reg_str + "\n")
+
+        def main():
+            parser = argparse.ArgumentParser()
+            parser.add_argument('--region', type=str, required=False, default=None)
+            parser.add_argument('--vcf', type=str, required=True)
+            parser.add_argument('--sv_vcf', type=str, required=True)
+            parser.add_argument('--min_vars', type=int, required=True)
+            parser.add_argument('--max_vars', type=int, required=True)
+            parser.add_argument('--min_sv_dist', type=int, required=True)
+            parser.add_argument('--min_sv_len', type=int, required=True)
+            parser.add_argument('--entity_name', type=str, required=True)
+            parser.add_argument('--output_prefix', type=str, required=True)
+            args = parser.parse_args()
+
+            regions_to_process = []
+
+            if args.region:
+                if ":" in args.region and "-" in args.region:
+                    chrom, span = args.region.split(":")
+                    r_start, r_end = map(int, span.split("-"))
+                    regions_to_process.append((chrom, r_start, r_end))
+                else:
+                    chrom = args.region
+                    with pysam.VariantFile(args.sv_vcf, drop_samples=True) as vcf:
+                        if chrom in vcf.header.contigs:
+                            r_end = vcf.header.contigs[chrom].length
+                            if r_end:
+                                regions_to_process.append((chrom, 1, r_end))
+                                print(f"Detected whole chromosome '{chrom}'. Extracted length: {r_end} bp")
+                            else:
+                                raise ValueError(f"Chromosome '{chrom}' missing length in VCF header.")
+                        else:
+                            raise ValueError(f"Chromosome '{chrom}' not found in VCF header.")
+            else:
+                print("No region provided. Extracting all contigs from SV VCF header...")
+                with pysam.VariantFile(args.sv_vcf, drop_samples=True) as vcf:
+                    for chrom, contig in vcf.header.contigs.items():
+                        if contig.length:
+                            regions_to_process.append((chrom, 1, contig.length))
+                        else:
+                            print(f"Skipping '{chrom}' as it has no defined length in the header.")
+
             tsv_file = args.output_prefix + ".tsv"
             txt_file = args.output_prefix + ".txt"
 
             with open(tsv_file, 'w') as f_tsv, open(txt_file, 'w') as f_txt:
                 f_tsv.write(f"entity:{args.entity_name}_id\tregion\tsize_bp\tnumber_of_svs\tnumber_of_short_variants\tmin_sv_boundary_dist\n")
                 
-                for s in shards:
-                    c_start, c_end, s_bp, n_svs, n_short, d_s, d_e = s
-                    reg_str = f"{chrom}:{c_start}-{c_end}"
-                    
-                    min_d = min(d_s, d_e)
-                    if min_d == float('inf'):
-                        min_d = -1
-                    
-                    shard_id = f"{args.entity_name}_{chrom}_{c_start}_{c_end}"
-                    
-                    f_tsv.write(f"{shard_id}\t{reg_str}\t{s_bp}\t{n_svs}\t{n_short}\t{min_d}\n")
-                    f_txt.write(reg_str + "\n")
+                for chrom, r_start, r_end in regions_to_process:
+                    print(f"\nProcessing {chrom}:{r_start}-{r_end}")
+                    process_region(chrom, r_start, r_end, args, f_tsv, f_txt)
 
         if __name__ == "__main__":
             main()

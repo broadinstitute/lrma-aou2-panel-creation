@@ -248,7 +248,7 @@ task FilterSVVcf {
         File sv_vcf_idx
         String output_prefix
 
-        String sv_view_args = "-i 'MAC>=2 && abs(strlen(ALT)-strlen(REF))>=50'"
+        String sv_view_args = "-i 'MAC>=2'"
 
         RuntimeAttr? runtime_attr_override
     }

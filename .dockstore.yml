@@ -9,6 +9,9 @@ workflows:
 - name: StatisticalPhasing_Stage0_CreateShards
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage0_CreateShards.wdl
+- name: StatisticalPhasing_Stage1_FilterAndConcatVcfs
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage1_FilterAndConcatVcfs.wdl
 - name: PanGeniePanelCreation
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/PanGeniePanelCreation.wdl
