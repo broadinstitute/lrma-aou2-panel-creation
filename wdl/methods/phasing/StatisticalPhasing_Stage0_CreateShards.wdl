@@ -26,7 +26,7 @@ workflow CreateShards {
         Int min_sv_len = 50
     }
 
-    call CreateShardsTask as CreateShards { input:
+    call CreateShards { input:
         region = region,
         output_prefix = output_prefix,
         entity_name = entity_name,
@@ -57,7 +57,7 @@ struct RuntimeAttr {
     String? docker
 }
 
-task CreateShardsTask {
+task CreateShards {
     input {
         String? region
         String output_prefix
@@ -75,6 +75,8 @@ task CreateShardsTask {
 
         RuntimeAttr? runtime_attr_override
     }
+
+    Int disk_gb = 10 + 2 * ceil(size([short_vcf, sv_vcf], "GiB"))
 
     command <<<
         set -euxo pipefail
@@ -335,7 +337,7 @@ task CreateShardsTask {
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
         mem_gb:             4,
-        disk_gb:            10,
+        disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            false,
         preemptible_tries:  2,
