@@ -164,19 +164,18 @@ task MergeVcfs {
         bcftools merge \
             -l ~{write_lines(vcfs)} \
             ~{extra_args} \
-            -Oz -o ~{output_prefix}.vcf.gz
-        bcftools index -t ~{output_prefix}.vcf.gz
+            -W=csi -Ob -o ~{output_prefix}.bcf
     >>>
 
     output {
-        File merged_vcf = "~{output_prefix}.vcf.gz"
-        File merged_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
+        File merged_vcf = "~{output_prefix}.bcf"
+        File merged_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          4,
-        mem_gb:             8,
+        cpu_cores:          2,
+        mem_gb:             6,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -221,28 +220,27 @@ task Ivcfmerge {
         mv ~{sep=' ' vcfs} compressed
         mv ~{sep=' ' vcf_idxs} compressed
 
-        if [ $(ls compressed/*.vcf.gz | wc -l) == 1 ]
+        if [ $(ls compressed/*.bcf | wc -l) == 1 ]
         then
-            cp $(ls compressed/*.vcf.gz) ~{output_prefix}.vcf.gz
-            cp $(ls compressed/*.vcf.gz.tbi) ~{output_prefix}.vcf.gz.tbi
+            cp $(ls compressed/*.bcf) ~{output_prefix}.bcf
+            cp $(ls compressed/*.bcf.csi) ~{output_prefix}.bcf.csi
         else
             mkdir decompressed
-            ls compressed/*.vcf.gz | xargs -I % sh -c 'bcftools annotate --no-version ~{region_args} -x INFO % --threads 2 -Ov -o decompressed/$(basename % .gz)'
+            ls compressed/*.bcf | xargs -I % sh -c 'bcftools annotate --no-version ~{region_args} -x INFO % --threads 2 -Ov -o decompressed/$(basename % .gz)'
             time python ivcfmerge-1.0.0/ivcfmerge.py <(ls decompressed/*.vcf) ~{output_prefix}.vcf
-            bcftools annotate --no-version -S ~{write_lines(sample_names)} -x FORMAT/FT ~{output_prefix}.vcf --threads 2 -Oz -o ~{output_prefix}.vcf.gz
-            bcftools index -t ~{output_prefix}.vcf.gz
+            bcftools annotate --no-version -S ~{write_lines(sample_names)} -x FORMAT/FT ~{output_prefix}.vcf --threads 2 -W=csi -Ob -o ~{output_prefix}.bcf
         fi
     >>>
 
     output {
-        File merged_vcf = "~{output_prefix}.vcf.gz"
-        File merged_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
+        File merged_vcf = "~{output_prefix}.bcf"
+        File merged_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          4,
-        mem_gb:             8,
+        cpu_cores:          2,
+        mem_gb:             6,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -280,18 +278,17 @@ task ConcatVcfs {
         bcftools concat \
             -f ~{write_lines(vcfs)} \
             ~{extra_args} \
-            -Oz -o ~{output_prefix}.vcf.gz
-        bcftools index -t --threads $(nproc) ~{output_prefix}.vcf.gz
+            -W=csi -Oz -o ~{output_prefix}.bcf
     >>>
 
     output {
-        File concatenated_vcf = "~{output_prefix}.vcf.gz"
-        File concatenated_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
+        File concatenated_vcf = "~{output_prefix}.bcf"
+        File concatenated_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          2,
+        cpu_cores:          1,
         mem_gb:             4,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
