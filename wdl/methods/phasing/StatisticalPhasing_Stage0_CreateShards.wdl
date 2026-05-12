@@ -171,7 +171,7 @@ task CreateShards {
 
             return min_d
 
-        def process_region(chrom, r_start, r_end, args, f_tsv, f_txt):
+        def process_region(chrom, r_start, r_end, args, f_tsv, f_txt, start_shard_idx):
             raw_svs = get_sv_intervals(args.sv_vcf, chrom, r_start, r_end, args.min_sv_len)
             short_vars = get_all_short_variants(args.vcf, chrom, r_start, r_end)
 
@@ -184,7 +184,7 @@ task CreateShards {
             shards = []
             current_start = r_start
             ideal_vars = (args.min_vars + args.max_vars) / 2
-            shard_idx = 0
+            shard_idx = start_shard_idx
 
             with tqdm(total=r_end - r_start + 1, desc=f"Sharding {chrom}", unit=" bp") as pbar:
                 while current_start <= r_end:
@@ -273,6 +273,8 @@ task CreateShards {
 
                 f_tsv.write(f"{shard_id}\t{reg_str}\t{s_bp}\t{n_svs}\t{n_short}\t{min_d}\n")
                 f_txt.write(reg_str + "\n")
+            
+            return shard_idx
 
         def main():
             parser = argparse.ArgumentParser()
@@ -318,12 +320,13 @@ task CreateShards {
             tsv_file = args.output_prefix + ".tsv"
             txt_file = args.output_prefix + ".txt"
 
+            start_shard_idx = 0
             with open(tsv_file, 'w') as f_tsv, open(txt_file, 'w') as f_txt:
                 f_tsv.write(f"entity:{args.entity_name}_id\tregion\tsize_bp\tnumber_of_svs\tnumber_of_short_variants\tmin_sv_boundary_dist\n")
 
                 for chrom, r_start, r_end in regions_to_process:
                     print(f"\nProcessing {chrom}:{r_start}-{r_end}")
-                    process_region(chrom, r_start, r_end, args, f_tsv, f_txt)
+                    start_shard_idx = process_region(chrom, r_start, r_end, args, f_tsv, f_txt, start_shard_idx)
                     
         if __name__ == "__main__":
             main()
