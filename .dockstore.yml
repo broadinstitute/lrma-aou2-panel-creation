@@ -6,6 +6,9 @@ workflows:
 - name: StatisticalPhasing
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing.wdl
+- name: StatisticalPhasing_Stage0_CreateShards
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage0_CreateShards.wdl
 - name: PanGeniePanelCreation
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/PanGeniePanelCreation.wdl
