@@ -118,15 +118,28 @@ task CreateShardsTask {
             return svs
 
         def get_all_short_variants(vcf_path, chrom, r_start, r_end):
-            cmd = f"bcftools query -f '%POS\n' -r {chrom}:{r_start}-{r_end} {vcf_path}"
-            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, text=True)
+            # The vcf_path is wrapped in single quotes to prevent the ##idx## from being read as a bash comment
+            cmd = f"bcftools query -f '%POS\n' -r {chrom}:{r_start}-{r_end} '{vcf_path}'"
+
+            # Capture stderr to properly surface errors if the command fails (e.g., bcftools not installed)
+            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             
             pos_list = []
             for line in tqdm(proc.stdout, desc=f"Reading short vars for {chrom}", leave=False, unit=" vars"):
                 if line.strip():
                     pos_list.append(int(line.strip()))
-                    
+
             proc.wait()
+
+            # Explicitly check for failure and surface the error
+            if proc.returncode != 0:
+                err_msg = proc.stderr.read()
+                raise RuntimeError(
+                    f"Subprocess failed with exit code {proc.returncode}.\n"
+                    f"Command: {cmd}\n"
+                    f"Error: {err_msg}"
+                )
+
             return pos_list
 
         def calc_dist_to_svs(pos, sorted_svs, sv_starts, max_sv_len):
@@ -327,7 +340,7 @@ task CreateShardsTask {
         use_ssd:            false,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-utils:0.1.11"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
