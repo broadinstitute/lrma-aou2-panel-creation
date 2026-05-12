@@ -278,7 +278,8 @@ task ConcatVcfs {
         bcftools concat \
             -f ~{write_lines(vcfs)} \
             ~{extra_args} \
-            -W=csi -Ob -o ~{output_prefix}.bcf
+            -Ob -o ~{output_prefix}.bcf
+        bcftools index ~{output_prefix}.bcf
     >>>
 
     output {
