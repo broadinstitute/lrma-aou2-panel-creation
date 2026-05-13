@@ -2,6 +2,7 @@ version 1.0
 
 import "StatisticalPhasing_Stage0_CreateShards.wdl" as CreateShards
 import "StatisticalPhasing_Stage1_FilterAndConcatVcfs.wdl" as FilterAndConcatVcfs
+import "StatisticalPhasing_Stage2_FixVariantCollisions.wdl" as FixVariantCollisions
 
 workflow StatisticalPhasing {
 
@@ -48,7 +49,7 @@ workflow StatisticalPhasing {
 
     call CreateShards.CreateShards as CreateFilterAndConcatShards { input:
         region = region,
-        output_prefix = output_prefix + ".shards",
+        output_prefix = output_prefix,
         entity_name = output_prefix,
         short_vcf = joint_short_vcf,
         short_vcf_idx = joint_short_vcf_idx,
@@ -77,15 +78,14 @@ workflow StatisticalPhasing {
             sv_view_args = filter_and_concat_sv_view_args
         }
 
-        # added variant collision fix step
-        call FixVariantCollisions { input:
+        call FixVariantCollisions.FixVariantCollisions as FixVariantCollisions { input:
             phased_vcf = FilterAndConcatVcfs.filter_and_concat_vcf,
             fix_variant_collisions_script = fix_variant_collisions_script,
+            output_prefix = output_prefix + ".shard-" + s,
             operation = operation,
             weight_tag = weight_tag,
             is_weight_format_field = is_weight_format_field,
-            default_weight = default_weight,
-            output_prefix = output_prefix + ".collisionless.shard-" + s,
+            default_weight = default_weight
         }
     }
 
@@ -190,67 +190,6 @@ struct RuntimeAttr {
     Int? preemptible_tries
     Int? max_retries
     String? docker
-}
-
-task FixVariantCollisions {
-    input {
-        File phased_vcf                     # biallelic
-        File fix_variant_collisions_script
-        Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
-        String weight_tag = "SCORE"         # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
-        Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
-        Float default_weight = 0.1          # default weight if the weight field is not found
-        String output_prefix
-
-        RuntimeAttr? runtime_attr_override
-    }
-
-    Int disk_gb = 50 + 4 * (ceil(size(phased_vcf, "GiB")))
-
-    command <<<
-        set -euxo pipefail
-
-        rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
-
-        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        bcftools view ~{phased_vcf} --threads 2 | \
-        ./FixVariantCollisions \
-            ~{operation} \
-            ~{weight_tag} \
-            ~{is_weight_format_field} \
-            ~{default_weight} \
-            histogram.txt | \
-        bcftools +setGT --no-version -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
-    >>>
-
-    output {
-        File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.bcf"
-        File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.bcf.csi"
-        File histogram = "histogram.txt"
-    }
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          6,
-        mem_gb:             8,
-        disk_gb:            disk_gb,
-        boot_disk_gb:       10,
-        use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
 }
 
 task CreateShapeitChunks {
