@@ -13,6 +13,7 @@ workflow FixVariantCollisions {
         String weight_tag = "SCORE"
         Int is_weight_format_field = 0
         Float default_weight = 0.05
+        String fixvariantcollisions_extra_args = "--use-gq --use-af"
     }
 
     call FixVariantCollisions { input:
@@ -22,7 +23,8 @@ workflow FixVariantCollisions {
         operation = operation,
         weight_tag = weight_tag,
         is_weight_format_field = is_weight_format_field,
-        default_weight = default_weight
+        default_weight = default_weight,
+        extra_args = fixvariantcollisions_extra_args
     }
 
     output {
@@ -45,12 +47,13 @@ struct RuntimeAttr {
 
 task FixVariantCollisions {
     input {
-        File phased_vcf                     # biallelic, can be locally or fully phased
+        File phased_vcf                          # biallelic, can be locally or fully phased
         File fix_variant_collisions_script
-        Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
-        String weight_tag = "SCORE"         # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
-        Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
-        Float default_weight = 0.05         # default weight if the weight field is not found
+        Int operation = 1                        # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
+        String weight_tag = "SCORE"              # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
+        Int is_weight_format_field = 0           # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
+        Float default_weight = 0.05              # default weight if the weight field is not found
+        String extra_args = "--use-gq --use-af"  # use GQ then AF as tie breakers
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
@@ -70,6 +73,7 @@ task FixVariantCollisions {
             ~{weight_tag} \
             ~{is_weight_format_field} \
             ~{default_weight} \
+            ~{extra_args} \
             histogram.txt | \
         bcftools +setGT --no-version -Ou -- -t . -n 0p | \
             bcftools +fill-tags --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
