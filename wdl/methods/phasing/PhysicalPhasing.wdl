@@ -140,7 +140,8 @@ task PreProcessVCFs {
         rm ~{sample_name}.short.chr-*.bcf
 
         # note that SNV/non-SNV filters will also be applied to multiallelic/mixed sites
-        bcftools view ~{"-r " + region} ~{short_view_args} -Ou | \
+        bcftools view ~{sample_name}.short.bcf \
+            ~{"-r " + region} ~{short_view_args} -Ou | \
             bcftools filter ~{short_filter_args} -Ou | \
             bcftools sort -W=csi -Ob -o ~{sample_name}.preprocessed.short.bcf
 
