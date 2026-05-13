@@ -17,8 +17,11 @@ workflow StatisticalPhasing {
         String region
         String output_prefix
 
-        # CreateFilterAndConcatShards
-        Int filter_and_concat_shard_size = 2000000
+        # CreateShards
+        Int min_variants_per_shard = 450000
+        Int max_variants_per_shard = 550000
+        Int min_boundary_dist_bp = 15000
+        Int min_sv_len = 50
 
         # FilterAndConcat
         String? filter_and_concat_short_filter_args
@@ -45,8 +48,16 @@ workflow StatisticalPhasing {
 
     call CreateShards.CreateShards as CreateFilterAndConcatShards { input:
         region = region,
-        shard_size = filter_and_concat_shard_size,
-        output_prefix = output_prefix + ".shards"
+        output_prefix = output_prefix + ".shards",
+        entity_name = output_prefix,
+        short_vcf = joint_short_vcf,
+        short_vcf_idx = joint_short_vcf_idx,
+        sv_vcf = joint_sv_vcf,
+        sv_vcf_idx = joint_sv_vcf_idx,
+        min_variants_per_shard = min_variants_per_shard,
+        max_variants_per_shard = max_variants_per_shard,
+        min_boundary_dist_bp = min_boundary_dist_bp,
+        min_sv_len = min_sv_len
     }
 
     scatter (s in range(length(CreateFilterAndConcatShards.shard_regions))) {
@@ -78,21 +89,21 @@ workflow StatisticalPhasing {
         }
     }
 
-    call BcftoolsConcatNaive as ConcatFixVariantCollisionsBeforeShapeit { input:
+    call BcftoolsConcatNaive as CollisionlessPreShapeit { input:
         vcfs = FixVariantCollisions.phased_collisionless_vcf,
         vcf_idxs = FixVariantCollisions.phased_collisionless_vcf_idx,
         output_prefix = output_prefix + ".collisionless"
     }
 
-    call CreateSitesOnlyVCF as CollisionlessBeforeShapeitSitesOnly { input:
-        vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf,
-        vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx,
+    call CreateSitesOnlyVCF as CollisionlessPreShapeitSitesOnly { input:
+        vcf = CollisionlessPreShapeit.concatenated_vcf,
+        vcf_idx = CollisionlessPreShapeit.concatenated_vcf_idx,
         output_prefix = output_prefix + ".collisionless.sites"
     }
 
     call CreateShapeitChunks { input:
-        vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf,
-        vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx,
+        vcf = CollisionlessPreShapeitSitesOnly.sites_only_vcf,
+        vcf_idx = CollisionlessPreShapeitSitesOnly.sites_only_vcf_idx,
         region = region,
         extra_args = chunk_extra_args
     }
@@ -103,8 +114,8 @@ workflow StatisticalPhasing {
         if (!do_shapeit5) {
             # phase all using Shapeit4
             call Shapeit4 as Shapeit4All { input:
-                vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf,
-                vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx,
+                vcf = CollisionlessPreShapeit.concatenated_vcf,
+                vcf_idx = CollisionlessPreShapeit.concatenated_vcf_idx,
                 genetic_map = genetic_maps_dict[chromosome],
                 region = common_regions[i],
                 output_prefix = output_prefix + ".phased",
@@ -113,8 +124,8 @@ workflow StatisticalPhasing {
         }
         if (do_shapeit5) {
             call FilterCommon { input:
-                vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf,
-                vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx,
+                vcf = CollisionlessPreShapeit.concatenated_vcf,
+                vcf_idx = CollisionlessPreShapeit.concatenated_vcf_idx,
                 output_prefix = output_prefix + ".common",
                 region = common_regions[i],
                 filter_common_args = filter_common_args
@@ -143,8 +154,8 @@ workflow StatisticalPhasing {
 
         scatter (i in range(length(rare_regions))) {
             call Shapeit5Rare { input:
-                vcf = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf,
-                vcf_idx = ConcatFixVariantCollisionsBeforeShapeit.concatenated_vcf_idx,
+                vcf = CollisionlessPreShapeit.concatenated_vcf,
+                vcf_idx = CollisionlessPreShapeit.concatenated_vcf_idx,
                 scaffold_vcf = LigateScaffold.ligated_vcf,
                 scaffold_vcf_idx = LigateScaffold.ligated_vcf_idx,
                 genetic_map = genetic_maps_dict[chromosome],
@@ -163,8 +174,8 @@ workflow StatisticalPhasing {
     }
 
     output {
-        File sites_only_vcf = CollisionlessBeforeShapeitSitesOnly.sites_only_vcf
-        File sites_only_vcf_idx = CollisionlessBeforeShapeitSitesOnly.sites_only_vcf_idx
+        File sites_only_vcf = CollisionlessPreShapeitSitesOnly.sites_only_vcf
+        File sites_only_vcf_idx = CollisionlessPreShapeitSitesOnly.sites_only_vcf_idx
         File phased_vcf = select_first([ConcatShapeit5.concatenated_vcf, LigateScaffold.ligated_vcf])
         File phased_vcf_idx = select_first([ConcatShapeit5.concatenated_vcf_idx, LigateScaffold.ligated_vcf_idx])
     }

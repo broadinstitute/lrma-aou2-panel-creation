@@ -1,5 +1,4 @@
 {
- "StatisticalPhasing.filter_and_concat_shard_size": 5000000,
  "StatisticalPhasing.chromosome": "chr6",
  "StatisticalPhasing.chunk_extra_args": "--thread $(nproc) --window-size 2500000 --buffer-size 250000",
  "StatisticalPhasing.filter_and_concat_short_view_args": "-i 'MAF>=0.03 && abs(strlen(ALT)-strlen(REF))<50'",
