@@ -28,7 +28,7 @@ workflow FixVariantCollisions {
     output {
         File collisionless_vcf = FixVariantCollisions.collisionless_vcf
         File collisionless_vcf_idx = FixVariantCollisions.collisionless_vcf_idx
-        File histogram = "histogram.txt"
+        File collisionless_histogram = FixVariantCollisions.collisionless_histogram
     }
 }
 
@@ -78,7 +78,7 @@ task FixVariantCollisions {
     output {
         File collisionless_vcf = "~{output_prefix}.bcf"
         File collisionless_vcf_idx = "~{output_prefix}.bcf.csi"
-        File histogram = "histogram.txt"
+        File collisionless_histogram = "histogram.txt"
     }
 
     #########################
