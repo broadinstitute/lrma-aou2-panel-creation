@@ -120,7 +120,7 @@ task PreProcessVCFs {
     command <<<
         set -euxo pipefail
 
-        # localize, concat, subset, norm, and filter short
+        # localize, concat, subset, norm, and filter short (multiallelic)
         # -- localize and concat by chrom
         chrom_index=1
         for chromosome_short_vcf_paths in ~{sep=" " short_vcf_paths_per_chromosome}; do
@@ -139,16 +139,12 @@ task PreProcessVCFs {
         bcftools index ~{sample_name}.short.bcf
         rm ~{sample_name}.short.chr-*.bcf
 
-        # note that norm splitting is critical for SNV/non-SNV filters to be properly applied to mixed sites
-        bcftools norm ~{sample_name}.short.bcf \
-                ~{"-r " + region} \
-                -f ~{reference_fasta} \
-                -m-any -Ou | \
-            bcftools view ~{short_view_args} -Ou | \
+        # note that SNV/non-SNV filters will also be applied to multiallelic/mixed sites
+        bcftools view ~{"-r " + region} ~{short_view_args} -Ou | \
             bcftools filter ~{short_filter_args} -Ou | \
             bcftools sort -W=csi -Ob -o ~{sample_name}.preprocessed.short.bcf
 
-        # localize, concat, and subset sv
+        # localize, concat, and subset sv (biallelic)
         gsutil -m cp ~{sv_vcf_shard_paths} .
         bcftools concat ~{sample_name}.sv.shard-*.bcf\
             --naive \
