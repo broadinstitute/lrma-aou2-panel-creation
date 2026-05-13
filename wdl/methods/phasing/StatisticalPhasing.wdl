@@ -90,8 +90,8 @@ workflow StatisticalPhasing {
     }
 
     call BcftoolsConcatNaive as CollisionlessPreShapeit { input:
-        vcfs = FixVariantCollisions.phased_collisionless_vcf,
-        vcf_idxs = FixVariantCollisions.phased_collisionless_vcf_idx,
+        vcfs = FixVariantCollisions.collisionless_vcf,
+        vcf_idxs = FixVariantCollisions.collisionless_vcf_idx,
         output_prefix = output_prefix + ".collisionless"
     }
 
