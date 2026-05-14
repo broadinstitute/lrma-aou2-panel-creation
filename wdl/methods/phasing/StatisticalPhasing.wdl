@@ -34,8 +34,8 @@ workflow StatisticalPhasing {
         Int operation = 1
         String weight_tag = "SCORE"
         Int is_weight_format_field = 0
-        Float default_weight = 0.1
-        String fix_variant_collisions_extra_args = "--use-gq --use-af"
+        Float default_weight = 0.05
+        String fix_variant_collisions_extra_args = "--use-gq --use-af --verbosity 1"
 
         # CreateShapeitChunks
         String chunk_extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 50000 --buffer-count 500" # we want window counts to drive the constraints

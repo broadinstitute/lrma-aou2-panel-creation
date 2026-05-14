@@ -113,7 +113,7 @@ fn hash_ps(s: &str) -> u32 {
     for &b in s.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(b as u32);
     }
-    if hash == 0 { 1 } else { hash } // ensure valid hashes don't alias to 0
+    if hash == 0 { 1 } else { hash } 
 }
 
 #[derive(Clone)]
@@ -125,6 +125,8 @@ struct Interval {
     last: i32,
     input_index: usize,
     
+    v_type: VariantType,
+    v_len: i32,
     weight: f64,
     gq: f64,
     af: f64,
@@ -236,6 +238,7 @@ impl Interval {
         Interval {
             line, tabs,
             chr, first, last, input_index: 0, 
+            v_type: variant_type, v_len: length,
             weight: 0.0, gq: 0.0, af, genotypes, phase_sets,
             in_independent_set: false, independent_set_weight: 0.0, independent_set_gq: 0.0, independent_set_af: 0.0,
             independent_set_previous: None, overlaps_is_hap1: false, overlaps_is_hap2: false,
@@ -396,6 +399,14 @@ impl Interval {
         out.write_all(b"\n")?;
         Ok(())
     }
+
+    fn category(&self, sv_length: i32) -> usize {
+        match self.v_type {
+            VariantType::Snp | VariantType::Replacement => 2, // SNP
+            VariantType::Del | VariantType::Inv => if self.v_len >= sv_length { 0 } else { 1 }, // SV_DEL or DEL
+            VariantType::Ins | VariantType::Dup => if self.v_len >= sv_length { 4 } else { 3 }, // SV_INS or INS
+        }
+    }
 }
 
 fn is_better(w1: f64, gq1: f64, af1: f64, w2: f64, gq2: f64, af2: f64, use_gq: bool, use_af: bool) -> bool {
@@ -491,9 +502,12 @@ fn mark_is_overlaps(
     hap1: bool, 
     hap2: bool,
     sample_name: &str,
-    already_logged: &mut [bool]
-) -> usize {
+    already_logged: &mut [bool],
+    verbosity: u8,
+    sv_length: i32
+) -> [usize; 5] {
     already_logged.fill(false);
+    let mut removed_counts = [0; 5];
 
     for &idx in sample_window {
         window[idx].overlaps_is_hap1 = false;
@@ -513,36 +527,39 @@ fn mark_is_overlaps(
             let in_is_j = window[idx_j].in_independent_set;
             let same_ps = window[idx_i].phase_sets[sample] == window[idx_j].phase_sets[sample];
 
-            let log_skip = |w: &[Interval], logged: &mut [bool], kept_idx: usize, skipped_idx: usize| {
+            let mut log_skip = |w: &[Interval], logged: &mut [bool], kept_idx: usize, skipped_idx: usize, counts: &mut [usize; 5]| {
                 if !logged[skipped_idx] {
-                    log_overlap(&w[kept_idx], &w[skipped_idx], sample_name);
+                    if verbosity >= 2 {
+                        log_overlap(&w[kept_idx], &w[skipped_idx], sample_name);
+                    }
                     logged[skipped_idx] = true;
+                    counts[w[skipped_idx].category(sv_length)] += 1;
                 }
             };
 
             if in_is_i && !in_is_j {
                 if same_ps && hap1 && on_hap1_i && window[idx_j].on_hap1(sample) { 
                     window[idx_j].overlaps_is_hap1 = true; 
-                    log_skip(window, already_logged, idx_i, idx_j);
+                    log_skip(window, already_logged, idx_i, idx_j, &mut removed_counts);
                 }
                 if same_ps && hap2 && on_hap2_i && window[idx_j].on_hap2(sample) { 
                     window[idx_j].overlaps_is_hap2 = true; 
-                    log_skip(window, already_logged, idx_i, idx_j);
+                    log_skip(window, already_logged, idx_i, idx_j, &mut removed_counts);
                 }
             } else if in_is_j && !in_is_i {
                 if same_ps && hap1 && window[idx_j].on_hap1(sample) && on_hap1_i { 
                     window[idx_i].overlaps_is_hap1 = true; 
-                    log_skip(window, already_logged, idx_j, idx_i);
+                    log_skip(window, already_logged, idx_j, idx_i, &mut removed_counts);
                 }
                 if same_ps && hap2 && window[idx_j].on_hap2(sample) && on_hap2_i { 
                     window[idx_i].overlaps_is_hap2 = true; 
-                    log_skip(window, already_logged, idx_j, idx_i);
+                    log_skip(window, already_logged, idx_j, idx_i, &mut removed_counts);
                 }
             }
         }
     }
     
-    already_logged.iter().filter(|&&x| x).count()
+    removed_counts
 }
 
 fn independent_set_1(
@@ -554,8 +571,10 @@ fn independent_set_1(
     sample_name: &str,
     already_logged: &mut [bool],
     use_gq: bool,
-    use_af: bool
-) -> usize {
+    use_af: bool,
+    verbosity: u8,
+    sv_length: i32
+) -> [usize; 5] {
     let mut sample_window = Vec::new();
     for i in 0..window.len() {
         if window[i].is_present(sample) {
@@ -565,7 +584,7 @@ fn independent_set_1(
         }
     }
 
-    if sample_window.is_empty() { return 0; }
+    if sample_window.is_empty() { return [0; 5]; }
 
     let mut max_weight = f64::NEG_INFINITY;
     let mut max_gq = f64::NEG_INFINITY;
@@ -588,7 +607,7 @@ fn independent_set_1(
         window[sample_window[idx]].in_independent_set = true;
     }
 
-    let removed = mark_is_overlaps(window, &sample_window, sample, true, true, sample_name, already_logged);
+    let removed = mark_is_overlaps(window, &sample_window, sample, true, true, sample_name, already_logged, verbosity, sv_length);
 
     for &idx in &sample_window {
         if window[idx].in_independent_set { continue; }
@@ -671,9 +690,11 @@ fn independent_set_2(
     sample_name: &str,
     already_logged: &mut [bool],
     use_gq: bool,
-    use_af: bool
-) -> usize {
-    let mut total_removed = 0;
+    use_af: bool,
+    verbosity: u8,
+    sv_length: i32
+) -> [usize; 5] {
+    let mut total_removed = [0; 5];
     
     for hap in [1, 2] {
         let mut sample_window = Vec::new();
@@ -739,7 +760,8 @@ fn independent_set_2(
         }
 
         if hap == 1 {
-            total_removed += mark_is_overlaps(window, &sample_window, sample, true, false, sample_name, already_logged);
+            let removed = mark_is_overlaps(window, &sample_window, sample, true, false, sample_name, already_logged, verbosity, sv_length);
+            for i in 0..5 { total_removed[i] += removed[i]; }
             for &idx in &sample_window {
                 if !window[idx].in_independent_set {
                     let gt = window[idx].genotypes[sample];
@@ -747,7 +769,8 @@ fn independent_set_2(
                 }
             }
         } else {
-            total_removed += mark_is_overlaps(window, &sample_window, sample, false, true, sample_name, already_logged);
+            let removed = mark_is_overlaps(window, &sample_window, sample, false, true, sample_name, already_logged, verbosity, sv_length);
+            for i in 0..5 { total_removed[i] += removed[i]; }
             for &idx in &sample_window {
                 if !window[idx].in_independent_set {
                     let gt = window[idx].genotypes[sample];
@@ -770,9 +793,11 @@ fn process_window<W: Write>(
     histogram: &mut [usize],
     sample_names: &[String],
     already_logged: &mut Vec<bool>,
-    removed_per_sample: &mut [usize],
+    removed_per_sample: &mut [[usize; 5]],
     use_gq: bool,
-    use_af: bool
+    use_af: bool,
+    verbosity: u8,
+    sv_length: i32
 ) {
     if window.is_empty() { return; }
     window.sort_by(|a, b| a.last.cmp(&b.last));
@@ -789,11 +814,13 @@ fn process_window<W: Write>(
         
         if cols > 0 {
             let removed = if method_2 { 
-                independent_set_2(window, sample, weight_tag, weight_loc, default_w, sample_name, already_logged, use_gq, use_af) 
+                independent_set_2(window, sample, weight_tag, weight_loc, default_w, sample_name, already_logged, use_gq, use_af, verbosity, sv_length) 
             } else { 
-                independent_set_1(window, sample, weight_tag, weight_loc, default_w, sample_name, already_logged, use_gq, use_af) 
+                independent_set_1(window, sample, weight_tag, weight_loc, default_w, sample_name, already_logged, use_gq, use_af, verbosity, sv_length) 
             };
-            removed_per_sample[sample] += removed;
+            for i in 0..5 {
+                removed_per_sample[sample][i] += removed[i];
+            }
         }
     }
 
@@ -805,13 +832,46 @@ fn process_window<W: Write>(
 
 fn main() -> std::io::Result<()> {
     let all_args: Vec<String> = env::args().collect();
-    let use_gq = all_args.contains(&"--use-gq".to_string());
-    let use_af = all_args.contains(&"--use-af".to_string());
+    let mut use_gq = false;
+    let mut use_af = false;
+    let mut verbosity: u8 = 2;
+    let mut sv_length: i32 = 50;
+    let mut removed_counts_tsv_path: Option<String> = None;
+    let mut histogram_tsv_path: Option<String> = None;
     
-    let args: Vec<String> = all_args.into_iter().filter(|a| !a.starts_with("--")).collect();
+    let mut args = vec![all_args[0].clone()];
+    let mut i = 1;
+    while i < all_args.len() {
+        match all_args[i].as_str() {
+            "--use-gq" => use_gq = true,
+            "--use-af" => use_af = true,
+            "--verbosity" => {
+                i += 1;
+                verbosity = all_args.get(i).and_then(|s| s.parse().ok()).unwrap_or(2);
+            }
+            "--sv-length" => {
+                i += 1;
+                sv_length = all_args.get(i).and_then(|s| s.parse().ok()).unwrap_or(50);
+            }
+            "--removed-counts-tsv" => {
+                i += 1;
+                if let Some(path) = all_args.get(i) {
+                    removed_counts_tsv_path = Some(path.clone());
+                }
+            }
+            "--histogram-tsv" => {
+                i += 1;
+                if let Some(path) = all_args.get(i) {
+                    histogram_tsv_path = Some(path.clone());
+                }
+            }
+            _ => args.push(all_args[i].clone()),
+        }
+        i += 1;
+    }
 
     if args.len() < 5 {
-        eprintln!("Usage: ... [--use-gq] [--use-af] <method> <weight_tag> <weight_loc> <default_w> [<out.hist>] < input.vcf > output.vcf");
+        eprintln!("Usage: {} [--use-gq] [--use-af] [--verbosity <1|2>] [--sv-length <int>] [--removed-counts-tsv <file>] [--histogram-tsv <file>] <method> <weight_tag> <weight_loc> <default_w> < input.vcf > output.vcf", args[0]);
         return Ok(());
     }
 
@@ -828,7 +888,7 @@ fn main() -> std::io::Result<()> {
     
     let mut histogram = vec![0; 100];
     let mut already_logged: Vec<bool> = Vec::new();
-    let mut removed_per_sample: Vec<usize> = Vec::new();
+    let mut removed_per_sample: Vec<[usize; 5]> = Vec::new();
 
     let mut window: Vec<Interval> = Vec::new();
     let mut window_last_pos = -1;
@@ -849,7 +909,7 @@ fn main() -> std::io::Result<()> {
                 let fields: Vec<&str> = line.split('\t').collect();
                 if fields.len() > 9 {
                     sample_names = fields[9..].iter().map(|s| s.to_string()).collect();
-                    removed_per_sample = vec![0; sample_names.len()];
+                    removed_per_sample = vec![[0; 5]; sample_names.len()];
                 }
             }
             let _ = writeln!(out_vcf, "{}", line);
@@ -864,9 +924,9 @@ fn main() -> std::io::Result<()> {
                 let prev_records = n_records;
                 n_records += window.len();
                 
-                process_window(&mut window, method_2, weight_tag, weight_loc, default_weight, &mut out_vcf, &mut histogram, &sample_names, &mut already_logged, &mut removed_per_sample, use_gq, use_af);
+                process_window(&mut window, method_2, weight_tag, weight_loc, default_weight, &mut out_vcf, &mut histogram, &sample_names, &mut already_logged, &mut removed_per_sample, use_gq, use_af, verbosity, sv_length);
                 
-                if n_records / 10_000 > prev_records / 10_000 {
+                if verbosity >= 2 && n_records / 10_000 > prev_records / 10_000 {
                     eprintln!("Processed {} records", n_records);
                 }
                 
@@ -883,30 +943,28 @@ fn main() -> std::io::Result<()> {
     
     if !window.is_empty() { 
         for (i, iv) in window.iter_mut().enumerate() { iv.input_index = i; }
-        process_window(&mut window, method_2, weight_tag, weight_loc, default_weight, &mut out_vcf, &mut histogram, &sample_names, &mut already_logged, &mut removed_per_sample, use_gq, use_af); 
+        process_window(&mut window, method_2, weight_tag, weight_loc, default_weight, &mut out_vcf, &mut histogram, &sample_names, &mut already_logged, &mut removed_per_sample, use_gq, use_af, verbosity, sv_length); 
     }
     out_vcf.flush()?; 
 
-    if args.len() > 5 && args[5] != "null" {
-        let mut hist_w = BufWriter::new(File::create(&args[5])?);
-        let _ = writeln!(hist_w, "#nCollision \t nHaplotypes");
+    if let Some(hist_path) = histogram_tsv_path {
+        let mut hist_w = BufWriter::new(File::create(hist_path)?);
+        let _ = writeln!(hist_w, "NUM_COLLISIONS\tNUM_HAPLOTYPES");
         for (i, &count) in histogram.iter().enumerate() {
             let _ = writeln!(hist_w, "{}\t{}", i, count);
         }
     }
 
-    let mut has_removals = false;
-    for &count in &removed_per_sample {
-        if count > 0 { has_removals = true; break; }
-    }
-    
-    if has_removals {
-        eprintln!("\nRemoved Collisions Per Sample:");
-        for (i, &count) in removed_per_sample.iter().enumerate() {
-            if count > 0 {
-                eprintln!("{}: {}", sample_names[i], count);
-            }
-        }
+    let mut tsv_writer: Box<dyn Write> = if let Some(path) = removed_counts_tsv_path {
+        Box::new(BufWriter::new(File::create(path)?))
+    } else {
+        Box::new(io::stderr())
+    };
+
+    let _ = writeln!(tsv_writer, "SAMPLE\tSV_DEL\tDEL\tSNP\tINS\tSV_INS\tTOTAL");
+    for (i, counts) in removed_per_sample.iter().enumerate() {
+        let total: usize = counts.iter().sum();
+        let _ = writeln!(tsv_writer, "{}\t{}\t{}\t{}\t{}\t{}\t{}", sample_names[i], counts[0], counts[1], counts[2], counts[3], counts[4], total);
     }
 
     Ok(())

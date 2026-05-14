@@ -13,7 +13,7 @@ workflow FixVariantCollisions {
         String weight_tag = "SCORE"
         Int is_weight_format_field = 0
         Float default_weight = 0.05
-        String fix_variant_collisions_extra_args = "--use-gq --use-af"
+        String fix_variant_collisions_extra_args = "--use-gq --use-af --verbosity 1"
     }
 
     call FixVariantCollisions { input:
@@ -30,7 +30,8 @@ workflow FixVariantCollisions {
     output {
         File collisionless_vcf = FixVariantCollisions.collisionless_vcf
         File collisionless_vcf_idx = FixVariantCollisions.collisionless_vcf_idx
-        File collisionless_histogram = FixVariantCollisions.collisionless_histogram
+        File collisionless_removed_counts_tsv = FixVariantCollisions.collisionless_removed_counts_tsv
+        File collisionless_histogram_tsv = FixVariantCollisions.collisionless_histogram_tsv
     }
 }
 
@@ -53,7 +54,7 @@ task FixVariantCollisions {
         String weight_tag = "SCORE"              # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
         Int is_weight_format_field = 0           # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
         Float default_weight = 0.05              # default weight if the weight field is not found
-        String extra_args = "--use-gq --use-af"  # use GQ then AF as tie breakers
+        String extra_args = "--use-gq --use-af --verbosity 1"  # use GQ then AF as tie breakers
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
@@ -74,7 +75,8 @@ task FixVariantCollisions {
             ~{is_weight_format_field} \
             ~{default_weight} \
             ~{extra_args} \
-            histogram.txt | \
+            --removed-counts-tsv ~{output_prefix}.removed.tsv \
+            --histogram-tsv ~{output_prefix}.histogram.tsv | \
         bcftools +setGT --no-version -Ou -- -t . -n 0p | \
             bcftools +fill-tags --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
     >>>
@@ -82,7 +84,8 @@ task FixVariantCollisions {
     output {
         File collisionless_vcf = "~{output_prefix}.bcf"
         File collisionless_vcf_idx = "~{output_prefix}.bcf.csi"
-        File collisionless_histogram = "histogram.txt"
+        File collisionless_removed_counts_tsv = "~{output_prefix}.removed.tsv"
+        File collisionless_histogram_tsv = "~{output_prefix}.histogram.tsv"
     }
 
     #########################
