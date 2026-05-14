@@ -16,7 +16,7 @@ workflow FilterAndConcatVcfs {
         String output_prefix
 
         String? short_filter_args
-        String short_view_args = "-i 'MAC>=2 && F_MISSING<=0.2'"
+        String short_view_args = "-i 'MAC>=2 && F_MISSING<=0.4'"
         String sv_view_args = "-i 'MAC>=2'"
     }
 
@@ -134,7 +134,7 @@ task FilterShortVcf {
         String output_prefix
 
         String? short_filter_args
-        String short_view_args = "-i 'MAC>=2 && F_MISSING<=0.2'"
+        String short_view_args = "-i 'MAC>=2 && F_MISSING<=0.4'"
 
         RuntimeAttr? runtime_attr_override
     }

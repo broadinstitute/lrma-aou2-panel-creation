@@ -27,7 +27,7 @@ workflow StatisticalPhasing {
 
         # FilterAndConcat
         String? filter_and_concat_short_filter_args
-        String filter_and_concat_short_view_args = "-i 'MAC>=2 && F_MISSING<=0.2'"
+        String filter_and_concat_short_view_args = "-i 'MAC>=2 && F_MISSING<=0.4'"
         String filter_and_concat_sv_view_args = "-i 'MAC>=2'"
 
         # FixVariantCollisions (see documentation for arguments in task)
