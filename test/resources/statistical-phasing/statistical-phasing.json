@@ -1,6 +1,7 @@
 {
  "StatisticalPhasing.chromosome": "chr6",
  "StatisticalPhasing.chunk_extra_args": "--thread $(nproc) --window-size 2500000 --buffer-size 250000",
+ "StatisticalPhasing.default_weight": 0.1,
  "StatisticalPhasing.filter_and_concat_short_view_args": "-i 'MAF>=0.03 && abs(strlen(ALT)-strlen(REF))<50'",
  "StatisticalPhasing.fix_variant_collisions_script": "__REPO_DIR__/resources/FixVariantCollisions-9daf9b2-gemini-replacement-logging-GQ-AF-PS.rs",
  "StatisticalPhasing.genetic_maps_tsv": "__REPO_DIR__/test/resources/statistical-phasing/genetic_map_b38.mod.tsv",
