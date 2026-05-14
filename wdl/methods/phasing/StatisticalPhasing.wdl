@@ -35,6 +35,7 @@ workflow StatisticalPhasing {
         String weight_tag = "SCORE"
         Int is_weight_format_field = 0
         Float default_weight = 0.1
+        String fix_variant_collisions_extra_args = "--use-gq --use-af"
 
         # CreateShapeitChunks
         String chunk_extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 50000 --buffer-count 500" # we want window counts to drive the constraints
@@ -43,6 +44,7 @@ workflow StatisticalPhasing {
         String shapeit4_extra_args = "--thread $(nproc) --use-PS 0.0001"
         String shapeit5_extra_args =  "--thread $(nproc)"
         String filter_common_args = "-i 'MAF>=0.001'"
+        
     }
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
@@ -85,7 +87,8 @@ workflow StatisticalPhasing {
             operation = operation,
             weight_tag = weight_tag,
             is_weight_format_field = is_weight_format_field,
-            default_weight = default_weight
+            default_weight = default_weight,
+            fix_variant_collisions_extra_args = fix_variant_collisions_extra_args
         }
     }
 

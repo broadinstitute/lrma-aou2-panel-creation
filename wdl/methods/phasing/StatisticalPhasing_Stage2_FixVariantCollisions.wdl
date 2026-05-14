@@ -13,7 +13,7 @@ workflow FixVariantCollisions {
         String weight_tag = "SCORE"
         Int is_weight_format_field = 0
         Float default_weight = 0.05
-        String fixvariantcollisions_extra_args = "--use-gq --use-af"
+        String fix_variant_collisions_extra_args = "--use-gq --use-af"
     }
 
     call FixVariantCollisions { input:
@@ -24,7 +24,7 @@ workflow FixVariantCollisions {
         weight_tag = weight_tag,
         is_weight_format_field = is_weight_format_field,
         default_weight = default_weight,
-        extra_args = fixvariantcollisions_extra_args
+        extra_args = fix_variant_collisions_extra_args
     }
 
     output {
