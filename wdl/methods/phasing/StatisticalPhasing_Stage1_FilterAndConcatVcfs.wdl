@@ -16,7 +16,7 @@ workflow FilterAndConcatVcfs {
         String output_prefix
 
         String? short_filter_args
-        String short_view_args = "-i 'MAC>=2'"
+        String short_view_args = "-i 'MAC>=2 && F_MISSING<=0.1'"
         String sv_view_args = "-i 'MAC>=2'"
     }
 
@@ -134,7 +134,7 @@ task FilterShortVcf {
         String output_prefix
 
         String? short_filter_args
-        String short_view_args = "-i 'MAC>=2'"
+        String short_view_args = "-i 'MAC>=2 && F_MISSING<=0.1'"
 
         RuntimeAttr? runtime_attr_override
     }
@@ -249,11 +249,11 @@ task ConcatShortAndSVVcfs {
     command <<<
         set -euxo pipefail
 
-        # concatenate with deduplication; providing SV VCF as first argument preferentially keeps those records
+        # note, in Phase 1 we attempted to dedupe here
         bcftools concat --no-version \
-            ~{sv_vcf} \
             ~{short_vcf} \
-            --allow-overlaps --remove-duplicates -Ou | \
+            ~{sv_vcf} \
+            --allow-overlaps -Ou | \
             bcftools sort --write-index=csi -Ob -o ~{output_prefix}.bcf
     >>>
 

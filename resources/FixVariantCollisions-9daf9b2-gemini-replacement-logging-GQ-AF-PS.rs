@@ -4,9 +4,16 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::str::FromStr;
 
+// =====================================================================
+// 1. DATA STRUCTURES & CONSTANTS
+// =====================================================================
+
+/// Broad biological categories used for the Rule 3 Class Tiebreaker.
+/// (SNP > DEL > INS > SV_DEL > SV_INS)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VariantType { Del, Inv, Dup, Ins, Snp, Replacement }
 
+/// The 18 hardcoded phase/allele states recognized by the legacy collision engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum Genotype {
@@ -17,11 +24,12 @@ enum Genotype {
 }
 
 impl Genotype {
+    /// Parses exactly 3 bytes (e.g. '0|1', '1/1', '.|.') to classify the genotype.
     fn from_str(gt: &str) -> Self {
         let bytes = gt.as_bytes();
         if bytes.len() < 3 { return Genotype::UnphasedDD; }
         let a = bytes[0];
-        let b = bytes[1];
+        let b = bytes[1]; // The phase separator
         let c = bytes[2];
 
         if b == b'/' {
@@ -64,6 +72,7 @@ impl Genotype {
         }
     }
 
+    /// Safely strips the Phase information if Phase Sets (PS) mismatch.
     fn to_unphased(self) -> Self {
         match self {
             Genotype::Phased00 => Genotype::Unphased00,
@@ -80,6 +89,8 @@ impl Genotype {
     }
 }
 
+/// The legacy truth-matrix for physical genomic collisions. 
+/// If `N_GT_COLLISIONS[Variant_A][Variant_B] > 0`, they collide and cannot co-exist on the same path.
 const N_GT_COLLISIONS: [[u8; 18]; 18] = [
     [0,0,0,0, 0,0,0,0, 0,0,0,0,0, 0,0,0,0,0],
     [0,1,0,1, 0,0,0,1, 0,0,1,0,0, 0,0,0,0,0],
@@ -102,11 +113,20 @@ const N_GT_COLLISIONS: [[u8; 18]; 18] = [
 ];
 
 use Genotype::*;
+
+/// Mutation maps applied when a variant "loses" a collision. Replaces the offending allele with '.' (D).
 const REMOVE_HAP1_0: [Genotype; 18] = [Phased00,Phased01,Phased00,Phased01,Unphased00,Unphased01,Unphased10,Unphased01,PhasedD0,Phased0D,PhasedD1,Phased0D,PhasedDD,UnphasedD0,Unphased0D,UnphasedD1,Unphased1D,UnphasedDD];
 const REMOVE_HAP1_D: [Genotype; 18] = [Phased00,Phased01,PhasedD0,PhasedD1,Unphased00,Unphased01,Unphased10,UnphasedD1,PhasedD0,Phased0D,PhasedD1,PhasedDD,PhasedDD,UnphasedD0,Unphased0D,UnphasedD1,Unphased1D,UnphasedDD];
 const REMOVE_HAP2_0: [Genotype; 18] = [Phased00,Phased00,Phased10,Phased10,Unphased00,Unphased01,Unphased10,Unphased01,PhasedD0,Phased0D,PhasedD0,Phased1D,PhasedDD,UnphasedD0,Unphased0D,UnphasedD1,Unphased1D,UnphasedDD];
 const REMOVE_HAP2_D: [Genotype; 18] = [Phased00,Phased0D,Phased10,Phased1D,Unphased00,Unphased01,Unphased10,UnphasedD1,PhasedD0,Phased0D,PhasedDD,Phased1D,PhasedDD,UnphasedD0,Unphased0D,UnphasedD1,Unphased1D,UnphasedDD];
 
+
+// =====================================================================
+// 2. CORE LOGIC UTILITIES
+// =====================================================================
+
+/// Djb2 Hash function. Used to cleanly evaluate 'PS' Phase Set tags as fast integers 
+/// without needing to clone or store the strings.
 fn hash_ps(s: &str) -> u32 {
     if s == "." || s.is_empty() { return 0; }
     let mut hash = 5381u32;
@@ -116,6 +136,7 @@ fn hash_ps(s: &str) -> u32 {
     if hash == 0 { 1 } else { hash } 
 }
 
+/// Central data model holding a single VCF line and all computed metadata
 #[derive(Clone)]
 struct Interval {
     line: String,
@@ -125,25 +146,33 @@ struct Interval {
     last: i32,
     input_index: usize,
     
+    // Extracted biological properties
     v_type: VariantType,
     v_len: i32,
+    pad: i32,
+    class_score: i32,
+    
+    // Extracted graph node values
     weight: f64,
     gq: f64,
     af: f64,
     genotypes: Vec<Genotype>,
     phase_sets: Vec<u32>,
     
+    // Graph resolution trackers (wiped clean for each sample)
     in_independent_set: bool,
     independent_set_weight: f64,
     independent_set_gq: f64,
     independent_set_af: f64,
+    independent_set_class: i32,
     independent_set_previous: Option<usize>,
     overlaps_is_hap1: bool,
     overlaps_is_hap2: bool,
 }
 
 impl Interval {
-    fn new(line: String) -> Self {
+    /// Zero-allocation constructor. Indexes tabs to parse the raw string directly via slices.
+    fn new(line: String, sv_length: i32, sv_padding: i32) -> Self {
         let mut tabs = [0; 9];
         let mut tab_idx = 0;
         for (i, &b) in line.as_bytes().iter().enumerate() {
@@ -154,6 +183,7 @@ impl Interval {
             }
         }
         
+        // Lambda to pull VCF columns dynamically
         let col = |i: usize| -> &str {
             let start = if i == 0 { 0 } else { tabs[i - 1] + 1 };
             let end = tabs[i];
@@ -191,10 +221,19 @@ impl Interval {
             VariantType::Snp => (pos, pos),
         };
 
+        // Padding logic for shadowing artifact SNPs near SV breakpoints
+        let is_sv = length >= sv_length;
+        let pad = if is_sv { sv_padding } else { 0 };
+
+        // Hierarchy logic for deciding unbreakable ties
+        let class_score = match variant_type {
+            VariantType::Snp | VariantType::Replacement => 5,
+            VariantType::Del | VariantType::Inv => if is_sv { 2 } else { 4 },
+            VariantType::Ins | VariantType::Dup => if is_sv { 1 } else { 3 },
+        };
+
         let af = if let Some(af_str) = get_info_field(info, "AF") {
-            af_str.split(',')
-                .filter_map(|s| f64::from_str(s).ok())
-                .fold(0.0, f64::max)
+            af_str.split(',').filter_map(|s| f64::from_str(s).ok()).fold(0.0, f64::max)
         } else {
             0.0
         };
@@ -213,6 +252,7 @@ impl Interval {
                 genotypes.push(Genotype::from_str(sample_str));
                 let mut ps = 0;
                 
+                // Extracts the PS tag specifically for this sample
                 if let Some(target) = ps_idx {
                     let mut current_j = 0;
                     let mut start = 0;
@@ -238,30 +278,26 @@ impl Interval {
         Interval {
             line, tabs,
             chr, first, last, input_index: 0, 
-            v_type: variant_type, v_len: length,
+            v_type: variant_type, v_len: length, pad, class_score,
             weight: 0.0, gq: 0.0, af, genotypes, phase_sets,
-            in_independent_set: false, independent_set_weight: 0.0, independent_set_gq: 0.0, independent_set_af: 0.0,
+            in_independent_set: false, independent_set_weight: 0.0, independent_set_gq: 0.0, 
+            independent_set_af: 0.0, independent_set_class: 0,
             independent_set_previous: None, overlaps_is_hap1: false, overlaps_is_hap2: false,
         }
     }
 
+    /// Effective endpoints dictate how the graph calculates intersections (incorporates padding rules)
+    fn effective_first(&self) -> i32 { self.first - self.pad }
+    fn effective_last(&self) -> i32 { self.last + self.pad }
+
     fn col(&self, i: usize) -> &str {
-        if i == 0 {
-            &self.line[..self.tabs[0]]
-        } else if i < 9 {
-            &self.line[self.tabs[i - 1] + 1..self.tabs[i]]
-        } else {
-            ""
-        }
+        if i == 0 { &self.line[..self.tabs[0]] } 
+        else if i < 9 { &self.line[self.tabs[i - 1] + 1..self.tabs[i]] } 
+        else { "" }
     }
 
-    fn col_info(&self) -> &str {
-        self.col(7)
-    }
-
-    fn col_format(&self) -> &str {
-        self.col(8)
-    }
+    fn col_info(&self) -> &str { self.col(7) }
+    fn col_format(&self) -> &str { self.col(8) }
 
     fn sample_str(&self, sample_idx: usize) -> &str {
         let rest = &self.line[self.tabs[8] + 1..];
@@ -286,10 +322,7 @@ impl Interval {
         let format_col = self.col_format();
         let mut tag_index = None;
         for (i, t) in format_col.split(':').enumerate() {
-            if t == tag {
-                tag_index = Some(i);
-                break;
-            }
+            if t == tag { tag_index = Some(i); break; }
         }
         let target_idx = tag_index?;
         
@@ -300,27 +333,20 @@ impl Interval {
         
         for i in 0..gt_bytes.len() {
             if gt_bytes[i] == b':' {
-                if current_j == target_idx {
-                    return Some(&gt[start..i]);
-                }
+                if current_j == target_idx { return Some(&gt[start..i]); }
                 current_j += 1;
                 start = i + 1;
             }
         }
         
-        if current_j == target_idx && start <= gt.len() {
-            return Some(&gt[start..]);
-        }
+        if current_j == target_idx && start <= gt.len() { return Some(&gt[start..]); }
         None
     }
 
+    /// Evaluated once per sample loop to establish the nodes' graph weights
     fn set_scores(&mut self, sample: usize, weight_tag: &str, in_sample: bool, default_weight: f64) {
-        let val_opt = if in_sample {
-            self.extract_format_field(sample, weight_tag)
-        } else {
-            get_info_field(self.col_info(), weight_tag)
-        };
-        
+        let val_opt = if in_sample { self.extract_format_field(sample, weight_tag) } 
+                      else { get_info_field(self.col_info(), weight_tag) };
         self.weight = val_opt.and_then(|s| f64::from_str(s).ok()).unwrap_or(default_weight);
         self.gq = self.extract_format_field(sample, "GQ").and_then(|s| f64::from_str(s).ok()).unwrap_or(0.0);
     }
@@ -330,22 +356,41 @@ impl Interval {
         !matches!(gt, Phased00 | Unphased00 | PhasedDD | UnphasedDD | PhasedD0 | UnphasedD0 | Phased0D | Unphased0D)
     }
 
-    fn on_hap1(&self, sample: usize) -> bool {
-        matches!(self.genotypes[sample], Phased10 | Phased1D | Phased11 | Unphased11)
+    fn on_hap1(&self, sample: usize) -> bool { matches!(self.genotypes[sample], Phased10 | Phased1D | Phased11 | Unphased11) }
+    fn on_hap2(&self, sample: usize) -> bool { matches!(self.genotypes[sample], Phased01 | PhasedD1 | Phased11 | Unphased11) }
+
+    fn is_hom_deletion(&self, sample: usize) -> bool {
+        matches!(self.v_type, VariantType::Del | VariantType::Inv) && 
+        matches!(self.genotypes[sample], Genotype::Phased11 | Genotype::Unphased11)
     }
 
-    fn on_hap2(&self, sample: usize) -> bool {
-        matches!(self.genotypes[sample], Phased01 | PhasedD1 | Phased11 | Unphased11)
+    fn encompasses(&self, inner: &Interval) -> bool {
+        self.effective_first() <= inner.effective_first() && self.effective_last() >= inner.effective_last()
     }
 
+    /// Determines if `self` can legally immediately precede `next` on a valid path.
+    /// If it returns FALSE, it means the two variants collide and one must be removed.
     fn precedes(&self, next: &Interval, sample: usize) -> bool {
         let mut gt_self = self.genotypes[sample];
         let mut gt_next = next.genotypes[sample];
+        
+        // Strip phasing context if Phase Sets do not match (they aren't anchored to the same block)
         if self.phase_sets[sample] != next.phase_sets[sample] {
             gt_self = gt_self.to_unphased();
             gt_next = gt_next.to_unphased();
         }
-        N_GT_COLLISIONS[gt_self as usize][gt_next as usize] == 0 || self.last < next.first
+        
+        let mut collides = N_GT_COLLISIONS[gt_self as usize][gt_next as usize] > 0;
+        
+        // Rule 1: The Encompassing SV Override. 
+        // If the N_GT matrix allowed them to co-exist (e.g. an unphased SNP inside a Hom Deletion),
+        // we forcefully override the rule and flag it as a collision.
+        if !collides {
+            if self.is_hom_deletion(sample) && self.encompasses(next) { collides = true; }
+            else if next.is_hom_deletion(sample) && next.encompasses(self) { collides = true; }
+        }
+
+        !collides || self.effective_last() < next.effective_first()
     }
 
     fn clear_is_variables(&mut self) {
@@ -353,6 +398,7 @@ impl Interval {
         self.independent_set_weight = 0.0;
         self.independent_set_gq = 0.0;
         self.independent_set_af = 0.0;
+        self.independent_set_class = 0;
         self.independent_set_previous = None;
         self.overlaps_is_hap1 = false;
         self.overlaps_is_hap2 = false;
@@ -376,25 +422,15 @@ impl Interval {
             let sample_bytes = sample.as_bytes();
             let mut k = 0;
             let mut p2 = 0;
-            
             for j in 0..sample_bytes.len() {
                 if sample_bytes[j] == b':' {
                     k += 1;
-                    if k == gt_index {
-                        p2 = j + 1;
-                        break;
-                    }
+                    if k == gt_index { p2 = j + 1; break; }
                 }
             }
-            
-            if p2 > 0 {
-                out.write_all(&sample_bytes[0..p2])?;
-            }
+            if p2 > 0 { out.write_all(&sample_bytes[0..p2])?; }
             out.write_all(gt_enum.to_str().as_bytes())?;
-            
-            if let Some(q) = sample[p2..].find(':') {
-                out.write_all(sample[p2 + q..].as_bytes())?;
-            }
+            if let Some(q) = sample[p2..].find(':') { out.write_all(sample[p2 + q..].as_bytes())?; }
         }
         out.write_all(b"\n")?;
         Ok(())
@@ -402,14 +438,19 @@ impl Interval {
 
     fn category(&self, sv_length: i32) -> usize {
         match self.v_type {
-            VariantType::Snp | VariantType::Replacement => 2, // SNP
-            VariantType::Del | VariantType::Inv => if self.v_len >= sv_length { 0 } else { 1 }, // SV_DEL or DEL
-            VariantType::Ins | VariantType::Dup => if self.v_len >= sv_length { 4 } else { 3 }, // SV_INS or INS
+            VariantType::Del | VariantType::Inv => if self.v_len >= sv_length { 0 } else { 1 },
+            VariantType::Snp | VariantType::Replacement => 2,
+            VariantType::Ins | VariantType::Dup => if self.v_len >= sv_length { 4 } else { 3 },
         }
     }
 }
 
-fn is_better(w1: f64, gq1: f64, af1: f64, w2: f64, gq2: f64, af2: f64, use_gq: bool, use_af: bool) -> bool {
+// =====================================================================
+// 3. GRAPH ALGORITHM EVALUATORS
+// =====================================================================
+
+/// Evaluates the 4-tier compound tiebreaker (Weight -> GQ -> AF -> Variant Class).
+fn is_better(w1: f64, gq1: f64, af1: f64, c1: i32, w2: f64, gq2: f64, af2: f64, c2: i32, use_gq: bool, use_af: bool) -> bool {
     if w1 > w2 + 1e-9 { return true; }
     if (w1 - w2).abs() <= 1e-9 {
         if use_gq {
@@ -418,15 +459,18 @@ fn is_better(w1: f64, gq1: f64, af1: f64, w2: f64, gq2: f64, af2: f64, use_gq: b
         }
         if use_af {
             if af1 > af2 + 1e-9 { return true; }
+            if (af1 - af2).abs() > 1e-9 { return false; }
         }
+        if c1 > c2 { return true; } 
     }
     false
 }
 
-fn is_equal(w1: f64, gq1: f64, af1: f64, w2: f64, gq2: f64, af2: f64, use_gq: bool, use_af: bool) -> bool {
+fn is_equal(w1: f64, gq1: f64, af1: f64, c1: i32, w2: f64, gq2: f64, af2: f64, c2: i32, use_gq: bool, use_af: bool) -> bool {
     if (w1 - w2).abs() > 1e-9 { return false; }
     if use_gq && (gq1 - gq2).abs() > 1e-9 { return false; }
     if use_af && (af1 - af2).abs() > 1e-9 { return false; }
+    if c1 != c2 { return false; }
     true
 }
 
@@ -464,37 +508,48 @@ fn parse_svtype(t: &str) -> VariantType {
     }
 }
 
+/// Robustly checks if a new variant breaks the spatial window constraint.
+/// Now triggered properly on chromosome boundaries as well.
 fn is_last_in_window(window: &[Interval], window_last_pos: i32) -> bool {
     if window.is_empty() || window_last_pos == -1 { return true; }
     let first = &window[0];
     let last = &window[window.len() - 1];
-    last.chr == first.chr && last.first <= window_last_pos
+    last.chr == first.chr && last.effective_first() <= window_last_pos
 }
 
+/// Identifies if any overlaps require graph resolution for a given sample
 fn count_collisions(window: &[Interval], sample: usize) -> usize {
     let mut out = 0;
     for i in (0..window.len()).rev() {
         if !window[i].is_present(sample) { continue; }
         for j in (0..i).rev() {
-            if window[j].last < window[i].first { break; }
+            if window[j].effective_last() < window[i].effective_first() { break; }
+            
             let mut gt_i = window[i].genotypes[sample];
             let mut gt_j = window[j].genotypes[sample];
             if window[i].phase_sets[sample] != window[j].phase_sets[sample] {
                 gt_i = gt_i.to_unphased();
                 gt_j = gt_j.to_unphased();
             }
-            out += N_GT_COLLISIONS[gt_j as usize][gt_i as usize] as usize;
+            
+            let mut collides = N_GT_COLLISIONS[gt_j as usize][gt_i as usize] > 0;
+            if !collides {
+                if window[i].is_hom_deletion(sample) && window[i].encompasses(&window[j]) { collides = true; }
+                else if window[j].is_hom_deletion(sample) && window[j].encompasses(&window[i]) { collides = true; }
+            }
+            if collides { out += 1; }
         }
     }
     out
 }
 
 fn log_overlap(kept: &Interval, skipped: &Interval, sample_name: &str) {
-    eprintln!("  Kept Allele    - CHROM: {} POS: {} REF: {} ALT: {} WEIGHT: ({}, {}, {}) ID: {}", kept.col(0), kept.col(1), kept.col(3), kept.col(4), kept.weight, kept.gq, kept.af, kept.col(2));
-    eprintln!("  Skipped Allele - CHROM: {} POS: {} REF: {} ALT: {} WEIGHT: ({}, {}, {}) ID: {}", skipped.col(0), skipped.col(1), skipped.col(3), skipped.col(4), skipped.weight, skipped.gq, skipped.af, skipped.col(2));
+    eprintln!("  Kept Allele    - CHROM: {} POS: {} REF: {} ALT: {} WEIGHT: ({}, {}, {}, {}) ID: {}", kept.col(0), kept.col(1), kept.col(3), kept.col(4), kept.weight, kept.gq, kept.af, kept.class_score, kept.col(2));
+    eprintln!("  Skipped Allele - CHROM: {} POS: {} REF: {} ALT: {} WEIGHT: ({}, {}, {}, {}) ID: {}", skipped.col(0), skipped.col(1), skipped.col(3), skipped.col(4), skipped.weight, skipped.gq, skipped.af, skipped.class_score, skipped.col(2));
     eprintln!("  SAMPLES: ['{}']", sample_name);
 }
 
+/// Flags variants that were omitted from the independent set so they can be unphased/masked.
 fn mark_is_overlaps(
     window: &mut [Interval], 
     sample_window: &[usize], 
@@ -516,52 +571,73 @@ fn mark_is_overlaps(
 
     for i in (0..sample_window.len()).rev() {
         let idx_i = sample_window[i];
-        let first_i = window[idx_i].first;
+        let eff_first_i = window[idx_i].effective_first();
         let on_hap1_i = window[idx_i].on_hap1(sample);
         let on_hap2_i = window[idx_i].on_hap2(sample);
         let in_is_i = window[idx_i].in_independent_set;
+        let hom_del_i = window[idx_i].is_hom_deletion(sample);
 
         for j in (0..i).rev() {
             let idx_j = sample_window[j];
-            if window[idx_j].last < first_i { break; }
+            if window[idx_j].effective_last() < eff_first_i { break; }
+            
             let in_is_j = window[idx_j].in_independent_set;
+            let hom_del_j = window[idx_j].is_hom_deletion(sample);
             let same_ps = window[idx_i].phase_sets[sample] == window[idx_j].phase_sets[sample];
 
-            let mut log_skip = |w: &[Interval], logged: &mut [bool], kept_idx: usize, skipped_idx: usize, counts: &mut [usize; 5]| {
+            let log_skip = |w: &[Interval], logged: &mut [bool], kept_idx: usize, skipped_idx: usize, counts: &mut [usize; 5]| {
                 if !logged[skipped_idx] {
-                    if verbosity >= 2 {
-                        log_overlap(&w[kept_idx], &w[skipped_idx], sample_name);
-                    }
+                    if verbosity >= 2 { log_overlap(&w[kept_idx], &w[skipped_idx], sample_name); }
                     logged[skipped_idx] = true;
                     counts[w[skipped_idx].category(sv_length)] += 1;
                 }
             };
 
+            // Encompassing SVs violently mask everything inside their bounds.
+            // Standard overlaps only mask if they reside in the same Phase Set (PS).
             if in_is_i && !in_is_j {
-                if same_ps && hap1 && on_hap1_i && window[idx_j].on_hap1(sample) { 
+                let override_mask = hom_del_i && window[idx_i].encompasses(&window[idx_j]);
+                if override_mask {
                     window[idx_j].overlaps_is_hap1 = true; 
+                    window[idx_j].overlaps_is_hap2 = true;
                     log_skip(window, already_logged, idx_i, idx_j, &mut removed_counts);
-                }
-                if same_ps && hap2 && on_hap2_i && window[idx_j].on_hap2(sample) { 
-                    window[idx_j].overlaps_is_hap2 = true; 
-                    log_skip(window, already_logged, idx_i, idx_j, &mut removed_counts);
+                } else {
+                    if same_ps && hap1 && on_hap1_i && window[idx_j].on_hap1(sample) { 
+                        window[idx_j].overlaps_is_hap1 = true; 
+                        log_skip(window, already_logged, idx_i, idx_j, &mut removed_counts);
+                    }
+                    if same_ps && hap2 && on_hap2_i && window[idx_j].on_hap2(sample) { 
+                        window[idx_j].overlaps_is_hap2 = true; 
+                        log_skip(window, already_logged, idx_i, idx_j, &mut removed_counts);
+                    }
                 }
             } else if in_is_j && !in_is_i {
-                if same_ps && hap1 && window[idx_j].on_hap1(sample) && on_hap1_i { 
-                    window[idx_i].overlaps_is_hap1 = true; 
+                let override_mask = hom_del_j && window[idx_j].encompasses(&window[idx_i]);
+                if override_mask {
+                    window[idx_i].overlaps_is_hap1 = true;
+                    window[idx_i].overlaps_is_hap2 = true;
                     log_skip(window, already_logged, idx_j, idx_i, &mut removed_counts);
-                }
-                if same_ps && hap2 && window[idx_j].on_hap2(sample) && on_hap2_i { 
-                    window[idx_i].overlaps_is_hap2 = true; 
-                    log_skip(window, already_logged, idx_j, idx_i, &mut removed_counts);
+                } else {
+                    if same_ps && hap1 && window[idx_j].on_hap1(sample) && on_hap1_i { 
+                        window[idx_i].overlaps_is_hap1 = true; 
+                        log_skip(window, already_logged, idx_j, idx_i, &mut removed_counts);
+                    }
+                    if same_ps && hap2 && window[idx_j].on_hap2(sample) && on_hap2_i { 
+                        window[idx_i].overlaps_is_hap2 = true; 
+                        log_skip(window, already_logged, idx_j, idx_i, &mut removed_counts);
+                    }
                 }
             }
         }
     }
-    
     removed_counts
 }
 
+// =====================================================================
+// 4. GRAPH SOLVERS
+// =====================================================================
+
+/// METHOD 1: Legacy DFS search. Can be incredibly slow in dense regions O(2^N).
 fn independent_set_1(
     window: &mut [Interval], 
     sample: usize, 
@@ -589,6 +665,7 @@ fn independent_set_1(
     let mut max_weight = f64::NEG_INFINITY;
     let mut max_gq = f64::NEG_INFINITY;
     let mut max_af = f64::NEG_INFINITY;
+    let mut max_class = std::i32::MIN;
     let mut active = vec![true; sample_window.len()];
     let mut best_is = Vec::new();
 
@@ -596,42 +673,39 @@ fn independent_set_1(
         let mut ancestors = Vec::new();
         is1_dfs(
             i, &mut active, &mut ancestors, 
-            0.0, 0.0, 0.0, 
+            0.0, 0.0, 0.0, 0,
             sample, &sample_window, window, 
-            &mut max_weight, &mut max_gq, &mut max_af, &mut best_is,
+            &mut max_weight, &mut max_gq, &mut max_af, &mut max_class, &mut best_is,
             use_gq, use_af
         );
     }
 
-    for &idx in &best_is {
-        window[sample_window[idx]].in_independent_set = true;
-    }
+    for &idx in &best_is { window[sample_window[idx]].in_independent_set = true; }
 
     let removed = mark_is_overlaps(window, &sample_window, sample, true, true, sample_name, already_logged, verbosity, sv_length);
 
     for &idx in &sample_window {
         if window[idx].in_independent_set { continue; }
-        
         let mut gt = window[idx].genotypes[sample];
         gt = if window[idx].overlaps_is_hap1 { REMOVE_HAP1_D[gt as usize] } else { REMOVE_HAP1_0[gt as usize] };
         gt = if window[idx].overlaps_is_hap2 { REMOVE_HAP2_D[gt as usize] } else { REMOVE_HAP2_0[gt as usize] };
         window[idx].genotypes[sample] = gt;
     }
-    
     removed
 }
 
 fn is1_dfs(
     id: usize, active: &mut [bool], ancestors: &mut Vec<usize>, 
-    ancestors_weight: f64, ancestors_gq: f64, ancestors_af: f64,
+    ancestors_weight: f64, ancestors_gq: f64, ancestors_af: f64, ancestors_class: i32,
     sample: usize, sample_window: &[usize], window: &[Interval],
-    max_weight: &mut f64, max_gq: &mut f64, max_af: &mut f64, best_is: &mut Vec<usize>,
+    max_weight: &mut f64, max_gq: &mut f64, max_af: &mut f64, max_class: &mut i32, best_is: &mut Vec<usize>,
     use_gq: bool, use_af: bool
 ) {
     let curr_idx = sample_window[id];
     let weight_prime = ancestors_weight + window[curr_idx].weight;
     let gq_prime = ancestors_gq + window[curr_idx].gq;
     let af_prime = ancestors_af + window[curr_idx].af;
+    let class_prime = ancestors_class + window[curr_idx].class_score;
     let mut active_prime = active.to_vec();
     active_prime[id] = false;
     
@@ -657,18 +731,19 @@ fn is1_dfs(
             if upper_bound < *max_weight - 1e-9 { break; }
             is1_dfs(
                 i, &mut active_prime, ancestors, 
-                weight_prime, gq_prime, af_prime, 
+                weight_prime, gq_prime, af_prime, class_prime,
                 sample, sample_window, window, 
-                max_weight, max_gq, max_af, best_is,
+                max_weight, max_gq, max_af, max_class, best_is,
                 use_gq, use_af
             );
             upper_bound -= window[sample_window[i]].weight;
         }
         ancestors.pop();
-    } else if is_better(weight_prime, gq_prime, af_prime, *max_weight, *max_gq, *max_af, use_gq, use_af) {
+    } else if is_better(weight_prime, gq_prime, af_prime, class_prime, *max_weight, *max_gq, *max_af, *max_class, use_gq, use_af) {
         *max_weight = weight_prime;
         *max_gq = gq_prime;
         *max_af = af_prime;
+        *max_class = class_prime;
         best_is.clear();
         best_is.extend(ancestors.iter().copied());
         best_is.push(id);
@@ -681,6 +756,8 @@ struct EndpointGroup {
     closed: Vec<usize>,
 }
 
+/// METHOD 2: Hsiao's Dynamic Programming Algorithm. 
+/// Solves the Independent Set pathing in O(N log N) time, practically eliminating noise-density hangs.
 fn independent_set_2(
     window: &mut [Interval], 
     sample: usize, 
@@ -706,8 +783,10 @@ fn independent_set_2(
                 window[i].clear_is_variables();
                 window[i].set_scores(sample, weight_tag, weight_loc, default_w);
                 sample_window.push(i);
-                points_map.entry(window[i].first).or_default().opens.push(i);
-                points_map.entry(window[i].last).or_default().closed.push(i);
+                
+                // Track spatial endpoints map using 'effective' padding boundaries
+                points_map.entry(window[i].effective_first()).or_default().opens.push(i);
+                points_map.entry(window[i].effective_last()).or_default().closed.push(i);
             }
         }
 
@@ -716,38 +795,44 @@ fn independent_set_2(
         let mut available_weight = f64::NEG_INFINITY;
         let mut available_gq = f64::NEG_INFINITY;
         let mut available_af = f64::NEG_INFINITY;
+        let mut available_class = std::i32::MIN;
         let mut previous: Option<usize> = None;
 
+        // DP Sweepline: Accumulate optimal subpath weights at each spatial coordinate
         for (_pos, group) in points_map {
             for &idx in &group.opens {
                 let base_w = if available_weight == f64::NEG_INFINITY { 0.0 } else { available_weight };
                 let base_gq = if available_gq == f64::NEG_INFINITY { 0.0 } else { available_gq };
                 let base_af = if available_af == f64::NEG_INFINITY { 0.0 } else { available_af };
+                let base_c = if available_class == std::i32::MIN { 0 } else { available_class };
                 
                 window[idx].independent_set_weight = base_w + window[idx].weight;
                 window[idx].independent_set_gq = base_gq + window[idx].gq;
                 window[idx].independent_set_af = base_af + window[idx].af;
+                window[idx].independent_set_class = base_c + window[idx].class_score;
                 window[idx].independent_set_previous = previous;
             }
             for &idx in &group.closed {
                 if is_better(
-                    window[idx].independent_set_weight, window[idx].independent_set_gq, window[idx].independent_set_af,
-                    available_weight, available_gq, available_af, use_gq, use_af
+                    window[idx].independent_set_weight, window[idx].independent_set_gq, window[idx].independent_set_af, window[idx].independent_set_class,
+                    available_weight, available_gq, available_af, available_class, use_gq, use_af
                 ) {
                     available_weight = window[idx].independent_set_weight;
                     available_gq = window[idx].independent_set_gq;
                     available_af = window[idx].independent_set_af;
+                    available_class = window[idx].independent_set_class;
                     previous = Some(idx);
                 }
             }
         }
 
+        // Traceback from the end of the window to identify the winning chain of variants
         let mut curr_trace = None;
         for i in (0..sample_window.len()).rev() {
             let idx = sample_window[i];
             if is_equal(
-                window[idx].independent_set_weight, window[idx].independent_set_gq, window[idx].independent_set_af,
-                available_weight, available_gq, available_af, use_gq, use_af
+                window[idx].independent_set_weight, window[idx].independent_set_gq, window[idx].independent_set_af, window[idx].independent_set_class,
+                available_weight, available_gq, available_af, available_class, use_gq, use_af
             ) {
                 curr_trace = Some(idx);
                 break;
@@ -759,6 +844,7 @@ fn independent_set_2(
             curr_trace = window[idx].independent_set_previous;
         }
 
+        // Apply masking tables to the losing variants based on the hap pass
         if hap == 1 {
             let removed = mark_is_overlaps(window, &sample_window, sample, true, false, sample_name, already_logged, verbosity, sv_length);
             for i in 0..5 { total_removed[i] += removed[i]; }
@@ -783,6 +869,10 @@ fn independent_set_2(
     total_removed
 }
 
+// =====================================================================
+// 5. MAIN EXECUTION & I/O
+// =====================================================================
+
 fn process_window<W: Write>(
     window: &mut Vec<Interval>, 
     method_2: bool, 
@@ -800,12 +890,15 @@ fn process_window<W: Write>(
     sv_length: i32
 ) {
     if window.is_empty() { return; }
-    window.sort_by(|a, b| a.last.cmp(&b.last));
+    
+    // Sort spatially so graph sweep processes correctly left to right
+    window.sort_by(|a, b| a.effective_last().cmp(&b.effective_last()));
     let n_samples = window[0].genotypes.len();
     
     already_logged.clear();
     already_logged.resize(window.len(), false);
 
+    // Solve graphs independently per individual sample
     for sample in 0..n_samples {
         let sample_name = sample_names.get(sample).map(|s| s.as_str()).unwrap_or("UNKNOWN");
         let cols = count_collisions(window, sample);
@@ -824,6 +917,7 @@ fn process_window<W: Write>(
         }
     }
 
+    // Must re-sort original VCF physical index back to normal before writing out
     window.sort_by(|a, b| a.input_index.cmp(&b.input_index));
     for iv in window {
         let _ = iv.write_vcf(output);
@@ -836,9 +930,11 @@ fn main() -> std::io::Result<()> {
     let mut use_af = false;
     let mut verbosity: u8 = 2;
     let mut sv_length: i32 = 50;
+    let mut sv_padding: i32 = 0;
     let mut removed_counts_tsv_path: Option<String> = None;
     let mut histogram_tsv_path: Option<String> = None;
     
+    // Custom Flag Parsing
     let mut args = vec![all_args[0].clone()];
     let mut i = 1;
     while i < all_args.len() {
@@ -853,17 +949,17 @@ fn main() -> std::io::Result<()> {
                 i += 1;
                 sv_length = all_args.get(i).and_then(|s| s.parse().ok()).unwrap_or(50);
             }
+            "--sv-padding" => {
+                i += 1;
+                sv_padding = all_args.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
+            }
             "--removed-counts-tsv" => {
                 i += 1;
-                if let Some(path) = all_args.get(i) {
-                    removed_counts_tsv_path = Some(path.clone());
-                }
+                if let Some(path) = all_args.get(i) { removed_counts_tsv_path = Some(path.clone()); }
             }
             "--histogram-tsv" => {
                 i += 1;
-                if let Some(path) = all_args.get(i) {
-                    histogram_tsv_path = Some(path.clone());
-                }
+                if let Some(path) = all_args.get(i) { histogram_tsv_path = Some(path.clone()); }
             }
             _ => args.push(all_args[i].clone()),
         }
@@ -871,7 +967,7 @@ fn main() -> std::io::Result<()> {
     }
 
     if args.len() < 5 {
-        eprintln!("Usage: {} [--use-gq] [--use-af] [--verbosity <1|2>] [--sv-length <int>] [--removed-counts-tsv <file>] [--histogram-tsv <file>] <method> <weight_tag> <weight_loc> <default_w> < input.vcf > output.vcf", args[0]);
+        eprintln!("Usage: {} [--use-gq] [--use-af] [--verbosity <1|2>] [--sv-length <int>] [--sv-padding <int>] [--removed-counts-tsv <file>] [--histogram-tsv <file>] <method> <weight_tag> <weight_loc> <default_w> < input.vcf > output.vcf", args[0]);
         return Ok(());
     }
 
@@ -897,6 +993,7 @@ fn main() -> std::io::Result<()> {
     
     let mut sample_names: Vec<String> = Vec::new();
 
+    // Primary VCF Parsing Loop
     while reader.read_line(&mut line)? > 0 {
         let mut trimmed_len = line.len();
         while trimmed_len > 0 && (line.as_bytes()[trimmed_len - 1] == b'\n' || line.as_bytes()[trimmed_len - 1] == b'\r') {
@@ -914,9 +1011,11 @@ fn main() -> std::io::Result<()> {
             }
             let _ = writeln!(out_vcf, "{}", line);
         } else {
-            let iv = Interval::new(line.clone());
+            let iv = Interval::new(line.clone(), sv_length, sv_padding);
+            
             window.push(iv);
             
+            // Reverted to robust boundary checks. Triggers process if chromosome changes or padding threshold is exceeded.
             if !is_last_in_window(&window, window_last_pos) {
                 let next_iv = window.pop().unwrap();
                 for (i, iv) in window.iter_mut().enumerate() { iv.input_index = i; }
@@ -932,15 +1031,16 @@ fn main() -> std::io::Result<()> {
                 
                 window.clear();
                 window.push(next_iv);
-                window_last_pos = window[0].last;
+                window_last_pos = window[0].effective_last();
             } else {
                 let last_iv = &window[window.len() - 1];
-                if last_iv.last > window_last_pos { window_last_pos = last_iv.last; }
+                if last_iv.effective_last() > window_last_pos { window_last_pos = last_iv.effective_last(); }
             }
         }
         line.clear();
     }
     
+    // Flush the final lingering window batch
     if !window.is_empty() { 
         for (i, iv) in window.iter_mut().enumerate() { iv.input_index = i; }
         process_window(&mut window, method_2, weight_tag, weight_loc, default_weight, &mut out_vcf, &mut histogram, &sample_names, &mut already_logged, &mut removed_per_sample, use_gq, use_af, verbosity, sv_length); 
