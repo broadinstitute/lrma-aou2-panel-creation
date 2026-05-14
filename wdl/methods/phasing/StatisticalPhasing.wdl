@@ -95,6 +95,8 @@ workflow StatisticalPhasing {
 
     call GatherSitesAndChunk.GatherSitesAndChunk as GatherSitesAndChunk { input:
         region = region,
+        filter_and_concat_vcfs = FilterAndConcatVcfs.filter_and_concat_vcf,
+        filter_and_concat_vcf_idxs = FilterAndConcatVcfs.filter_and_concat_vcf_idx,
         collisionless_vcfs = FixVariantCollisions.collisionless_vcf,
         collisionless_vcf_idxs = FixVariantCollisions.collisionless_vcf_idx,
         output_prefix = output_prefix,

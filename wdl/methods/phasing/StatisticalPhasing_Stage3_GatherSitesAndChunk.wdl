@@ -7,11 +7,19 @@ workflow GatherSitesAndChunk {
 
     input {
         String region
+        Array[File] filter_and_concat_vcfs
+        Array[File] filter_and_concat_vcf_idxs
         Array[File] collisionless_vcfs
         Array[File] collisionless_vcf_idxs
         String output_prefix
 
         String chunk_extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 50000 --buffer-count 500" # we want window counts to drive the constraints
+    }
+
+    call BcftoolsConcatNaive as FilterAndConcatConcat { input:
+        vcfs = filter_and_concat_vcfs,
+        vcf_idxs = filter_and_concat_vcf_idxs,
+        output_prefix = output_prefix + ".filterAndConcat"
     }
 
     call BcftoolsConcatNaive as CollisionlessPreShapeitConcat { input:
@@ -20,24 +28,26 @@ workflow GatherSitesAndChunk {
         output_prefix = output_prefix + ".collisionless"
     }
 
-    call CreateSitesOnlyVCF as CollisionlessPreShapeitSitesOnly { input:
-        vcf = CollisionlessPreShapeitConcat.concatenated_vcf,
-        vcf_idx = CollisionlessPreShapeitConcat.concatenated_vcf_idx,
+    call CreateSitesOnlyVCF as SitesOnly { input:
+        vcf = FilterAndConcatConcat.concatenated_vcf,
+        vcf_idx = FilterAndConcatConcat.concatenated_vcf_idx,
         output_prefix = output_prefix + ".collisionless.sites"
     }
 
     call CreateShapeitChunks { input:
-        vcf = CollisionlessPreShapeitSitesOnly.sites_only_vcf,
-        vcf_idx = CollisionlessPreShapeitSitesOnly.sites_only_vcf_idx,
+        vcf = SitesOnly.sites_only_vcf,
+        vcf_idx = SitesOnly.sites_only_vcf_idx,
         region = region,
         extra_args = chunk_extra_args
     }
 
     output {
+        File filter_and_concat_vcf = FilterAndConcatConcat.concatenated_vcf
+        File filter_and_concat_vcf_idx = FilterAndConcatConcat.concatenated_vcf_idx
         File collisionless_vcf = CollisionlessPreShapeitConcat.concatenated_vcf
         File collisionless_vcf_idx = CollisionlessPreShapeitConcat.concatenated_vcf_idx
-        File sites_only_vcf = CollisionlessPreShapeitSitesOnly.sites_only_vcf
-        File sites_only_vcf_idx = CollisionlessPreShapeitSitesOnly.sites_only_vcf_idx
+        File sites_only_vcf = SitesOnly.sites_only_vcf
+        File sites_only_vcf_idx = SitesOnly.sites_only_vcf_idx
         File chunks_tsv = CreateShapeitChunks.chunks_tsv
         File common_chunks = CreateShapeitChunks.common_chunks
         File rare_chunks = CreateShapeitChunks.rare_chunks
