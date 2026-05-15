@@ -10,8 +10,6 @@ workflow FilterAndConcatVcfs {
         File short_vcf_idx
         File sv_vcf           # biallelic
         File sv_vcf_idx
-        File reference_fasta
-        File reference_fasta_fai
         String region
         String output_prefix
 
@@ -37,8 +35,6 @@ workflow FilterAndConcatVcfs {
     call FilterShortVcf { input:
         short_vcf = SubsetVcfShort.subset_vcf,
         short_vcf_idx = SubsetVcfShort.subset_idx,
-        reference_fasta = reference_fasta,
-        reference_fasta_fai = reference_fasta_fai,
         output_prefix = output_prefix + ".filterShort",
         short_filter_args = short_filter_args,
         short_view_args = short_view_args
@@ -129,8 +125,6 @@ task FilterShortVcf {
     input {
         File short_vcf         # multiallelic
         File short_vcf_idx
-        File reference_fasta
-        File reference_fasta_fai
         String output_prefix
 
         String? short_filter_args
@@ -144,9 +138,9 @@ task FilterShortVcf {
     command <<<
         set -euxo pipefail
 
-        # normalize then split to biallelic, then filter short (re-fill tags when needed)
-        # order of operations matters for final variant representations, only change with caution!
-        bcftools norm --no-version -m-any -f ~{reference_fasta} ~{short_vcf} -Ou | \
+        # split to biallelic, then filter short (re-fill tags when needed)
+        # order of operations matters, change with caution!
+        bcftools norm --no-version -m-any --do-not-normalize ~{short_vcf} -Ou | \
             bcftools +fill-tags --no-version -Ou -- -t AF,AC,AN | \
             bcftools filter --no-version ~{short_filter_args} -Ou | \
             bcftools +fill-tags --no-version -Ou -- -t AF,AC,AN | \

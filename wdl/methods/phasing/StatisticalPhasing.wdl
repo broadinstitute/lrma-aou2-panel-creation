@@ -73,8 +73,6 @@ workflow StatisticalPhasing {
             sv_vcf = joint_sv_vcf,
             sv_vcf_idx = joint_sv_vcf_idx,
             output_prefix = output_prefix + ".shard-" + s,
-            reference_fasta = reference_fasta,
-            reference_fasta_fai = reference_fasta_fai,
             region = shard_region,
             short_view_args = filter_and_concat_short_view_args,
             short_filter_args = filter_and_concat_short_filter_args,
