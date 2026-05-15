@@ -7,7 +7,7 @@ workflow HierarchicallyMergeVcfs {
         Array[String] regions   # bcftools regions, e.g. ["chr1,chr2,chr3", "chr4,chr5,chr6", ...]
         Int batch_size
         String output_prefix
-        String extra_merge_args = "--threads $(nproc) --force-single --merge none --info-rules -"       # non-region args
+        String extra_merge_args = "--threads $(nproc) --force-single --merge none --info-rules -"       # non-region args; note "--info-rules -" is needed to turn off DP summation, which can lead to MAX_INT overflows and bad VCF behavior
         String extra_concat_args = "--threads $(nproc) --naive"
         Boolean use_ivcfmerge   # requires sample_names
         Array[String]? sample_names
