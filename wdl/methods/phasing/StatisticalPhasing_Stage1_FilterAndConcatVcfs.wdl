@@ -243,11 +243,11 @@ task ConcatShortAndSVVcfs {
     command <<<
         set -euxo pipefail
 
-        # note, in Phase 1 we attempted to dedupe here
+        # concatenate with deduplication; providing SV VCF as first argument preferentially keeps those records
         bcftools concat --no-version \
-            ~{short_vcf} \
             ~{sv_vcf} \
-            --allow-overlaps -Ou | \
+            ~{short_vcf} \
+            --allow-overlaps --remove-duplicates -Ou | \
             bcftools sort --write-index=csi -Ob -o ~{output_prefix}.bcf
     >>>
 
