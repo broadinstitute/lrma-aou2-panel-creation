@@ -267,7 +267,7 @@ task HiPhase {
         use_ssd:            true,
         preemptible_tries:  4,
         max_retries:        0,
-        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/hiphase:v1.5.0"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/hiphase:v1.6.0 "
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
