@@ -76,6 +76,16 @@ workflow PhysicalPhasing {
         extra_args = hiphase_extra_args
     }
 
+    call ConcatVcfs { input:
+        short_vcf = HiPhase.hiphase_short_vcf,
+        short_vcf_idx = HiPhase.hiphase_short_vcf_idx,
+        sv_vcf = HiPhase.hiphase_sv_vcf,
+        sv_vcf_idx = HiPhase.hiphase_sv_vcf_idx,
+        trgt_vcf = HiPhase.hiphase_trgt_vcf,
+        trgt_vcf_idx = HiPhase.hiphase_trgt_vcf_idx,
+        output_prefix = sample_name + ".hiphase.concat"
+    }
+
     output {
         File hiphase_short_vcf = HiPhase.hiphase_short_vcf
         File hiphase_short_vcf_idx = HiPhase.hiphase_short_vcf_idx
@@ -86,6 +96,8 @@ workflow PhysicalPhasing {
         File? hiphase_haplotagged_bam = HiPhase.haplotagged_bam
         File? hiphase_haplotagged_bam_idx = HiPhase.haplotagged_bam_idx
         Array[File] hiphase_metrics_files = HiPhase.hiphase_metrics_files
+        File hiphase_concat_vcf = ConcatVcfs.concat_vcf
+        File hiphase_concat_vcf_idx = ConcatVcfs.concat_vcf_idx
     }
 }
 
@@ -272,6 +284,61 @@ task HiPhase {
         preemptible_tries:  4,
         max_retries:        0,
         docker:             "us.gcr.io/broad-dsde-methods/slee/hiphase:v1.6.0 "
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+    }
+}
+
+task ConcatVcfs {
+    input {
+        File short_vcf
+        File short_vcf_idx
+        File sv_vcf
+        File sv_vcf_idx
+        File? trgt_vcf
+        File? trgt_vcf_idx
+        String output_prefix
+
+        RuntimeAttr? runtime_attr_override
+    }
+
+    Int disk_gb = 10 + 2 * ceil(size(short_vcf, "GiB") + size(sv_vcf, "GiB") + size(trgt_vcf, "GiB"))
+
+    command <<<
+        set -euxo pipefail
+
+        # concatenate with deduplication; providing SV VCF as first argument preferentially keeps those records
+        bcftools concat --no-version \
+            ~{sv_vcf} \
+            ~{short_vcf} \
+            ~{trgt_vcf} \
+            --allow-overlaps --remove-duplicates -Ou | \
+            bcftools sort --write-index=csi -Ob -o ~{output_prefix}.bcf
+    >>>
+
+    output {
+        File concat_vcf = "~{output_prefix}.bcf"
+        File concat_vcf_idx = "~{output_prefix}.bcf.csi"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          2,
+        mem_gb:             6,
+        disk_gb:            disk_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  3,
+        max_retries:        0,
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
