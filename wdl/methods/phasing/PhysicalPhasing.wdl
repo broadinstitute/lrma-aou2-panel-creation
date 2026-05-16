@@ -139,10 +139,12 @@ task PreProcessVCFs {
         bcftools index ~{sample_name}.short.bcf
         rm ~{sample_name}.short.chr-*.bcf
 
-        # note that SNV/non-SNV filters will also be applied to multiallelic/mixed sites
+        # note that SNV/non-SNV filters must be sandwiched between norm to be properly applied to mixed/multiallelic sites
         bcftools view ~{sample_name}.short.bcf \
             ~{"-r " + region} ~{short_view_args} -Ou | \
+            bcftools norm -m-any -N -Ou | \
             bcftools filter ~{short_filter_args} -Ou | \
+            bcftools norm -m+any -N -Ou | \
             bcftools sort -W=csi -Ob -o ~{sample_name}.preprocessed.short.bcf
 
         # localize, concat, and subset sv (biallelic)
