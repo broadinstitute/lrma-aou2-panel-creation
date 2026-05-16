@@ -83,8 +83,8 @@ workflow PhysicalPhasing {
         File hiphase_sv_vcf_idx = HiPhase.hiphase_sv_vcf_idx
         File? hiphase_trgt_vcf = HiPhase.hiphase_trgt_vcf
         File? hiphase_trgt_vcf_idx = HiPhase.hiphase_trgt_vcf_idx
-        File? haplotagged_bam = HiPhase.haplotagged_bam
-        File? haplotagged_bam_idx = HiPhase.haplotagged_bam_idx
+        File? hiphase_haplotagged_bam = HiPhase.haplotagged_bam
+        File? hiphase_haplotagged_bam_idx = HiPhase.haplotagged_bam_idx
         Array[File] hiphase_metrics_files = HiPhase.hiphase_metrics_files
     }
 }
