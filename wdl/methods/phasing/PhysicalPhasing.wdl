@@ -35,7 +35,7 @@ workflow PhysicalPhasing {
         File? trgt_vcf                  # untested
         File? trgt_vcf_idx
 
-        String short_view_args = "-e 'QUAL<20 || abs(ILEN)>=20 || (FILTER!=\"PASS\" && FILTER!=\".\")'"
+        String short_view_args = "-e 'QUAL<20 || abs(ILEN)>=40 || (FILTER!=\"PASS\" && FILTER!=\".\")'"
         String short_filter_args = "-S . -e 'GT=\"alt\" && ((TYPE=\"snp\" && GQ<15) || (TYPE!=\"snp\" && GQ<5))'"
 
         File bam
