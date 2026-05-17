@@ -45,6 +45,8 @@ workflow PhysicalPhasing {
 
         Boolean do_haplotagging = false
         String hiphase_extra_args = "--threads $(nproc) --global-realignment-cputime 300"
+
+        Boolean do_concat = false
     }
 
     call PreProcessVCFs { input:
@@ -76,14 +78,16 @@ workflow PhysicalPhasing {
         extra_args = hiphase_extra_args
     }
 
-    call ConcatVcfs { input:
-        short_vcf = HiPhase.hiphase_short_vcf,
-        short_vcf_idx = HiPhase.hiphase_short_vcf_idx,
-        sv_vcf = HiPhase.hiphase_sv_vcf,
-        sv_vcf_idx = HiPhase.hiphase_sv_vcf_idx,
-        trgt_vcf = HiPhase.hiphase_trgt_vcf,
-        trgt_vcf_idx = HiPhase.hiphase_trgt_vcf_idx,
-        output_prefix = sample_name + ".hiphase.concat"
+    if (do_concat) {
+        call ConcatVcfs { input:
+            short_vcf = HiPhase.hiphase_short_vcf,
+            short_vcf_idx = HiPhase.hiphase_short_vcf_idx,
+            sv_vcf = HiPhase.hiphase_sv_vcf,
+            sv_vcf_idx = HiPhase.hiphase_sv_vcf_idx,
+            trgt_vcf = HiPhase.hiphase_trgt_vcf,
+            trgt_vcf_idx = HiPhase.hiphase_trgt_vcf_idx,
+            output_prefix = sample_name + ".hiphase.concat"
+        }
     }
 
     output {
@@ -96,8 +100,8 @@ workflow PhysicalPhasing {
         File? hiphase_haplotagged_bam = HiPhase.haplotagged_bam
         File? hiphase_haplotagged_bam_idx = HiPhase.haplotagged_bam_idx
         Array[File] hiphase_metrics_files = HiPhase.hiphase_metrics_files
-        File hiphase_concat_vcf = ConcatVcfs.concat_vcf
-        File hiphase_concat_vcf_idx = ConcatVcfs.concat_vcf_idx
+        File? hiphase_concat_vcf = ConcatVcfs.concat_vcf
+        File? hiphase_concat_vcf_idx = ConcatVcfs.concat_vcf_idx
     }
 }
 
