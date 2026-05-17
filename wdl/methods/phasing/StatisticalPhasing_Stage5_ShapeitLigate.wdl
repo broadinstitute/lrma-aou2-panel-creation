@@ -66,7 +66,7 @@ task LigateVcfs {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/shapeit5:v1"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/shapeit5:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
