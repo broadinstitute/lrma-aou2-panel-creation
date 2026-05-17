@@ -14,9 +14,9 @@ workflow BubblePanelCreation {
         # inputs for FixVariantCollisions (see documentation for arguments in task)
         File fix_variant_collisions_script
         Int operation = 1
-        String weight_tag = "AF"
+        String weight_tag = "SCORE"
         Int is_weight_format_field = 0
-        Float default_weight = 0.1
+        Float default_weight = 0.05
 
         File prepare_vcf_and_add_ids_script
         File merge_vcfs_script
@@ -34,12 +34,12 @@ workflow BubblePanelCreation {
         weight_tag = weight_tag,
         is_weight_format_field = is_weight_format_field,
         default_weight = default_weight,
-        output_prefix = output_prefix
+        output_prefix = output_prefix + ".ligated.collisionless"
     }
 
     call BubblePanelCreation { input:
-        phased_vcf = FixVariantCollisions.phased_collisionless_vcf,
-        phased_vcf_idx = FixVariantCollisions.phased_collisionless_vcf_idx,
+        phased_vcf = FixVariantCollisions.collisionless_vcf,
+        phased_vcf_idx = FixVariantCollisions.collisionless_vcf_idx,
         reference_fasta = reference_fasta,
         reference_fasta_fai = reference_fasta_fai,
         region = region,
@@ -49,15 +49,17 @@ workflow BubblePanelCreation {
         frac_missing = frac_missing,
         weight_tag = weight_tag,
         default_weight = default_weight,
-        output_prefix = output_prefix
+        output_prefix = output_prefix + ".ligated.collisionless.bubble"
     }
 
     # make sure dict in header
     # TODO add preprocessing steps from KAGE Panel WDL
 
     output {
-        File phased_collisionless_vcf = FixVariantCollisions.phased_collisionless_vcf
-        File phased_collisionless_vcf_idx = FixVariantCollisions.phased_collisionless_vcf_idx
+        File phased_collisionless_vcf = FixVariantCollisions.collisionless_vcf
+        File phased_collisionless_vcf_idx = FixVariantCollisions.collisionless_vcf_idx
+        File phased_collisionless_removed_counts_tsv = FixVariantCollisions.collisionless_removed_counts_tsv
+        File phased_collisionless_histogram_tsv = FixVariantCollisions.collisionless_histogram_tsv
         File panel_vcf = BubblePanelCreation.panel_vcf
         File panel_vcf_idx = BubblePanelCreation.panel_vcf_idx
         File panel_id_split_vcf = BubblePanelCreation.panel_id_split_vcf
@@ -76,45 +78,50 @@ struct RuntimeAttr {
     String? docker
 }
 
+# TODO consolidate with Stage2; break out annotation step
 task FixVariantCollisions {
     input {
-        File phased_vcf                     # biallelic
+        File phased_vcf                          # biallelic, can be locally or fully phased
         File phased_vcf_idx
         File annotations_vcf
         File annotations_vcf_idx
         File fix_variant_collisions_script
-        Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
-        String weight_tag = "SCORE"         # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
-        Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
-        Float default_weight = 0.1          # default weight if the weight field is not found
+        Int operation = 1                        # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
+        String weight_tag = "SCORE"              # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
+        Int is_weight_format_field = 0           # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
+        Float default_weight = 0.05              # default weight if the weight field is not found
+        String extra_args = "--use-gq --use-af --verbosity 1"  # use GQ then AF as tie breakers
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 50 + 4 * (ceil(size(phased_vcf, "GiB")))
+    Int disk_gb = 10 + 2 * (ceil(size(phased_vcf, "GiB")) + ceil(size(annotations_vcf, "GiB")))
 
     command <<<
         set -euxo pipefail
 
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
-        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by bubble panel-creation script
-        time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
+        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
+        time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN,INFO/AN,INFO/AC,INFO/AF -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
             ~{is_weight_format_field} \
             ~{default_weight} \
-            histogram.txt | \
+            ~{extra_args} \
+            --removed-counts-tsv ~{output_prefix}.removed.tsv \
+            --histogram-tsv ~{output_prefix}.histogram.tsv | \
         bcftools +setGT --no-version -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.phased.collisionless.bcf -- -t AF,AC,AN
+            bcftools +fill-tags --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
     >>>
 
     output {
-        File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.bcf"
-        File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.bcf.csi"
-        File histogram = "histogram.txt"
+        File collisionless_vcf = "~{output_prefix}.bcf"
+        File collisionless_vcf_idx = "~{output_prefix}.bcf.csi"
+        File collisionless_removed_counts_tsv = "~{output_prefix}.removed.tsv"
+        File collisionless_histogram_tsv = "~{output_prefix}.histogram.tsv"
     }
 
     #########################
@@ -124,8 +131,8 @@ task FixVariantCollisions {
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
+        preemptible_tries:  3,
+        max_retries:        0,
         docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
