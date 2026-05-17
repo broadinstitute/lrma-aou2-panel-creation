@@ -79,7 +79,7 @@ task Shapeit4 {
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
-        preemptible_tries:  2,
+        preemptible_tries:  3,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/shapeit4:v1"
     }
