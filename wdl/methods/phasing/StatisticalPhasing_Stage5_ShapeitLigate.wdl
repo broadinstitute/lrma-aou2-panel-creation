@@ -1,32 +1,23 @@
 version 1.0
 
-workflow Shapeit4Phase {
+workflow ShapeitLigate {
 
     input {
-        File vcf
-        File vcf_idx
-        File genetic_maps_tsv
-        String chromosome
-        String region
+        Array[File] vcfs
+        Array[File] vcf_idxs
         String output_prefix
-
-        String extra_args = "--thread $(nproc) --use-PS 0.0001 --pbwt-depth 4 --mcmc-iterations 4b,1p,1b,1p,4m"
     }
 
-    Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
 
-    call Shapeit4 { input:
-        vcf = vcf,
-        vcf_idx = vcf_idx,
-        genetic_map = genetic_maps_dict[chromosome],
-        region = region,
-        output_prefix = output_prefix + ".shapeit4",
-        extra_args = extra_args
+    call LigateVcfs { input:
+        vcfs = vcfs,
+        vcf_idxs = vcf_idxs,
+        output_prefix = output_prefix + ".shapeit4.ligated"
     }
 
     output {
-        File phased_vcf = Shapeit4.phased_vcf
-        File phased_vcf_idx = Shapeit4.phased_vcf_idx
+        File ligated_vcf = LigateVcfs.ligated_vcf
+        File ligated_vcf_idx = LigateVcfs.ligated_vcf_idx
     }
 }
 
@@ -41,47 +32,41 @@ struct RuntimeAttr {
     String? docker
 }
 
-task Shapeit4 {
+task LigateVcfs {
     input {
-        File vcf
-        File vcf_idx
-        File genetic_map
-        String region
+        Array[File] vcfs
+        Array[File] vcf_idxs
         String output_prefix
-        String extra_args = "--thread $(nproc) --use-PS 0.0001 --pbwt-depth 4 --mcmc-iterations 4b,1p,1b,1p,4m"
 
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 4 * ceil(size(vcf, "GiB"))
-    
+    Int disk_gb = 10 + 4 * ceil(size(vcfs, "GiB"))
+
     command <<<
         set -euxo pipefail
 
-        shapeit4.2 --input ~{vcf} \
-                --map ~{genetic_map} \
-                --region ~{region} \
-                --sequencing \
-                --output ~{output_prefix}.bcf \
-                ~{extra_args}
+        ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.ligate.bcf
+        bcftools +fill-tags --no-version --threads $(nproc) ~{output_prefix}.ligate.bcf \
+            -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
         bcftools index ~{output_prefix}.bcf
     >>>
 
-    output{
-        File phased_vcf = "~{output_prefix}.bcf"
-        File phased_vcf_idx = "~{output_prefix}.bcf.csi"
+    output {
+        File ligated_vcf = "~{output_prefix}.bcf"
+        File ligated_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          16,
-        mem_gb:             16,
+        cpu_cores:          2,
+        mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/shapeit4:v1"
+        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/shapeit5:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {

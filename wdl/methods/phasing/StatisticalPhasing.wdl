@@ -5,6 +5,7 @@ import "StatisticalPhasing_Stage1_FilterAndConcatVcfs.wdl" as FilterAndConcatVcf
 import "StatisticalPhasing_Stage2_FixVariantCollisions.wdl" as FixVariantCollisions
 import "StatisticalPhasing_Stage3_GatherSitesAndChunk.wdl" as GatherSitesAndChunk
 import "StatisticalPhasing_Stage4_Shapeit4Phase.wdl"  as Shapeit4Phase
+import "StatisticalPhasing_Stage5_ShapeitLigate.wdl"  as ShapeitLigate
 
 workflow StatisticalPhasing {
 
@@ -112,7 +113,7 @@ workflow StatisticalPhasing {
                 vcf_idx = GatherSitesAndChunk.collisionless_vcf_idx,
                 genetic_maps_tsv = genetic_maps_tsv,
                 region = common_regions[i],
-                output_prefix = output_prefix + ".shapeit4",
+                output_prefix = output_prefix,
                 extra_args = shapeit4_extra_args
             }
         }
@@ -130,16 +131,16 @@ workflow StatisticalPhasing {
                 vcf_idx = FilterCommon.common_vcf_idx,
                 genetic_maps_tsv = genetic_maps_tsv,
                 region = common_regions[i],
-                output_prefix = output_prefix + ".shapeit4",
+                output_prefix = output_prefix,
                 extra_args = shapeit4_extra_args
             }
         }
     }
 
-    call LigateVcfs as LigateScaffold { input:
+    call ShapeitLigate.ShapeitLigate as LigateScaffold { input:
         vcfs = select_all(flatten([Shapeit4All.phased_vcf, Shapeit4Common.phased_vcf])),
         vcf_idxs = select_all(flatten([Shapeit4All.phased_vcf_idx, Shapeit4Common.phased_vcf_idx])),
-        output_prefix = output_prefix + ".shapeit4.ligated"
+        output_prefix = output_prefix
     }
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
@@ -226,54 +227,6 @@ task FilterCommon {
         preemptible_tries:  2,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
-}
-
-task LigateVcfs {
-    input {
-        Array[File] vcfs
-        Array[File] vcf_idxs
-        String output_prefix
-
-        RuntimeAttr? runtime_attr_override
-    }
-
-    Int disk_gb = 10 + 4 * ceil(size(vcfs, "GiB"))
-
-    command <<<
-        set -euxo pipefail
-
-        ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.ligate.bcf
-        bcftools +fill-tags --no-version --threads $(nproc) ~{output_prefix}.ligate.bcf \
-            -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
-        bcftools index ~{output_prefix}.bcf
-    >>>
-
-    output {
-        File ligated_vcf = "~{output_prefix}.bcf"
-        File ligated_vcf_idx = "~{output_prefix}.bcf.csi"
-    }
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          2,
-        mem_gb:             8,
-        disk_gb:            disk_gb,
-        boot_disk_gb:       10,
-        use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "hangsuunc/shapeit5:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {

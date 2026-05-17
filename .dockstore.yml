@@ -21,6 +21,9 @@ workflows:
 - name: StatisticalPhasing_Stage4_Shapeit4Phase
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage4_Shapeit4Phase.wdl
+- name: StatisticalPhasing_Stage5_ShapeitLigate
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage5_ShapeitLigate.wdl
 - name: PanGeniePanelCreation
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/PanGeniePanelCreation.wdl
