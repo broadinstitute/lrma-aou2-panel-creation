@@ -1,7 +1,6 @@
 version 1.0
 
 # Gather collisionless shards, create a sites-only VCF, and create Shapeit4 chunks.
-# TODO create Terra data table from chunks
 
 workflow GatherSitesAndChunk {
 
@@ -11,6 +10,7 @@ workflow GatherSitesAndChunk {
         Array[File] filter_and_concat_vcf_idxs
         Array[File] collisionless_vcfs
         Array[File] collisionless_vcf_idxs
+        String entity_name
         String output_prefix
 
         String chunk_extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 50000 --buffer-count 500" # we want window counts to drive the constraints
@@ -38,6 +38,8 @@ workflow GatherSitesAndChunk {
         vcf = SitesOnly.sites_only_vcf,
         vcf_idx = SitesOnly.sites_only_vcf_idx,
         region = region,
+        entity_name = entity_name,
+        output_prefix = output_prefix,
         extra_args = chunk_extra_args
     }
 
@@ -48,9 +50,9 @@ workflow GatherSitesAndChunk {
         File collisionless_vcf_idx = CollisionlessPreShapeitConcat.concatenated_vcf_idx
         File sites_only_vcf = SitesOnly.sites_only_vcf
         File sites_only_vcf_idx = SitesOnly.sites_only_vcf_idx
-        File chunks_tsv = CreateShapeitChunks.chunks_tsv
         File common_chunks = CreateShapeitChunks.common_chunks
         File rare_chunks = CreateShapeitChunks.rare_chunks
+        File chunks_terra_tsv = CreateShapeitChunks.chunks_terra_tsv
     }
 }
 
@@ -161,7 +163,9 @@ task CreateShapeitChunks {
     input {
         File vcf
         File vcf_idx
+        String output_prefix
         String region
+        String entity_name
         String extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 50000 --buffer-count 500" # we want window counts to drive the constraints
 
         RuntimeAttr? runtime_attr_override
@@ -179,17 +183,40 @@ task CreateShapeitChunks {
             -I ~{vcf} \
             --region ~{region} \
             ~{extra_args} \
-            -O chunks.tsv
+            -O ~{output_prefix}.chunks.tsv
 
         # cut chunks + buffers
-        cut -f 3 chunks.tsv > common.chunks.regions.txt
-        cut -f 4 chunks.tsv > rare.chunks.regions.txt
+        cut -f 3 ~{output_prefix}.chunks.tsv > ~{output_prefix}.chunks.regions.common.txt
+        cut -f 4 ~{output_prefix}.chunks.tsv > ~{output_prefix}.chunks.regions.rare.txt
+        
+        # Generate Terra-compatible TSV
+        python3 <<EOF
+        import sys
+
+        entity_name = "~{entity_name}"
+        in_file = "~{output_prefix}.chunks.tsv"
+        out_file = "~{output_prefix}.chunks.terra.tsv"
+
+        with open(in_file, "r") as f_in, open(out_file, "w") as f_out:
+            lines = [line.strip().split("\t") for line in f_in if line.strip()]
+
+            # GLIMPSE chunk output has 6 columns
+            header = [f"entity:{entity_name}_id", "index", "chrom", "outer_region", "inner_region", "inner_region_length", "number_of_variants"]
+
+            f_out.write("\t".join(header) + "\n")
+
+            for i, row in enumerate(lines):
+                # Construct an entity ID using the outer region
+                outer_region = row[2].replace(':', '-')
+                entity_id = f"~{output_prefix}.shard-{i:04d}.{outer_region}"
+                f_out.write("\t".join([entity_id] + row) + "\n")
+        EOF
     >>>
 
     output {
-        File chunks_tsv = "chunks.tsv"
-        File common_chunks = "common.chunks.regions.txt"
-        File rare_chunks = "rare.chunks.regions.txt"
+        File common_chunks = "~{output_prefix}.chunks.regions.common.txt"
+        File rare_chunks = "~{output_prefix}.chunks.regions.rare.txt"
+        File chunks_terra_tsv = "~{output_prefix}.chunks.tsv"
     }
 
     #########################
