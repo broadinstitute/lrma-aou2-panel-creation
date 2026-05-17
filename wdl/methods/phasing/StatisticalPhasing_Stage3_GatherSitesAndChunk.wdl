@@ -183,25 +183,24 @@ task CreateShapeitChunks {
             -I ~{vcf} \
             --region ~{region} \
             ~{extra_args} \
-            -O ~{output_prefix}.chunks.tsv
+            -O chunks.tsv
 
         # cut chunks + buffers
-        cut -f 3 ~{output_prefix}.chunks.tsv > ~{output_prefix}.chunks.regions.common.txt
-        cut -f 4 ~{output_prefix}.chunks.tsv > ~{output_prefix}.chunks.regions.rare.txt
+        cut -f 3 chunks.tsv > ~{output_prefix}.chunks.regions.common.txt
+        cut -f 4 chunks.tsv > ~{output_prefix}.chunks.regions.rare.txt
         
         # Generate Terra-compatible TSV
         python3 <<EOF
         import sys
 
-        entity_name = "~{entity_name}"
-        in_file = "~{output_prefix}.chunks.tsv"
-        out_file = "~{output_prefix}.chunks.terra.tsv"
+        in_file = "chunks.tsv"
+        out_file = "~{output_prefix}.chunks.tsv"
 
         with open(in_file, "r") as f_in, open(out_file, "w") as f_out:
             lines = [line.strip().split("\t") for line in f_in if line.strip()]
 
             # GLIMPSE chunk output has 6 columns
-            header = [f"entity:{entity_name}_id", "index", "chrom", "outer_region", "inner_region", "inner_region_length", "number_of_variants"]
+            header = [f"entity:~{entity_name}_id", "index", "chrom", "outer_region", "inner_region", "inner_region_length", "number_of_variants"]
 
             f_out.write("\t".join(header) + "\n")
 
