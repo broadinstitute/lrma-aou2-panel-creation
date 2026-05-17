@@ -1,6 +1,6 @@
 version 1.0
 
-workflow PanGeniePanelCreation {
+workflow BubblePanelCreation {
     input {
         File phased_vcf
         File phased_vcf_idx
@@ -37,7 +37,7 @@ workflow PanGeniePanelCreation {
         output_prefix = output_prefix
     }
 
-    call PanGeniePanelCreation { input:
+    call BubblePanelCreation { input:
         phased_vcf = FixVariantCollisions.phased_collisionless_vcf,
         phased_vcf_idx = FixVariantCollisions.phased_collisionless_vcf_idx,
         reference_fasta = reference_fasta,
@@ -58,10 +58,10 @@ workflow PanGeniePanelCreation {
     output {
         File phased_collisionless_vcf = FixVariantCollisions.phased_collisionless_vcf
         File phased_collisionless_vcf_idx = FixVariantCollisions.phased_collisionless_vcf_idx
-        File panel_vcf = PanGeniePanelCreation.panel_vcf
-        File panel_vcf_idx = PanGeniePanelCreation.panel_vcf_idx
-        File panel_id_split_vcf = PanGeniePanelCreation.panel_id_split_vcf
-        File panel_id_split_vcf_idx = PanGeniePanelCreation.panel_id_split_vcf_idx
+        File panel_vcf = BubblePanelCreation.panel_vcf
+        File panel_vcf_idx = BubblePanelCreation.panel_vcf_idx
+        File panel_id_split_vcf = BubblePanelCreation.panel_id_split_vcf
+        File panel_id_split_vcf_idx = BubblePanelCreation.panel_id_split_vcf_idx
     }
 }
 
@@ -99,7 +99,7 @@ task FixVariantCollisions {
 
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
-        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
+        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by bubble panel-creation script
         time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
@@ -126,7 +126,7 @@ task FixVariantCollisions {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation-rust:v1"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -140,7 +140,7 @@ task FixVariantCollisions {
     }
 }
 
-task PanGeniePanelCreation {
+task BubblePanelCreation {
     input {
         File phased_vcf
         File phased_vcf_idx
@@ -164,24 +164,24 @@ task PanGeniePanelCreation {
     command <<<
         set -euxo pipefail
 
-        mkdir -p pangenie-utils/src/bin
-        cp ~{prepare_vcf_and_add_ids_script} pangenie-utils/src/bin/prepare_vcf_and_add_ids.rs
-        cp ~{merge_vcfs_script} pangenie-utils/src/bin/merge_vcfs.rs
-        cp ~{cargo_toml} pangenie-utils
-        cd pangenie-utils
+        mkdir -p bubble-utils/src/bin
+        cp ~{prepare_vcf_and_add_ids_script} bubble-utils/src/bin/prepare_vcf_and_add_ids.rs
+        cp ~{merge_vcfs_script} bubble-utils/src/bin/merge_vcfs.rs
+        cp ~{cargo_toml} bubble-utils
+        cd bubble-utils
         cargo build --release
         cd ..
 
         bcftools stats -r ~{region} --regions-overlap 0 ~{phased_vcf} --threads 6 > ~{output_prefix}.stats.txt
         bcftools view --no-version -h ~{phased_vcf} > header.txt
 
-        # validate variants against reference, run PanGenie prepare-vcf and add-ids scripts, split to biallelic, and run PanGenie merge script;
+        # validate variants against reference, run bubble prepare-vcf and add-ids scripts, split to biallelic, and run bubble merge script;
         # everything should be normalized or in the desired representation at this point
         time bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} --threads 2 ~{phased_vcf} | \
-            ./pangenie-utils/target/release/prepare_vcf_and_add_ids --missing ~{frac_missing} | \
+            ./bubble-utils/target/release/prepare_vcf_and_add_ids --missing ~{frac_missing} | \
             bcftools norm --no-version -m-any --do-not-normalize | tee \
         >(  bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.bcf ) | \
-         (  ./pangenie-utils/target/release/merge_vcfs merge \
+         (  ./bubble-utils/target/release/merge_vcfs merge \
                 --header header.txt \
                 -r ~{reference_fasta} \
                 --ploidy 2 \
@@ -201,7 +201,7 @@ task PanGeniePanelCreation {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation-rust:v1"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {

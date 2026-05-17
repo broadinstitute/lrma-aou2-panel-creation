@@ -1,5 +1,5 @@
 */cromwell-executions/*
 */cromwell-workflow-logs/*
 *.mod.*
-resources/pangenie-utils/Cargo.lock
-resources/pangenie-utils/target
+resources/bubble-utils/Cargo.lock
+resources/bubble-utils/target

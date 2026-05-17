@@ -27,9 +27,9 @@ workflows:
 - name: PanGeniePanelCreation
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/PanGeniePanelCreation.wdl
-- name: PanGeniePanelCreationRust
+- name: BubblePanelCreation
   subclass: wdl
-  primaryDescriptorPath: /wdl/methods/imputation/PanGeniePanelCreationRust.wdl
+  primaryDescriptorPath: /wdl/methods/imputation/BubblePanelCreation.wdl
 - name: GLIMPSE2BatchedCaseShardedSingleBatch
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/GLIMPSE2BatchedCaseShardedSingleBatch.wdl
