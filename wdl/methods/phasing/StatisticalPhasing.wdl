@@ -4,6 +4,7 @@ import "StatisticalPhasing_Stage0_CreateShards.wdl" as CreateShards
 import "StatisticalPhasing_Stage1_FilterAndConcatVcfs.wdl" as FilterAndConcatVcfs
 import "StatisticalPhasing_Stage2_FixVariantCollisions.wdl" as FixVariantCollisions
 import "StatisticalPhasing_Stage3_GatherSitesAndChunk.wdl" as GatherSitesAndChunk
+import "StatisticalPhasing_Stage4_Shapeit4Phase.wdl"  as Shapeit4Phase
 
 workflow StatisticalPhasing {
 
@@ -42,13 +43,11 @@ workflow StatisticalPhasing {
         String chunk_extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 50000 --buffer-count 500" # we want window counts to drive the constraints
 
         Boolean do_shapeit5 = true
-        String shapeit4_extra_args = "--thread $(nproc) --use-PS 0.0001"
+        String shapeit4_extra_args = "--thread $(nproc) --use-PS 0.0001 --pbwt-depth 4 --mcmc-iterations 4b,1p,1b,1p,4m"
         String shapeit5_extra_args =  "--thread $(nproc)"
         String filter_common_args = "-i 'MAF>=0.001'"
         
     }
-
-    Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
 
     call CreateShards.CreateShards as CreateFilterAndConcatShards { input:
         region = region,
@@ -101,17 +100,19 @@ workflow StatisticalPhasing {
         chunk_extra_args = chunk_extra_args
     }
 
+    # TODO we are not using Shapeit5 for AoU2 v1, will not break out steps below into stages
+
     Array[String] common_regions = read_lines(GatherSitesAndChunk.common_chunks) # for shapeit4
 
     scatter (i in range(length(common_regions))) {
         if (!do_shapeit5) {
             # phase all using Shapeit4
-            call Shapeit4 as Shapeit4All { input:
+            call Shapeit4Phase.Shapeit4Phase as Shapeit4All { input:
                 vcf = GatherSitesAndChunk.collisionless_vcf,
                 vcf_idx = GatherSitesAndChunk.collisionless_vcf_idx,
-                genetic_map = genetic_maps_dict[chromosome],
+                genetic_maps_tsv = genetic_maps_tsv,
                 region = common_regions[i],
-                output_prefix = output_prefix + ".phased",
+                output_prefix = output_prefix + ".shapeit4",
                 extra_args = shapeit4_extra_args
             }
         }
@@ -124,12 +125,12 @@ workflow StatisticalPhasing {
                 filter_common_args = filter_common_args
             }
             # phase common scaffold using Shapeit4
-            call Shapeit4 as Shapeit4Common { input:
+            call Shapeit4Phase.Shapeit4Phase as Shapeit4Common { input:
                 vcf = FilterCommon.common_vcf,
                 vcf_idx = FilterCommon.common_vcf_idx,
-                genetic_map = genetic_maps_dict[chromosome],
+                genetic_maps_tsv = genetic_maps_tsv,
                 region = common_regions[i],
-                output_prefix = output_prefix + ".phased",
+                output_prefix = output_prefix + ".shapeit4",
                 extra_args = shapeit4_extra_args
             }
         }
@@ -138,8 +139,10 @@ workflow StatisticalPhasing {
     call LigateVcfs as LigateScaffold { input:
         vcfs = select_all(flatten([Shapeit4All.phased_vcf, Shapeit4Common.phased_vcf])),
         vcf_idxs = select_all(flatten([Shapeit4All.phased_vcf_idx, Shapeit4Common.phased_vcf_idx])),
-        output_prefix = output_prefix + ".phased.ligated"
+        output_prefix = output_prefix + ".shapeit4.ligated"
     }
+
+    Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
 
     if (do_shapeit5) {
         # phase rare using Shapeit5
@@ -154,7 +157,7 @@ workflow StatisticalPhasing {
                 genetic_map = genetic_maps_dict[chromosome],
                 region = rare_regions[i],
                 scaffold_region = common_regions[i],
-                output_prefix = output_prefix + ".phased." + "chunk-" + i,
+                output_prefix = output_prefix + ".shapeit5." + "chunk-" + i,
                 extra_args = shapeit5_extra_args
             }
         }
@@ -162,7 +165,7 @@ workflow StatisticalPhasing {
         call GatherSitesAndChunk.BcftoolsConcatNaive as ConcatShapeit5 { input:
             vcfs = flatten([Shapeit5Rare.phased_vcf]),
             vcf_idxs = flatten([Shapeit5Rare.phased_vcf_idx]),
-            output_prefix = output_prefix + ".phased.concat"
+            output_prefix = output_prefix + ".shapeit5.concat"
         }
     }
 
@@ -223,60 +226,6 @@ task FilterCommon {
         preemptible_tries:  2,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
-}
-
-task Shapeit4 {
-    input {
-        File vcf
-        File vcf_idx
-        File genetic_map
-        String region
-        String output_prefix
-        String extra_args = "--thread $(nproc) --use-PS 0.0001"
-
-        RuntimeAttr? runtime_attr_override
-    }
-
-    Int disk_gb = 10 + 4 * ceil(size(vcf, "GiB"))
-    
-    command <<<
-        set -euxo pipefail
-
-        shapeit4.2 --input ~{vcf} \
-                --map ~{genetic_map} \
-                --region ~{region} \
-                --sequencing \
-                --output ~{output_prefix}.bcf \
-                ~{extra_args}
-        bcftools index ~{output_prefix}.bcf
-    >>>
-
-    output{
-        File phased_vcf = "~{output_prefix}.bcf"
-        File phased_vcf_idx = "~{output_prefix}.bcf.csi"
-    }
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          16,
-        mem_gb:             16,
-        disk_gb:            disk_gb,
-        boot_disk_gb:       10,
-        use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/hangsuunc/shapeit4:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
