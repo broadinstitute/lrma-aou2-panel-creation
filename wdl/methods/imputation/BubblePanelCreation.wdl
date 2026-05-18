@@ -106,7 +106,7 @@ task FixVariantCollisions {
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
         # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN,INFO/AN,INFO/AC,INFO/AF -a ~{annotations_vcf} ~{phased_vcf} ~{region} --regions-overlap 0 --threads 2 | \
+        time bcftools annotate --no-version -r ~{region} --regions-overlap 0 -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN,INFO/AN,INFO/AC,INFO/AF -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
