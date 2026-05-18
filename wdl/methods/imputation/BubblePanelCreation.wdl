@@ -34,6 +34,7 @@ workflow BubblePanelCreation {
         weight_tag = weight_tag,
         is_weight_format_field = is_weight_format_field,
         default_weight = default_weight,
+        region = region,
         output_prefix = output_prefix + ".ligated.collisionless"
     }
 
@@ -91,6 +92,7 @@ task FixVariantCollisions {
         Int is_weight_format_field = 0           # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
         Float default_weight = 0.05              # default weight if the weight field is not found
         String extra_args = "--use-gq --use-af --verbosity 1"  # use GQ then AF as tie breakers
+        String region
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
@@ -104,7 +106,7 @@ task FixVariantCollisions {
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
         # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN,INFO/AN,INFO/AC,INFO/AF -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
+        time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN,INFO/AN,INFO/AC,INFO/AF -a ~{annotations_vcf} ~{phased_vcf} ~{region} --regions-overlap 0 --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
