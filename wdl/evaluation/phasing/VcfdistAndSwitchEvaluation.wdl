@@ -27,12 +27,15 @@ workflow VcfdistAndSwitchEvaluation {
         String region
         File reference_fasta
         File reference_fasta_fai
+        Boolean do_naively_phase = false    # convert / to | in unphased inputs, e.g. PanGenie
 
         Array[File] vcfdist_bed_files
         Array[String] labels_per_stratification
         String? vcfdist_extra_args
         Int? vcfdist_mem_gb
+        String vcfdist_docker
 
+        Boolean do_switch = false
         String? switch_filter_args
 
         String summarize_evaluations_docker
@@ -49,7 +52,8 @@ workflow VcfdistAndSwitchEvaluation {
             sample = sample,
             region = region,
             bed_file = confident_regions_bed_files[i],
-            reference_fasta_fai = reference_fasta_fai
+            reference_fasta_fai = reference_fasta_fai,
+            do_naively_phase = do_naively_phase
         }
 
         call SubsetSampleFromVcf as SubsetSampleFromVcfTruth { input:
@@ -58,18 +62,21 @@ workflow VcfdistAndSwitchEvaluation {
             sample = sample,
             region = region,
             bed_file = confident_regions_bed_files[i],
-            reference_fasta_fai = reference_fasta_fai
+            reference_fasta_fai = reference_fasta_fai,
+            do_naively_phase = false
         }
 
-        call switch { input: 
-            truth_bcf = SubsetSampleFromVcfTruth.single_sample_vcf,
-            truth_bcf_index = SubsetSampleFromVcfTruth.single_sample_vcf_tbi,
-            test_bcf = SubsetSampleFromVcfEval.single_sample_vcf,
-            test_bcf_index = SubsetSampleFromVcfEval.single_sample_vcf_tbi,
-            region = region,
-            outputprefix = sample,
-            filter_args = switch_filter_args,
-            num_threads = 4
+        if (do_switch) {
+            call switch { input: 
+                truth_bcf = SubsetSampleFromVcfTruth.single_sample_vcf,
+                truth_bcf_index = SubsetSampleFromVcfTruth.single_sample_vcf_tbi,
+                test_bcf = SubsetSampleFromVcfEval.single_sample_vcf,
+                test_bcf_index = SubsetSampleFromVcfEval.single_sample_vcf_tbi,
+                region = region,
+                outputprefix = sample,
+                filter_args = switch_filter_args,
+                num_threads = 4
+            }
         }
     }
 
@@ -82,7 +89,8 @@ workflow VcfdistAndSwitchEvaluation {
                 bed_file = vcfdist_bed_files[j],
                 reference_fasta = reference_fasta,
                 extra_args = vcfdist_extra_args,
-                mem_gb = vcfdist_mem_gb
+                mem_gb = vcfdist_mem_gb,
+                docker = vcfdist_docker
             }
         }
     }
@@ -98,7 +106,7 @@ workflow VcfdistAndSwitchEvaluation {
         Array[Array[VcfdistOutputs]] vcfdist_summary = Vcfdist.outputs
         File evaluation_summary_tsv = SummarizeEvaluations.evaluation_summary_tsv
         # per sample
-        Array[Array[File]] switch_output_files = switch.output_files
+        Array[Array[File]?] switch_output_files = switch.output_files
     }
 }
 
@@ -111,6 +119,7 @@ task SubsetSampleFromVcf {
         String region
         File? bed_file
         File reference_fasta_fai
+        Boolean do_naively_phase = false
     }
 
     command <<<
@@ -125,7 +134,7 @@ task SubsetSampleFromVcf {
             -s ~{original_sample_name} \
             -r ~{region} \
             ~{"-T " + bed_file} \
-            -Oz -o ~{sample}.subset.g.vcf.gz
+            ~{if (do_naively_phase) then "-Ou | bcftools +setGT -Oz -o " + sample + ".subset.g.vcf.gz -- -t a -n p" else "-Oz -o " + sample + ".subset.g.vcf.gz"}
         echo ~{sample} > sample_name.txt
         bcftools reheader ~{sample}.subset.g.vcf.gz \
             -s sample_name.txt \
@@ -144,9 +153,9 @@ task SubsetSampleFromVcf {
         memory: "4 GiB"
         disks: "local-disk 100 HDD"
         bootDiskSizeGb: 10
-        preemptible: 0
+        preemptible: 2
         maxRetries: 1
-        docker: "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.1"
+        docker: "us.gcr.io/broad-dsde-methods/slee/lr-bcftools-patched-gcloud/lr-bcftools-patched-gcloud:1.23"
     }
 }
 
@@ -160,6 +169,7 @@ task Vcfdist {
         String? extra_args
         Int verbosity = 1
 
+        String docker
         Int disk_size_gb = ceil(size(truth_vcf, "GiB") + 10)
         Int mem_gb = 32
         Int cpu = 4
@@ -196,7 +206,7 @@ task Vcfdist {
     }
 
     runtime {
-        docker: "timd1/vcfdist:v2.5.3"
+        docker: docker
         disks: "local-disk " + disk_size_gb + " HDD"
         memory: mem_gb + " GiB"
         cpu: cpu

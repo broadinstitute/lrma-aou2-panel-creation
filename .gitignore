@@ -1,3 +1,5 @@
 */cromwell-executions/*
 */cromwell-workflow-logs/*
 *.mod.*
+resources/bubble-utils/Cargo.lock
+resources/bubble-utils/target

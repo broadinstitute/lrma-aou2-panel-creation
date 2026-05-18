@@ -1,0 +1,14 @@
+{
+  "PanGeniePanelCreation.annotations_vcf": "__REPO_DIR__/test/resources/large/pangenie-panel-creation/40-HPRC-1kGP.chr6-70M-80M.shifted.collisionless.sites.bcf",
+  "PanGeniePanelCreation.annotations_vcf_idx": "__REPO_DIR__/test/resources/large/pangenie-panel-creation/40-HPRC-1kGP.chr6-70M-80M.shifted.collisionless.sites.bcf.csi",
+  "PanGeniePanelCreation.cargo_toml": "__REPO_DIR__/resources/pangenie-utils/Cargo.toml",
+  "PanGeniePanelCreation.fix_variant_collisions_script": "__REPO_DIR__/resources/FixVariantCollisions-9daf9b2-gemini-replacement-logging.rs",
+  "PanGeniePanelCreation.output_prefix": "40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted",
+  "PanGeniePanelCreation.prepare_vcf_and_add_ids_script": "__REPO_DIR__/resources/pangenie-utils/src/bin/prepare_vcf_and_add_ids.rs",
+  "PanGeniePanelCreation.reference_fasta": "__REPO_DIR__/test/resources/large/GRCh38_full_analysis_set_plus_decoy_hla.chr6-70M-80M.fa",
+  "PanGeniePanelCreation.reference_fasta_fai": "__REPO_DIR__/test/resources/large/GRCh38_full_analysis_set_plus_decoy_hla.chr6-70M-80M.fa.fai",
+  "PanGeniePanelCreation.merge_vcfs_script": "__REPO_DIR__/resources/pangenie-utils/src/bin/merge_vcfs_weighted.rs",
+  "PanGeniePanelCreation.phased_vcf": "__REPO_DIR__/test/resources/large/pangenie-panel-creation/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.bcf",
+  "PanGeniePanelCreation.phased_vcf_idx": "__REPO_DIR__/test/resources/large/pangenie-panel-creation/40-HPRC-1kGP.chr6-70M-80M.phased.ligated.snippeted-1M.shifted.bcf.csi",
+  "PanGeniePanelCreation.region": "chr6-70000000-80000000:1-10000000"
+}

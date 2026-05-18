@@ -1,8 +1,44 @@
 version: 1.2
 workflows:
+- name: PhysicalPhasing
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/PhysicalPhasing.wdl
 - name: StatisticalPhasing
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing.wdl
+- name: StatisticalPhasing_Stage0_CreateShards
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage0_CreateShards.wdl
+- name: StatisticalPhasing_Stage1_FilterAndConcatVcfs
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage1_FilterAndConcatVcfs.wdl
+- name: StatisticalPhasing_Stage2_FixVariantCollisions
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage2_FixVariantCollisions.wdl
+- name: StatisticalPhasing_Stage3_GatherSitesAndChunk
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage3_GatherSitesAndChunk.wdl
+- name: StatisticalPhasing_Stage4_Shapeit4Phase
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage4_Shapeit4Phase.wdl
+- name: StatisticalPhasing_Stage5_ShapeitLigate
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing_Stage5_ShapeitLigate.wdl
+- name: PanGeniePanelCreation
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/PanGeniePanelCreation.wdl
+- name: BubblePanelCreation
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/BubblePanelCreation.wdl
+- name: GLIMPSE2BatchedCaseShardedSingleBatch
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/GLIMPSE2BatchedCaseShardedSingleBatch.wdl
 - name: VcfdistAndSwitchEvaluation
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistAndSwitchEvaluation.wdl
+- name: HierarchicallyMergeVcfs
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/HierarchicallyMergeVcfs.wdl
+- name: ConcatVcfs
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/ConcatVcfs.wdl
