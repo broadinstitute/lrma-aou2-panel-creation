@@ -29,7 +29,7 @@ workflow HierarchicallyMergeVcfs {
                         vcf_idxs = read_lines(CreateBatches.vcf_idx_batch_fofns[i]),
                         output_prefix = output_prefix + ".batch-" + i + ".region-" + i,
                         sample_names = select_first([sample_names]),
-                        region_args = "-r " + regions[j]
+                        region_args = "--regions-overlap 0 -r " + regions[j]
                 }
             }
         }
@@ -42,7 +42,7 @@ workflow HierarchicallyMergeVcfs {
                         vcfs = read_lines(CreateBatches.vcf_batch_fofns[i]),
                         vcf_idxs = read_lines(CreateBatches.vcf_idx_batch_fofns[i]),
                         output_prefix = output_prefix + ".batch-" + i + ".region-" + i,
-                        extra_args = "-r " + regions[j] + " " + extra_merge_args
+                        extra_args = "--regions-overlap 0 -r " + regions[j] + " " + extra_merge_args
                 }
             }
         }
