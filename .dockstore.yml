@@ -30,6 +30,9 @@ workflows:
 - name: BubblePanelCreation
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/BubblePanelCreation.wdl
+- name: PopBubblesPanel
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/PopBubblesPanel.wdl
 - name: GLIMPSE2BatchedCaseShardedSingleBatch
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/GLIMPSE2BatchedCaseShardedSingleBatch.wdl

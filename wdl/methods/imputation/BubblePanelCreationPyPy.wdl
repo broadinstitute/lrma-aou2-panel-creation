@@ -1,6 +1,6 @@
 version 1.0
 
-workflow PanGeniePanelCreation {
+workflow BubblePanelCreationPyPy {
     input {
         File phased_vcf
         File phased_vcf_idx
