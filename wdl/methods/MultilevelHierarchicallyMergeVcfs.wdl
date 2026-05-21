@@ -7,85 +7,113 @@ workflow HierarchicallyMergeVcfs {
         File? vcfs_fofn
         File? vcf_idxs_fofn
         Array[String] regions   # bcftools regions, e.g. ["chr1,chr2,chr3", "chr4,chr5,chr6", ...]
-        Int batch_size
+        Array[Int] batch_sizes  # Parameterizable hierarchical levels, e.g., [100, 50]
         String output_prefix
         String extra_merge_args = "--threads $(nproc) --force-single --merge none --info-rules DP:min"       # non-region args; note "--info-rules DP:min" or "--info-rules -" is needed to turn off DP summation, which can lead to MAX_INT overflows and bad VCF behavior
         String extra_concat_args = "--threads $(nproc) --naive"
-        Boolean use_ivcfmerge   # requires sample_names
-        Array[String]? sample_names
     }
 
-    Array[File] vcfs = select_first([vcfs_array, read_lines(select_first([vcfs_fofn]))])
-    Array[File] vcf_idxs = select_first([vcf_idxs_array, read_lines(select_first([vcf_idxs_fofn]))])
+    Array[File] vcfs_in = select_first([vcfs_array, read_lines(select_first([vcfs_fofn]))])
+    Array[File] vcf_idxs_in = select_first([vcf_idxs_array, read_lines(select_first([vcf_idxs_fofn]))])
 
-    call CreateBatches {
-        input:
-            vcfs = vcfs,
-            vcf_idxs = vcf_idxs,
-            batch_size = batch_size
-    }
+    # Scatter by region FIRST to isolate chunks and reduce combinatorial explosion
+    scatter (j in range(length(regions))) {
+        String region = regions[j]
+        String region_prefix = output_prefix + ".region-" + j
 
-    if (use_ivcfmerge) {
-        scatter (i in range(length(CreateBatches.vcf_batch_fofns))) {
-            scatter (j in range(length(regions))) {
-                call Ivcfmerge as IvcfmergeSingleBatchRegion {
+        # ==========================================
+        # LEVEL 0
+        # ==========================================
+        call CreateBatches as L0_Batches {
+            input:
+                vcfs = vcfs_in,
+                vcf_idxs = vcf_idxs_in,
+                batch_size = batch_sizes[0]
+        }
+
+        scatter (i in range(length(L0_Batches.vcf_batch_fofns))) {
+            call MergeVcfs as L0_Merge {
+                input:
+                    vcfs = read_lines(L0_Batches.vcf_batch_fofns[i]),
+                    vcf_idxs = read_lines(L0_Batches.vcf_idx_batch_fofns[i]),
+                    output_prefix = region_prefix + ".L0-" + i,
+                    extra_args = "--regions-overlap 0 -r " + region + " " + extra_merge_args
+            }
+        }
+
+        # ==========================================
+        # LEVEL 1
+        # ==========================================
+        if (length(batch_sizes) > 1) {
+            call CreateBatches as L1_Batches {
+                input:
+                    vcfs = L0_Merge.merged_vcf,
+                    vcf_idxs = L0_Merge.merged_vcf_idx,
+                    batch_size = batch_sizes[1]
+            }
+            
+            scatter (i in range(length(L1_Batches.vcf_batch_fofns))) {
+                call MergeVcfs as L1_Merge {
                     input:
-                        vcfs = read_lines(CreateBatches.vcf_batch_fofns[i]),
-                        vcf_idxs = read_lines(CreateBatches.vcf_idx_batch_fofns[i]),
-                        output_prefix = output_prefix + ".batch-" + i + ".region-" + i,
-                        sample_names = select_first([sample_names]),
-                        region_args = "--regions-overlap 0 -r " + regions[j]
+                        vcfs = read_lines(L1_Batches.vcf_batch_fofns[i]),
+                        vcf_idxs = read_lines(L1_Batches.vcf_idx_batch_fofns[i]),
+                        output_prefix = region_prefix + ".L1-" + i,
+                        extra_args = extra_merge_args  # Region is already subset in L0
                 }
             }
         }
-    }
-    if (!use_ivcfmerge) {
-        scatter (i in range(length(CreateBatches.vcf_batch_fofns))) {
-            scatter (j in range(length(regions))) {
-                call MergeVcfs as MergeVcfsSingleBatchRegion {
+
+        # ==========================================
+        # LEVEL 2
+        # ==========================================
+        if (length(batch_sizes) > 2) {
+            call CreateBatches as L2_Batches {
+                input:
+                    vcfs = select_first([L1_Merge.merged_vcf]),
+                    vcf_idxs = select_first([L1_Merge.merged_vcf_idx]),
+                    batch_size = batch_sizes[2]
+            }
+            
+            scatter (i in range(length(L2_Batches.vcf_batch_fofns))) {
+                call MergeVcfs as L2_Merge {
                     input:
-                        vcfs = read_lines(CreateBatches.vcf_batch_fofns[i]),
-                        vcf_idxs = read_lines(CreateBatches.vcf_idx_batch_fofns[i]),
-                        output_prefix = output_prefix + ".batch-" + i + ".region-" + i,
-                        extra_args = "--regions-overlap 0 -r " + regions[j] + " " + extra_merge_args
+                        vcfs = read_lines(L2_Batches.vcf_batch_fofns[i]),
+                        vcf_idxs = read_lines(L2_Batches.vcf_idx_batch_fofns[i]),
+                        output_prefix = region_prefix + ".L2-" + i,
+                        extra_args = extra_merge_args
                 }
             }
         }
-    }
 
-    Array[Array[File]] region_by_batch_vcfs = transpose(select_first([IvcfmergeSingleBatchRegion.merged_vcf, MergeVcfsSingleBatchRegion.merged_vcf]))
-    Array[Array[File]] region_by_batch_vcf_idxs = transpose(select_first([IvcfmergeSingleBatchRegion.merged_vcf_idx, MergeVcfsSingleBatchRegion.merged_vcf_idx]))
+        # ==========================================
+        # FINAL REGION COLLAPSE
+        # ==========================================
+        # Capture the output from the deepest executed level
+        Array[File] deepest_vcfs = select_first([L2_Merge.merged_vcf, L1_Merge.merged_vcf, L0_Merge.merged_vcf])
+        Array[File] deepest_idxs = select_first([L2_Merge.merged_vcf_idx, L1_Merge.merged_vcf_idx, L0_Merge.merged_vcf_idx])
 
-    if (use_ivcfmerge) {
-        # merge all samples in each region
-        scatter (j in range(length(regions))) {
-            call Ivcfmerge as IvcfmergeSingleRegion {
+        # Safety Net: If the provided `batch_sizes` array wasn't steep enough to collapse 
+        # the region down to 1 file, dynamically catch whatever is left and merge it.
+        if (length(deepest_vcfs) > 1) {
+            call MergeVcfs as FinalRegionMerge {
                 input:
-                    vcfs = region_by_batch_vcfs[j],
-                    vcf_idxs = region_by_batch_vcf_idxs[j],
-                    output_prefix = output_prefix + ".region-" + j,
-                    sample_names = select_first([sample_names])
-            }
-        }
-    }
-    if (!use_ivcfmerge) {
-        # merge all samples in each region
-        scatter (j in range(length(regions))) {
-            call MergeVcfs as MergeVcfsSingleRegion {
-                input:
-                    vcfs = region_by_batch_vcfs[j],
-                    vcf_idxs = region_by_batch_vcf_idxs[j],
-                    output_prefix = output_prefix + ".region-" + j,
+                    vcfs = deepest_vcfs,
+                    vcf_idxs = deepest_idxs,
+                    output_prefix = region_prefix + ".final",
                     extra_args = extra_merge_args
             }
         }
+
+        # Select exactly 1 file for this region to pass to the final concat step
+        File final_region_vcf = select_first([FinalRegionMerge.merged_vcf, deepest_vcfs[0]])
+        File final_region_idx = select_first([FinalRegionMerge.merged_vcf_idx, deepest_idxs[0]])
     }
 
-    # concatenate all regions
+    # concatenate all regions together
     call ConcatVcfs {
         input:
-            vcfs = select_first([IvcfmergeSingleRegion.merged_vcf, MergeVcfsSingleRegion.merged_vcf]),
-            vcf_idxs = select_first([IvcfmergeSingleRegion.merged_vcf_idx, MergeVcfsSingleRegion.merged_vcf_idx]),
+            vcfs = final_region_vcf,
+            vcf_idxs = final_region_idx,
             output_prefix = output_prefix,
             extra_args = extra_concat_args
     }
@@ -187,71 +215,6 @@ task MergeVcfs {
         preemptible_tries:  2,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
-}
-
-# assumes all VCFs have identical variants
-# TODO make this work for identical filenames
-task Ivcfmerge {
-    input{
-        Array[File] vcfs
-        Array[File] vcf_idxs
-        Array[String] sample_names
-        String output_prefix
-        String? region_args
-
-        RuntimeAttr? runtime_attr_override
-    }
-
-    Int disk_gb = 10 + 2 * ceil(size(vcfs, "GiB"))
-
-    command <<<
-        set -euox pipefail
-
-        wget https://github.com/iqbal-lab-org/ivcfmerge/archive/refs/tags/v1.0.0.tar.gz
-        tar -xvf v1.0.0.tar.gz
-
-        mkdir compressed
-        mv ~{sep=' ' vcfs} compressed
-        mv ~{sep=' ' vcf_idxs} compressed
-
-        if [ $(ls compressed/*.bcf | wc -l) == 1 ]
-        then
-            cp $(ls compressed/*.bcf) ~{output_prefix}.bcf
-            cp $(ls compressed/*.bcf.csi) ~{output_prefix}.bcf.csi
-        else
-            mkdir decompressed
-            ls compressed/*.bcf | xargs -I % sh -c 'bcftools annotate --no-version ~{region_args} -x INFO % --threads 2 -Ov -o decompressed/$(basename % .bcf).vcf'
-            time python ivcfmerge-1.0.0/ivcfmerge.py <(ls decompressed/*.vcf) ~{output_prefix}.vcf
-            bcftools annotate --no-version -S ~{write_lines(sample_names)} -x FORMAT/FT ~{output_prefix}.vcf --threads 2 -W=csi -Ob -o ~{output_prefix}.bcf
-        fi
-    >>>
-
-    output {
-        File merged_vcf = "~{output_prefix}.bcf"
-        File merged_vcf_idx = "~{output_prefix}.bcf.csi"
-    }
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          2,
-        mem_gb:             6,
-        disk_gb:            disk_gb,
-        boot_disk_gb:       10,
-        use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-utils:0.1.11"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {

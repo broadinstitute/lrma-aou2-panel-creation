@@ -42,6 +42,9 @@ workflows:
 - name: HierarchicallyMergeVcfs
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/HierarchicallyMergeVcfs.wdl
+- name: MultilevelHierarchicallyMergeVcfs
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/MultilevelHierarchicallyMergeVcfs.wdl
 - name: ConcatVcfs
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/ConcatVcfs.wdl
