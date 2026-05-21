@@ -15,7 +15,7 @@ workflow HierarchicallyMergeVcfs {
         Array[String]? sample_names
     }
 
-    Array[File] vcfs = select_first(vcfs_array, [read_lines(vcfs_fofn)])
+    Array[File] vcfs = select_first([vcfs_array, read_lines(vcfs_fofn)])
     Array[File] vcf_idxs = select_first([vcf_idxs_array, read_lines(vcf_idxs_array)])
 
     call CreateBatches {
