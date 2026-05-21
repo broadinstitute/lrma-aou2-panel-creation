@@ -5,7 +5,7 @@ workflow HierarchicallyMergeVcfs {
         Array[File]? vcfs_array
         Array[File]? vcf_idxs_array
         File? vcfs_fofn
-        File? vcf_idxs_array
+        File? vcf_idxs_fofn
         Array[String] regions   # bcftools regions, e.g. ["chr1,chr2,chr3", "chr4,chr5,chr6", ...]
         Int batch_size
         String output_prefix
@@ -15,8 +15,8 @@ workflow HierarchicallyMergeVcfs {
         Array[String]? sample_names
     }
 
-    Array[File] vcfs = select_first([vcfs_array, read_lines(vcfs_fofn)])
-    Array[File] vcf_idxs = select_first([vcf_idxs_array, read_lines(vcf_idxs_array)])
+    Array[File] vcfs = select_first([vcfs_array, read_lines(select_first([vcfs_fofn]))])
+    Array[File] vcf_idxs = select_first([vcf_idxs_array, read_lines(select_first([vcf_idxs_fofn]))])
 
     call CreateBatches {
         input:
