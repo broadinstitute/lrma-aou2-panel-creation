@@ -9,7 +9,7 @@ workflow HierarchicallyMergeVcfs {
         Array[String] regions   # bcftools regions, e.g. ["chr1,chr2,chr3", "chr4,chr5,chr6", ...]
         Array[Int] batch_sizes  # Parameterizable hierarchical levels, e.g., [100, 50]
         String output_prefix
-        String extra_merge_args = "--threads $(nproc) --force-single --merge none --info-rules DP:min"       # non-region args; note "--info-rules DP:min" or "--info-rules -" is needed to turn off DP summation, which can lead to MAX_INT overflows and bad VCF behavior
+        String extra_merge_args = "--threads $(nproc) --force-single --merge none --info-rules -"       # non-region args; note "--info-rules -" is needed to turn off DP summation, which can lead to MAX_INT overflows and bad VCF behavior
         String extra_concat_args = "--threads $(nproc) --naive"
     }
 
