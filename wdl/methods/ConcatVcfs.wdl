@@ -57,8 +57,15 @@ task ConcatVcfs {
             echo "Starting concat monitoring..." >&2
             while true; do
                 if [ -f "~{output_prefix}.bcf" ]; then
+                    # Phase 2/No-Sort: Final file is being written
                     SIZE=$(ls -lh "~{output_prefix}.bcf" | awk '{print $5}')
-                    echo "[Heartbeat] ~{output_prefix}.bcf is currently $SIZE..." >&2
+                    echo "[Heartbeat] Final output ~{output_prefix}.bcf is currently $SIZE..." >&2
+                elif [ -d "sort_tmp_dir" ]; then
+                    # Phase 1 (Sorting): Temp directory is filling up
+                    SIZE=$(du -sh sort_tmp_dir | awk '{print $1}')
+                    echo "[Heartbeat] Sorting in progress. Temp shards total $SIZE..." >&2
+                else
+                    echo "[Heartbeat] Processing started, waiting for I/O..." >&2
                 fi
                 sleep 60
             done
@@ -67,11 +74,15 @@ task ConcatVcfs {
 
         if [ "~{do_sort}" == "true" ]; then
             echo "Concatenating and piping to bcftools sort..."
-            # Output as uncompressed BCF (-Ou) to bypass intermediate compression overhead
+            
+            # Create a dedicated temp directory so we can monitor its size
+            mkdir sort_tmp_dir
+            
+            # Output as uncompressed BCF (-Ou) and route sort temp files to our directory (-T)
             bcftools concat \
                 -f ~{write_lines(vcfs)} \
                 ~{extra_args} \
-                -Ou | bcftools sort -m 2G -Ob -o ~{output_prefix}.bcf
+                -Ou | bcftools sort -m 2G -T sort_tmp_dir/tmp -Ob -o ~{output_prefix}.bcf
         else
             echo "Concatenating directly to disk..."
             bcftools concat \
