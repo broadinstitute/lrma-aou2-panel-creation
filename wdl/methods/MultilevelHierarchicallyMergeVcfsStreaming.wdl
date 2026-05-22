@@ -1,5 +1,7 @@
 version 1.0
 
+# NOTE: We assume we are merging squared-off single-sample VCFs (enforced by checking that the number of records in each VCF is identical when localizing shards with bcftools view)
+
 workflow HierarchicallyMergeVcfs {
     input {
         Array[String]? vcfs_array
