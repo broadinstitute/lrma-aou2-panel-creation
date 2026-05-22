@@ -9,6 +9,7 @@ workflow HierarchicallyMergeVcfs {
         Array[String] regions   # bcftools regions, e.g. ["chr1,chr2,chr3", "chr4,chr5,chr6", ...]
         Array[Int] batch_sizes  # Parameterizable hierarchical levels, e.g., [100, 50]
         Array[Boolean] do_localization # Whether to localize at each corresponding level
+        Array[Int] timeouts_min  # Timeouts in minutes per level. Set to 0 to disable. e.g., [720, 720]
         String output_prefix
         String extra_merge_args = "--threads $(nproc) --force-single --merge none --info-rules -"       # non-region args; note "--info-rules -" is needed to turn off DP summation, which can lead to MAX_INT overflows and bad VCF behavior
         String extra_concat_args = "--threads $(nproc) --naive"
@@ -39,6 +40,7 @@ workflow HierarchicallyMergeVcfs {
                     vcf_idxs_localize = if do_localization[0] then read_lines(L0_Batches.vcf_idx_batch_fofns[i]) else [],
                     vcfs_stream = if !do_localization[0] then read_lines(L0_Batches.vcf_batch_fofns[i]) else [],
                     vcf_idxs_stream = if !do_localization[0] then read_lines(L0_Batches.vcf_idx_batch_fofns[i]) else [],
+                    timeout_min = timeouts_min[0],
                     output_prefix = region_prefix + ".L0-" + i,
                     extra_args = "--regions-overlap 0 -r " + region + " " + extra_merge_args + (if !do_localization[0] then " --verbosity 8" else "")
             }
@@ -65,6 +67,7 @@ workflow HierarchicallyMergeVcfs {
                         vcf_idxs_localize = if do_localization[1] then read_lines(L1_Batches.vcf_idx_batch_fofns[i]) else [],
                         vcfs_stream = if !do_localization[1] then read_lines(L1_Batches.vcf_batch_fofns[i]) else [],
                         vcf_idxs_stream = if !do_localization[1] then read_lines(L1_Batches.vcf_idx_batch_fofns[i]) else [],
+                        timeout_min = timeouts_min[1],
                         output_prefix = region_prefix + ".L1-" + i,
                         extra_args = extra_merge_args + (if !do_localization[1] then " --verbosity 8" else "")
                 }
@@ -92,6 +95,7 @@ workflow HierarchicallyMergeVcfs {
                         vcf_idxs_localize = if do_localization[2] then read_lines(L2_Batches.vcf_idx_batch_fofns[i]) else [],
                         vcfs_stream = if !do_localization[2] then read_lines(L2_Batches.vcf_batch_fofns[i]) else [],
                         vcf_idxs_stream = if !do_localization[2] then read_lines(L2_Batches.vcf_idx_batch_fofns[i]) else [],
+                        timeout_min = timeouts_min[2],
                         output_prefix = region_prefix + ".L2-" + i,
                         extra_args = extra_merge_args + (if !do_localization[2] then " --verbosity 8" else "")
                 }
@@ -104,13 +108,13 @@ workflow HierarchicallyMergeVcfs {
         # ==========================================
         # FINAL REGION COLLAPSE
         # ==========================================
-        # Safety Net: If the batch_sizes array didn't collapse the region down to 1 file, catch whatever is left.
-        # This defaults to localizing, since these are intermediate files generated within the same workspace bucket.
+        # Safety Net: Defaults to localizing workspace intermediate files, no timeout applied (0).
         if (length(l2_vcfs) > 1) {
             call MergeVcfs as FinalRegionMerge {
                 input:
                     vcfs_localize = l2_vcfs,
                     vcf_idxs_localize = l2_idxs,
+                    timeout_min = 0,
                     output_prefix = region_prefix + ".final",
                     extra_args = extra_merge_args
             }
@@ -159,7 +163,7 @@ task CreateBatches {
     command <<<
         set -euox pipefail
 
-        # Split with -a 4 guarantees strict alphanumeric ordering up to 456,976 batches, preventing glob shuffling
+        # Split with -a 4 guarantees strict alphanumeric ordering up to 456,976 batches
         cat ~{write_lines(vcfs)} | split -a 4 -l ~{batch_size} - vcf_batch_
         cat ~{write_lines(vcf_idxs)} | split -a 4 -l ~{batch_size} - vcf_idx_batch_
     >>>
@@ -199,6 +203,7 @@ task MergeVcfs {
         Array[String] vcfs_stream = []
         Array[String] vcf_idxs_stream = []
         
+        Int timeout_min
         String output_prefix
         String? extra_args
 
@@ -227,7 +232,14 @@ task MergeVcfs {
                 | awk '{print $1"##idx##"$2}' > merge_list.txt
         fi
 
-        bcftools merge \
+        # Dynamically build the timeout prefix if a value > 0 was provided
+        TIMEOUT_CMD=""
+        if [ ~{timeout_min} -gt 0 ]; then
+            TIMEOUT_CMD="timeout ~{timeout_min}m"
+            echo "Applying timeout: ${TIMEOUT_CMD}"
+        fi
+
+        ${TIMEOUT_CMD} bcftools merge \
             -l merge_list.txt \
             ~{extra_args} \
             -W=csi -Ob -o ~{output_prefix}.bcf
