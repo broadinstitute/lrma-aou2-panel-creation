@@ -42,7 +42,7 @@ workflow HierarchicallyMergeVcfs {
                     vcf_idxs_stream = if !do_localization[0] then read_lines(L0_Batches.vcf_idx_batch_fofns[i]) else [],
                     timeout_min = timeouts_min[0],
                     output_prefix = region_prefix + ".L0-" + i,
-                    extra_args = "--regions-overlap 0 -r " + region + " " + extra_merge_args + (if !do_localization[0] then " --verbosity 8" else "")
+                    extra_args = "--regions-overlap 0 -r " + region + " " + extra_merge_args + (if !do_localization[0] then " --verbosity 5" else "")
             }
         }
 
@@ -69,7 +69,7 @@ workflow HierarchicallyMergeVcfs {
                         vcf_idxs_stream = if !do_localization[1] then read_lines(L1_Batches.vcf_idx_batch_fofns[i]) else [],
                         timeout_min = timeouts_min[1],
                         output_prefix = region_prefix + ".L1-" + i,
-                        extra_args = extra_merge_args + (if !do_localization[1] then " --verbosity 8" else "")
+                        extra_args = extra_merge_args + (if !do_localization[1] then " --verbosity 5" else "")
                 }
             }
         }
@@ -97,7 +97,7 @@ workflow HierarchicallyMergeVcfs {
                         vcf_idxs_stream = if !do_localization[2] then read_lines(L2_Batches.vcf_idx_batch_fofns[i]) else [],
                         timeout_min = timeouts_min[2],
                         output_prefix = region_prefix + ".L2-" + i,
-                        extra_args = extra_merge_args + (if !do_localization[2] then " --verbosity 8" else "")
+                        extra_args = extra_merge_args + (if !do_localization[2] then " --verbosity 5" else "")
                 }
             }
         }
