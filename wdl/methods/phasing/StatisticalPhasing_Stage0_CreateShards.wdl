@@ -220,27 +220,61 @@ task CreateShards {
                     search_start = max(current_start, search_start)
                     search_end = min(r_end, max(search_start, search_end))
 
-                    candidates = set([search_start, search_end])
-
-                    s_idx = bisect.bisect_left(sv_starts, search_start)
-                    e_idx = bisect.bisect_right(sv_starts, search_end)
-                    for i in range(max(0, s_idx - 1), min(len(sorted_svs) - 1, e_idx + 1)):
-                        mid = (sorted_svs[i][1] + sorted_svs[i+1][0]) // 2
-                        if search_start <= mid <= search_end:
-                            candidates.add(mid)
-
-                    for p in range(search_start, search_end + 1, 1000):
-                        candidates.add(p)
-
                     def score_candidate(cand):
                         c_var_count = bisect.bisect_right(all_vars, cand) - idx
                         var_diff = abs(c_var_count - target_total_vars)
                         dist = calc_dist_to_svs(cand, sorted_svs, sv_starts, max_sv_len)
-
                         return (-dist, var_diff, -cand)
 
-                    valid_candidates = [c for c in candidates if calc_dist_to_svs(c, sorted_svs, sv_starts, max_sv_len) >= args.min_sv_dist]
+                    valid_candidates = []
+                    expanded_search_start = search_start
+                    expanded_search_end = search_end
+                    expansion_step = 50000
 
+                    # Dynamic expansion loop to enforce min_sv_dist even if it requires stepping outside ideal variant counts
+                    while not valid_candidates:
+                        candidates = set([expanded_search_start, expanded_search_end])
+
+                        s_idx = bisect.bisect_left(sv_starts, expanded_search_start)
+                        e_idx = bisect.bisect_right(sv_starts, expanded_search_end)
+                        
+                        for i in range(max(0, s_idx - 1), min(len(sorted_svs), e_idx + 1)):
+                            s1, e1 = sorted_svs[i]
+                            
+                            # Add explicit candidates exactly at the safety boundary
+                            safe_left = s1 - args.min_sv_dist
+                            safe_right = e1 + args.min_sv_dist
+                            
+                            if expanded_search_start <= safe_left <= expanded_search_end:
+                                candidates.add(safe_left)
+                            if expanded_search_start <= safe_right <= expanded_search_end:
+                                candidates.add(safe_right)
+                                
+                            # Add midpoints
+                            if i < len(sorted_svs) - 1:
+                                s2, e2 = sorted_svs[i+1]
+                                mid = (e1 + s2) // 2
+                                if expanded_search_start <= mid <= expanded_search_end:
+                                    candidates.add(mid)
+
+                        for p in range(expanded_search_start, expanded_search_end + 1, 1000):
+                            candidates.add(p)
+
+                        valid_candidates = [c for c in candidates if calc_dist_to_svs(c, sorted_svs, sv_starts, max_sv_len) >= args.min_sv_dist]
+
+                        if valid_candidates:
+                            break
+
+                        # Expand bounds if no valid candidate exists
+                        prev_start, prev_end = expanded_search_start, expanded_search_end
+                        expanded_search_start = max(current_start + 1, expanded_search_start - expansion_step)
+                        expanded_search_end = min(r_end, expanded_search_end + expansion_step)
+
+                        # Break if we've hit the absolute boundaries
+                        if expanded_search_start == prev_start and expanded_search_end == prev_end:
+                            break
+
+                    # Extreme fallback only if the entire remaining region is unsafe
                     if not valid_candidates:
                         valid_candidates = list(candidates)
 
