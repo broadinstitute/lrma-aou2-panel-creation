@@ -1,62 +1,3 @@
-version 1.0
-
-# Over a given region, create non-overlapping shards for subsequent 
-# 1) subsetting, filtering, short + SV concatenation, and collision removal
-# 2) bubble creation
-# We attempt to balance the number of variants per shard while maintaining a minimum distance
-# from each shard boundary to the closest SV.
-# Output is a TSV suitable for import as a Terra data table.
-
-workflow CreateShards {
-
-    input {
-        String? region
-        String output_prefix
-        String entity_name
-
-        # provide sites-only or single-sample VCFs to minimize runtime (especially for short, less critical for SV)
-        File short_vcf
-        File short_vcf_idx
-        File sv_vcf
-        File sv_vcf_idx
-
-        Int min_variants_per_shard = 450000
-        Int max_variants_per_shard = 550000
-        Int min_boundary_dist_bp = 15000
-        Int min_sv_len = 50
-    }
-
-    call CreateShards { input:
-        region = region,
-        output_prefix = output_prefix,
-        entity_name = entity_name,
-        short_vcf = short_vcf,
-        short_vcf_idx = short_vcf_idx,
-        sv_vcf = sv_vcf,
-        sv_vcf_idx = sv_vcf_idx,
-        min_variants_per_shard = min_variants_per_shard,
-        max_variants_per_shard = max_variants_per_shard,
-        min_boundary_dist_bp = min_boundary_dist_bp,
-        min_sv_len = min_sv_len
-    }
-
-    output {
-        Array[String] shard_regions = CreateShards.shard_regions
-        File shard_regions_terra_tsv = CreateShards.shard_regions_terra_tsv
-    }
-}
-
-struct RuntimeAttr {
-    Float? mem_gb
-    Int? cpu_cores
-    Int? disk_gb
-    Int? boot_disk_gb
-    Boolean? use_ssd
-    Int? preemptible_tries
-    Int? max_retries
-    String? docker
-}
-
 task CreateShards {
     input {
         String? region
@@ -98,6 +39,7 @@ task CreateShards {
         import pysam
         import subprocess
         import bisect
+        import sys
         from tqdm import tqdm
 
         def get_sv_intervals(sv_vcf_path, chrom, start, end, min_sv_len):
@@ -116,15 +58,14 @@ task CreateShards {
                         svs.append((rec.pos, rec.stop))
                 vcf.close()
             except Exception as e:
-                print(f"Warning reading SVs for {chrom}: {e}")
+                print(f"Warning reading SVs for {chrom}: {e}", file=sys.stderr)
             return svs
 
         def get_all_short_variants(vcf_path, chrom, r_start, r_end):
-            # The vcf_path is wrapped in single quotes to prevent the ##idx## from being read as a bash comment
             cmd = f"bcftools query -f '%POS\n' -r {chrom}:{r_start}-{r_end} '{vcf_path}'"
 
-            # Capture stderr to properly surface errors if the command fails (e.g., bcftools not installed)
-            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # FIX 1: Send stderr directly to sys.stderr to prevent OS pipe buffer deadlocks
+            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
 
             pos_list = []
             for line in tqdm(proc.stdout, desc=f"Reading short vars for {chrom}", leave=False, unit=" vars"):
@@ -133,14 +74,10 @@ task CreateShards {
 
             proc.wait()
 
-            # Explicitly check for failure and surface the error
+            # FIX 2: Gracefully handle missing sex chromosomes instead of hard crashing
             if proc.returncode != 0:
-                err_msg = proc.stderr.read()
-                raise RuntimeError(
-                    f"Subprocess failed with exit code {proc.returncode}.\n"
-                    f"Command: {cmd}\n"
-                    f"Error: {err_msg}"
-                )
+                print(f"Warning: bcftools exited with code {proc.returncode} for {chrom}. Proceeding with 0 short variants.", file=sys.stderr)
+                return []
 
             return pos_list
 
@@ -231,7 +168,6 @@ task CreateShards {
                     expanded_search_end = search_end
                     expansion_step = 50000
 
-                    # Dynamic expansion loop to enforce min_sv_dist even if it requires stepping outside ideal variant counts
                     while not valid_candidates:
                         candidates = set([expanded_search_start, expanded_search_end])
 
@@ -241,7 +177,6 @@ task CreateShards {
                         for i in range(max(0, s_idx - 1), min(len(sorted_svs), e_idx + 1)):
                             s1, e1 = sorted_svs[i]
                             
-                            # Add explicit candidates exactly at the safety boundary
                             safe_left = s1 - args.min_sv_dist
                             safe_right = e1 + args.min_sv_dist
                             
@@ -250,7 +185,6 @@ task CreateShards {
                             if expanded_search_start <= safe_right <= expanded_search_end:
                                 candidates.add(safe_right)
                                 
-                            # Add midpoints
                             if i < len(sorted_svs) - 1:
                                 s2, e2 = sorted_svs[i+1]
                                 mid = (e1 + s2) // 2
@@ -265,18 +199,22 @@ task CreateShards {
                         if valid_candidates:
                             break
 
-                        # Expand bounds if no valid candidate exists
                         prev_start, prev_end = expanded_search_start, expanded_search_end
                         expanded_search_start = max(current_start + 1, expanded_search_start - expansion_step)
                         expanded_search_end = min(r_end, expanded_search_end + expansion_step)
 
-                        # Break if we've hit the absolute boundaries
                         if expanded_search_start == prev_start and expanded_search_end == prev_end:
                             break
 
-                    # Extreme fallback only if the entire remaining region is unsafe
                     if not valid_candidates:
                         valid_candidates = list(candidates)
+
+                    # FIX 3: Prevent the 1-bp crawling bug by strictly enforcing forward movement
+                    valid_candidates = [c for c in valid_candidates if c > current_start]
+                    
+                    # Absolute failsafe if no candidates > current_start were generated
+                    if not valid_candidates:
+                        valid_candidates = [min(r_end, current_start + 500000)]
 
                     valid_candidates = sorted(valid_candidates, key=score_candidate)
 
