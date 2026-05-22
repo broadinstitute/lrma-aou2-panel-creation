@@ -39,7 +39,6 @@ workflow HierarchicallyMergeVcfs {
                     vcf_idxs_localize = if do_localization[0] then read_lines(L0_Batches.vcf_idx_batch_fofns[i]) else [],
                     vcfs_stream = if !do_localization[0] then read_lines(L0_Batches.vcf_batch_fofns[i]) else [],
                     vcf_idxs_stream = if !do_localization[0] then read_lines(L0_Batches.vcf_idx_batch_fofns[i]) else [],
-                    region = region,
                     output_prefix = region_prefix + ".L0-" + i,
                     extra_args = "--regions-overlap 0 -r " + region + " " + extra_merge_args
             }
@@ -66,7 +65,6 @@ workflow HierarchicallyMergeVcfs {
                         vcf_idxs_localize = if do_localization[1] then read_lines(L1_Batches.vcf_idx_batch_fofns[i]) else [],
                         vcfs_stream = if !do_localization[1] then read_lines(L1_Batches.vcf_batch_fofns[i]) else [],
                         vcf_idxs_stream = if !do_localization[1] then read_lines(L1_Batches.vcf_idx_batch_fofns[i]) else [],
-                        region = region,
                         output_prefix = region_prefix + ".L1-" + i,
                         extra_args = extra_merge_args
                 }
@@ -94,7 +92,6 @@ workflow HierarchicallyMergeVcfs {
                         vcf_idxs_localize = if do_localization[2] then read_lines(L2_Batches.vcf_idx_batch_fofns[i]) else [],
                         vcfs_stream = if !do_localization[2] then read_lines(L2_Batches.vcf_batch_fofns[i]) else [],
                         vcf_idxs_stream = if !do_localization[2] then read_lines(L2_Batches.vcf_idx_batch_fofns[i]) else [],
-                        region = region,
                         output_prefix = region_prefix + ".L2-" + i,
                         extra_args = extra_merge_args
                 }
@@ -107,13 +104,13 @@ workflow HierarchicallyMergeVcfs {
         # ==========================================
         # FINAL REGION COLLAPSE
         # ==========================================
-        # Safety Net: Defaults to localizing workspace intermediate files.
+        # Safety Net: If the batch_sizes array didn't collapse the region down to 1 file, catch whatever is left.
+        # This defaults to localizing, since these are intermediate files generated within the same workspace bucket.
         if (length(l2_vcfs) > 1) {
             call MergeVcfs as FinalRegionMerge {
                 input:
                     vcfs_localize = l2_vcfs,
                     vcf_idxs_localize = l2_idxs,
-                    region = region,
                     output_prefix = region_prefix + ".final",
                     extra_args = extra_merge_args
             }
@@ -202,54 +199,34 @@ task MergeVcfs {
         Array[String] vcfs_stream = []
         Array[String] vcf_idxs_stream = []
         
-        String? region
         String output_prefix
         String? extra_args
 
         RuntimeAttr? runtime_attr_override
     }
 
-    # Dynamically sizes disk if localizing natively, defaults to 50GB if streaming subsets
+    # Dynamically sizes disk if localizing, defaults to 50GB if streaming
     Int disk_gb = if length(vcfs_localize) > 0 then 10 + 2 * ceil(size(vcfs_localize, "GiB")) else 50
 
     command <<<
         set -euox pipefail
 
         if [ ~{length(vcfs_localize)} -gt 0 ]; then
-            echo "Localizing full files natively via Cromwell..."
+            echo "Localizing files natively via Cromwell..."
             cat ~{write_lines(vcfs_localize)} > merge_list.txt
         else
-            echo "Slice-and-downloading regions via bcftools view..."
+            echo "Streaming directly from GCS..."
+            
+            # Explicitly authenticate htslib for gs:// streaming
             export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
             
-            mkdir -p localized_subsets
-            
-            # Stitch the VCF and IDX strings together in exact array order
+            # Stitch the VCF and IDX strings together using htslib's explicit index syntax
             paste \
                 ~{write_lines(vcfs_stream)} \
                 ~{write_lines(vcf_idxs_stream)} \
-                | awk '{print $1"##idx##"$2}' > remote_list.txt
-
-            # Prepend the line number (NR) using awk, separated by a pipe, and pass to xargs
-            awk '{print NR"|"$0}' remote_list.txt | xargs -P 4 -I {} bash -c '
-                # Split the line number and the URL
-                IFS="|" read -r LINE_NUM URL <<< "{}"
-                
-                # Extract the base filename, ignoring the index syntax
-                BASENAME=$(basename "${URL%%##idx##*}")
-                
-                # Stream just the region into a local BCF, prefixed with the exact line number to prevent collisions
-                bcftools view ~{if defined(region) then "--regions-overlap 0 -r " + region else ""} "${URL}" -Ob -o "localized_subsets/${LINE_NUM}_${BASENAME}"
-            '
-            
-            # Build the merge list matching the exact 1-based line number (NR) prefix we just created
-            awk -F '##idx##' '{
-                n = split($1, a, "/"); 
-                print "localized_subsets/" NR "_" a[n]
-            }' remote_list.txt > merge_list.txt
+                | awk '{print $1"##idx##"$2}' > merge_list.txt
         fi
 
-        # Merge the local files
         bcftools merge \
             -l merge_list.txt \
             ~{extra_args} \
@@ -263,8 +240,8 @@ task MergeVcfs {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          4, 
-        mem_gb:             8,
+        cpu_cores:          1,
+        mem_gb:             4,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         disk_type:          "SSD",
