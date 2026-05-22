@@ -314,7 +314,7 @@ task MergeVcfs {
                     SIZE=$(ls -lh "~{output_prefix}.bcf" | awk '{print $5}')
                     echo "[Heartbeat] ~{output_prefix}.bcf is currently $SIZE..." >&2
                 fi
-                sleep 300
+                sleep 60
             done
         ) &
         HEARTBEAT_PID=$!
