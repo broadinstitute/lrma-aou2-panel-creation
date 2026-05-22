@@ -13,8 +13,8 @@ workflow HierarchicallyMergeVcfs {
         String extra_concat_args = "--threads $(nproc) --naive"
     }
 
-    Array[String] vcfs_in = if defined(vcfs_array) then select_first([vcfs_array]) else read_lines(select_first([vcfs_fofn]))
-    Array[String] vcf_idxs_in = if defined(vcf_idxs_array) then select_first([vcf_idxs_array]) else read_lines(select_first([vcf_idxs_fofn]))
+    Array[File] vcfs_in = if defined(vcfs_array) then select_first([vcfs_array]) else read_lines(select_first([vcfs_fofn]))
+    Array[File] vcf_idxs_in = if defined(vcf_idxs_array) then select_first([vcf_idxs_array]) else read_lines(select_first([vcf_idxs_fofn]))
 
     # Scatter by region FIRST to isolate chunks and reduce combinatorial explosion
     scatter (j in range(length(regions))) {
