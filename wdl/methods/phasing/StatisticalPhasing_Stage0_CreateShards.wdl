@@ -123,7 +123,6 @@ task CreateShards {
         def get_all_short_variants(vcf_path, chrom, r_start, r_end):
             cmd = f"bcftools query -f '%POS\n' -r {chrom}:{r_start}-{r_end} '{vcf_path}'"
 
-            # FIX 1: Send stderr directly to sys.stderr to prevent OS pipe buffer deadlocks
             proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
 
             pos_list = []
@@ -133,7 +132,6 @@ task CreateShards {
 
             proc.wait()
 
-            # FIX 2: Gracefully handle missing sex chromosomes instead of hard crashing
             if proc.returncode != 0:
                 print(f"Warning: bcftools exited with code {proc.returncode} for {chrom}. Proceeding with 0 short variants.", file=sys.stderr)
                 return []
@@ -210,8 +208,8 @@ task CreateShards {
                         k_max = len(all_vars) - args.min_vars
                         if k_min > k_max: k_max = k_min
 
-                    search_start = all_vars[k_min - 1]
-                    search_end = all_vars[k_max] - 1 if k_max < len(all_vars) else r_end
+                    search_start = all_vars[k_min - 1] if k_min <= len(all_vars) else r_end
+                    search_end = all_vars[k_max - 1] if k_max <= len(all_vars) else r_end
 
                     search_start = max(current_start, search_start)
                     search_end = min(r_end, max(search_start, search_end))
@@ -225,9 +223,14 @@ task CreateShards {
                     valid_candidates = []
                     expanded_search_start = search_start
                     expanded_search_end = search_end
-                    expansion_step = 50000
+                    expansion_step = 100000
+                    
+                    # Prevent O(N^2) hangs by capping expansions
+                    max_expansions = 5
+                    exp_count = 0
 
-                    while not valid_candidates:
+                    while not valid_candidates and exp_count < max_expansions:
+                        exp_count += 1
                         candidates = set([expanded_search_start, expanded_search_end])
 
                         s_idx = bisect.bisect_left(sv_starts, expanded_search_start)
@@ -250,7 +253,8 @@ task CreateShards {
                                 if expanded_search_start <= mid <= expanded_search_end:
                                     candidates.add(mid)
 
-                        for p in range(expanded_search_start, expanded_search_end + 1, 1000):
+                        # Check every 10,000 bp instead of 1,000 bp to eliminate lag
+                        for p in range(expanded_search_start, expanded_search_end + 1, 10000):
                             candidates.add(p)
 
                         valid_candidates = [c for c in candidates if calc_dist_to_svs(c, sorted_svs, sv_starts, max_sv_len) >= args.min_sv_dist]
@@ -268,10 +272,9 @@ task CreateShards {
                     if not valid_candidates:
                         valid_candidates = list(candidates)
 
-                    # FIX 3: Prevent the 1-bp crawling bug by strictly enforcing forward movement
                     valid_candidates = [c for c in valid_candidates if c > current_start]
                     
-                    # Absolute failsafe if no candidates > current_start were generated
+                    # Absolute failsafe: jump 500kb forward
                     if not valid_candidates:
                         valid_candidates = [min(r_end, current_start + 500000)]
 
