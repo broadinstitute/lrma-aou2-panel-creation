@@ -1,3 +1,62 @@
+version 1.0
+
+# Over a given region, create non-overlapping shards for subsequent 
+# 1) subsetting, filtering, short + SV concatenation, and collision removal
+# 2) bubble creation
+# We attempt to balance the number of variants per shard while maintaining a minimum distance
+# from each shard boundary to the closest SV.
+# Output is a TSV suitable for import as a Terra data table.
+
+workflow CreateShards {
+
+    input {
+        String? region
+        String output_prefix
+        String entity_name
+
+        # provide sites-only or single-sample VCFs to minimize runtime (especially for short, less critical for SV)
+        File short_vcf
+        File short_vcf_idx
+        File sv_vcf
+        File sv_vcf_idx
+
+        Int min_variants_per_shard = 450000
+        Int max_variants_per_shard = 550000
+        Int min_boundary_dist_bp = 15000
+        Int min_sv_len = 50
+    }
+
+    call CreateShards { input:
+        region = region,
+        output_prefix = output_prefix,
+        entity_name = entity_name,
+        short_vcf = short_vcf,
+        short_vcf_idx = short_vcf_idx,
+        sv_vcf = sv_vcf,
+        sv_vcf_idx = sv_vcf_idx,
+        min_variants_per_shard = min_variants_per_shard,
+        max_variants_per_shard = max_variants_per_shard,
+        min_boundary_dist_bp = min_boundary_dist_bp,
+        min_sv_len = min_sv_len
+    }
+
+    output {
+        Array[String] shard_regions = CreateShards.shard_regions
+        File shard_regions_terra_tsv = CreateShards.shard_regions_terra_tsv
+    }
+}
+
+struct RuntimeAttr {
+    Float? mem_gb
+    Int? cpu_cores
+    Int? disk_gb
+    Int? boot_disk_gb
+    Boolean? use_ssd
+    Int? preemptible_tries
+    Int? max_retries
+    String? docker
+}
+
 task CreateShards {
     input {
         String? region
