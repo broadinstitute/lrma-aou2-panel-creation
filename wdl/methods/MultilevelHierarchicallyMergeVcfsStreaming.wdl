@@ -41,6 +41,7 @@ workflow HierarchicallyMergeVcfs {
                     vcfs_stream = if !do_localization[0] then read_lines(L0_Batches.vcf_batch_fofns[i]) else [],
                     vcf_idxs_stream = if !do_localization[0] then read_lines(L0_Batches.vcf_idx_batch_fofns[i]) else [],
                     timeout_min = timeouts_min[0],
+                    region = region,
                     output_prefix = region_prefix + ".L0-" + i,
                     extra_args = "--regions-overlap 0 -r " + region + " " + extra_merge_args + (if !do_localization[0] then " --verbosity 5" else "")
             }
@@ -68,6 +69,7 @@ workflow HierarchicallyMergeVcfs {
                         vcfs_stream = if !do_localization[1] then read_lines(L1_Batches.vcf_batch_fofns[i]) else [],
                         vcf_idxs_stream = if !do_localization[1] then read_lines(L1_Batches.vcf_idx_batch_fofns[i]) else [],
                         timeout_min = timeouts_min[1],
+                        region = region,
                         output_prefix = region_prefix + ".L1-" + i,
                         extra_args = extra_merge_args + (if !do_localization[1] then " --verbosity 5" else "")
                 }
@@ -96,6 +98,7 @@ workflow HierarchicallyMergeVcfs {
                         vcfs_stream = if !do_localization[2] then read_lines(L2_Batches.vcf_batch_fofns[i]) else [],
                         vcf_idxs_stream = if !do_localization[2] then read_lines(L2_Batches.vcf_idx_batch_fofns[i]) else [],
                         timeout_min = timeouts_min[2],
+                        region = region,
                         output_prefix = region_prefix + ".L2-" + i,
                         extra_args = extra_merge_args + (if !do_localization[2] then " --verbosity 5" else "")
                 }
@@ -115,6 +118,7 @@ workflow HierarchicallyMergeVcfs {
                     vcfs_localize = l2_vcfs,
                     vcf_idxs_localize = l2_idxs,
                     timeout_min = 0,
+                    region = region,
                     output_prefix = region_prefix + ".final",
                     extra_args = extra_merge_args
             }
@@ -204,6 +208,7 @@ task MergeVcfs {
         Array[String] vcf_idxs_stream = []
         
         Int timeout_min
+        String? region
         String output_prefix
         String? extra_args
 
@@ -220,26 +225,85 @@ task MergeVcfs {
             echo "Localizing files natively via Cromwell..."
             cat ~{write_lines(vcfs_localize)} > merge_list.txt
         else
-            echo "Streaming directly from GCS..."
-            
-            # Explicitly authenticate htslib for gs:// streaming
+            echo "Slice-and-downloading regions via bcftools view..."
             export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
+            
+            mkdir -p localized_subsets
             
             # Stitch the VCF and IDX strings together using htslib's explicit index syntax
             paste \
                 ~{write_lines(vcfs_stream)} \
                 ~{write_lines(vcf_idxs_stream)} \
-                | awk '{print $1"##idx##"$2}' > merge_list.txt
+                | awk '{print $1"##idx##"$2}' > remote_list.txt
+
+            # Prepend the line number (NR) using awk, separated by a pipe, and pass to xargs
+            awk '{print NR"|"$0}' remote_list.txt | xargs -P $(nproc) -I {} bash -c '
+                set -euox pipefail
+                
+                # Split the line number and the URL
+                IFS="|" read -r LINE_NUM URL <<< "{}"
+                
+                # Extract the base filename, ignoring the index syntax
+                BASENAME=$(basename "${URL%%##idx##*}")
+                OUT_BCF="localized_subsets/${LINE_NUM}_${BASENAME}"
+                
+                # Setup timeout prefix if timeout_min > 0
+                TIMEOUT_CMD=""
+                if [ ~{timeout_min} -gt 0 ]; then
+                    TIMEOUT_CMD="timeout ~{timeout_min}m"
+                fi
+                
+                # Retry loop to catch transient network hangs
+                MAX_RETRIES=3
+                for i in $(seq 1 $MAX_RETRIES); do
+                    echo "Attempt $i for ${BASENAME}..."
+                    
+                    # Wrap in timeout and use --write-index to generate the .csi simultaneously
+                    if ${TIMEOUT_CMD} bcftools view \
+                        ~{if defined(region) then "--regions-overlap 0 -r " + region else ""} \
+                        --write-index \
+                        "${URL}" -Ob -o "${OUT_BCF}"; then
+                        
+                        exit 0
+                    else
+                        echo "WARNING: Download failed or timed out for ${URL}. Retrying in 5 seconds..." >&2
+                        sleep 5
+                    fi
+                done
+                
+                echo "FATAL: Failed to download ${URL} after $MAX_RETRIES attempts." >&2
+                exit 1
+            '
+            
+            # Build the merge list matching the exact 1-based line number (NR) prefix we just created
+            awk -F '##idx##' '{
+                n = split($1, a, "/"); 
+                print "localized_subsets/" NR "_" a[n]
+            }' remote_list.txt > merge_list.txt
+            
+            # ==========================================
+            # FAST RECORD COUNT ASSERTION
+            # ==========================================
+            echo "Verifying record counts via .csi indices..."
+            EXPECTED_RECORDS=""
+            
+            while IFS= read -r file; do
+                # Extract the total record count strictly from the index metadata (instantaneous)
+                RECORDS=$(bcftools index -n "$file")
+                
+                if [ -z "$EXPECTED_RECORDS" ]; then
+                    EXPECTED_RECORDS=$RECORDS
+                    echo "Baseline established: Expecting exactly $EXPECTED_RECORDS records per file."
+                elif [ "$RECORDS" != "$EXPECTED_RECORDS" ]; then
+                    echo "FATAL: Record count mismatch! $file has $RECORDS records, expected $EXPECTED_RECORDS." >&2
+                    exit 1
+                fi
+            done < merge_list.txt
+            
+            echo "SUCCESS: All localized subsets perfectly match at $EXPECTED_RECORDS records."
         fi
 
-        # Dynamically build the timeout prefix if a value > 0 was provided
-        TIMEOUT_CMD=""
-        if [ ~{timeout_min} -gt 0 ]; then
-            TIMEOUT_CMD="timeout ~{timeout_min}m"
-            echo "Applying timeout: ${TIMEOUT_CMD}"
-        fi
-
-        ${TIMEOUT_CMD} bcftools merge \
+        bcftools merge \
             -l merge_list.txt \
             ~{extra_args} \
             -W=csi -Ob -o ~{output_prefix}.bcf
@@ -252,7 +316,7 @@ task MergeVcfs {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          1,
+        cpu_cores:          2,
         mem_gb:             4,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
