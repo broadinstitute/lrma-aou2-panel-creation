@@ -89,7 +89,7 @@ struct RuntimeAttr {
     Int? cpu_cores
     Int? disk_gb
     Int? boot_disk_gb
-    Boolean? use_ssd
+    String? disk_type
     Int? preemptible_tries
     Int? max_retries
     String? docker
@@ -142,16 +142,16 @@ task SubsetSampleFromVcf {
         mem_gb:             4,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
-        use_ssd:            true,
+        disk_type:          "LOCAL",
         preemptible_tries:  2,
-        max_retries:        1,
+        max_retries:        0,
         docker:             "us.gcr.io/broad-dsp-lrma/lr-basic:0.1.3"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type])
         bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
@@ -209,7 +209,7 @@ task Vcfdist {
         mem_gb:             16,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
-        use_ssd:            true,
+        disk_type:          "SSD",
         preemptible_tries:  2,
         max_retries:        1,
         docker:             "timd1/vcfdist:v2.6.4"
@@ -218,7 +218,7 @@ task Vcfdist {
     runtime {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type])
         bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
@@ -302,16 +302,16 @@ task SummarizeEvaluations {
         mem_gb:             4,
         disk_gb:            10,
         boot_disk_gb:       10,
-        use_ssd:            true,
+        disk_type:          "HDD",
         preemptible_tries:  2,
-        max_retries:        1,
+        max_retries:        0,
         docker:             "us.gcr.io/broad-dsp-lrma/lr-utils:0.1.11"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type])
         bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
