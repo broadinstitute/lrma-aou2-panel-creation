@@ -261,8 +261,8 @@ task HiPhase {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          6,
-        mem_gb:             24,
+        cpu_cores:          4,
+        mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
