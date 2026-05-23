@@ -231,7 +231,8 @@ task HiPhase {
         touch ~{reference_fasta_fai}
         ~{if defined(trgt_vcf_idx) then "touch " + trgt_vcf_idx else ""}
 
-        samtools view -b --use-index --customized-index --write-index -@ $(nproc) "chrX" "chrY" "chrM" ~{bam} ~{bam_idx} > ~{sample_name}.XYM.bam
+        samtools view -b --use-index --customized-index -@ $(nproc) ~{bam} ~{bam_idx} chrX chrY chrM > ~{sample_name}.XYM.bam
+        samtools index ~{sample_name}.XYM.bam
 
         hiphase \
         --bam ~{sample_name}.XYM.bam \
