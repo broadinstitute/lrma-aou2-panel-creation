@@ -13,7 +13,7 @@ workflow GatherSitesAndChunk {
         String entity_name
         String output_prefix
 
-        String chunk_extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 200000 --window-count 50000 --buffer-count 500" # we want window counts to drive the constraints
+        String chunk_extra_args = "--thread $(nproc) --window-size 2000000 --buffer-size 500000 --window-count 100000 --buffer-count 1000" # we want window counts to drive the constraints
     }
 
     call BcftoolsConcatNaive as FilterAndConcatConcat { input:
