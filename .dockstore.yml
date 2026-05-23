@@ -3,6 +3,9 @@ workflows:
 - name: PhysicalPhasing
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/PhysicalPhasing.wdl
+- name: PhysicalPhasing_XYM
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/phasing/PhysicalPhasing_XYM.wdl
 - name: StatisticalPhasing
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/phasing/StatisticalPhasing.wdl
