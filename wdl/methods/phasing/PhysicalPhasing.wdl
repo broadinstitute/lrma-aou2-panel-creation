@@ -28,7 +28,10 @@ workflow PhysicalPhasing {
             "gs://fc-secure-e9018a40-98de-4d5d-8f40-16e60c8f8a0b/prod/split_short/test_chr19/shard-*/" + sample_name + ".short.shard-*.bcf",
             "gs://fc-secure-e9018a40-98de-4d5d-8f40-16e60c8f8a0b/prod/split_short/test_chr20/shard-*/" + sample_name + ".short.shard-*.bcf",
             "gs://fc-secure-e9018a40-98de-4d5d-8f40-16e60c8f8a0b/prod/split_short/test_chr21/shard-*/" + sample_name + ".short.shard-*.bcf",
-            "gs://fc-secure-e9018a40-98de-4d5d-8f40-16e60c8f8a0b/prod/split_short/test_chr22/shard-*/" + sample_name + ".short.shard-*.bcf"]
+            "gs://fc-secure-e9018a40-98de-4d5d-8f40-16e60c8f8a0b/prod/split_short/test_chr22/shard-*/" + sample_name + ".short.shard-*.bcf",
+            "gs://fc-secure-e9018a40-98de-4d5d-8f40-16e60c8f8a0b/prod/split_short/test_chrX/shard-*/" + sample_name + ".short.shard-*.bcf",
+            "gs://fc-secure-e9018a40-98de-4d5d-8f40-16e60c8f8a0b/prod/split_short/test_chrY/shard-*/" + sample_name + ".short.shard-*.bcf",
+            "gs://fc-secure-e9018a40-98de-4d5d-8f40-16e60c8f8a0b/prod/split_short/test_chrM/shard-*/" + sample_name + ".short.shard-*.bcf"]
 
         String sv_vcf_shard_paths = "gs://fc-secure-e9018a40-98de-4d5d-8f40-16e60c8f8a0b/prod/split_sv/v3_main/shard-*/" + sample_name + ".sv.shard-*.bcf"
 
