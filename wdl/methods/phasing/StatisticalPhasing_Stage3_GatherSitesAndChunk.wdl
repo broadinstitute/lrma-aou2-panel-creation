@@ -6,37 +6,43 @@ workflow GatherSitesAndChunk {
 
     input {
         String region
-        Array[File] filter_and_concat_vcfs
-        Array[File] filter_and_concat_vcf_idxs
-        Array[File] collisionless_vcfs
-        Array[File] collisionless_vcf_idxs
+        Array[File]? filter_and_concat_vcfs
+        Array[File]? filter_and_concat_vcf_idxs
+        Array[File]? collisionless_vcfs
+        Array[File]? collisionless_vcf_idxs
+        File? sites_only_vcf_bypass        # provide only sites-only inputs to optionally skip concats and do chunking only
+        File? sites_only_vcf_idx_bypass
         String entity_name
         String output_prefix
 
-        String chunk_extra_args = "--thread $(nproc) --window-size 2000000 --buffer-size 500000 --window-count 100000 --buffer-count 1000" # we want window counts to drive the constraints
+        String chunk_extra_args = "--thread $(nproc) --window-size 1000000 --buffer-size 250000 --window-count 50000 --buffer-count 2000" # we want window counts to drive the constraints
     }
 
-    call BcftoolsConcatNaive as FilterAndConcatConcat { input:
-        vcfs = filter_and_concat_vcfs,
-        vcf_idxs = filter_and_concat_vcf_idxs,
-        output_prefix = output_prefix + ".filterAndConcat"
+    if (defined(filter_and_concat_vcfs) && defined(filter_and_concat_vcf_idxs)) {
+        call BcftoolsConcatNaive as FilterAndConcatConcat { input:
+            vcfs = select_first([filter_and_concat_vcfs]),
+            vcf_idxs = select_first([filter_and_concat_vcf_idxs]),
+            output_prefix = output_prefix + ".filterAndConcat"
+        }
+
+        call CreateSitesOnlyVCF as SitesOnly { input:
+            vcf = FilterAndConcatConcat.concatenated_vcf,
+            vcf_idx = FilterAndConcatConcat.concatenated_vcf_idx,
+            output_prefix = output_prefix + ".collisionless.sites"
+        }
     }
 
-    call BcftoolsConcatNaive as CollisionlessPreShapeitConcat { input:
-        vcfs = collisionless_vcfs,
-        vcf_idxs = collisionless_vcf_idxs,
-        output_prefix = output_prefix + ".collisionless"
-    }
-
-    call CreateSitesOnlyVCF as SitesOnly { input:
-        vcf = FilterAndConcatConcat.concatenated_vcf,
-        vcf_idx = FilterAndConcatConcat.concatenated_vcf_idx,
-        output_prefix = output_prefix + ".collisionless.sites"
+    if (defined(collisionless_vcfs) && defined(collisionless_vcf_idxs)) {
+        call BcftoolsConcatNaive as CollisionlessPreShapeitConcat { input:
+            vcfs = select_first([collisionless_vcfs]),
+            vcf_idxs = select_first([collisionless_vcf_idxs]),
+            output_prefix = output_prefix + ".collisionless"
+        }
     }
 
     call CreateShapeitChunks { input:
-        vcf = SitesOnly.sites_only_vcf,
-        vcf_idx = SitesOnly.sites_only_vcf_idx,
+        vcf = select_first([sites_only_vcf_bypass, SitesOnly.sites_only_vcf]),
+        vcf_idx = select_first([sites_only_vcf_idx_bypass, SitesOnly.sites_only_vcf_idx]),
         region = region,
         entity_name = entity_name,
         output_prefix = output_prefix,
@@ -44,12 +50,12 @@ workflow GatherSitesAndChunk {
     }
 
     output {
-        File filter_and_concat_vcf = FilterAndConcatConcat.concatenated_vcf
-        File filter_and_concat_vcf_idx = FilterAndConcatConcat.concatenated_vcf_idx
-        File collisionless_vcf = CollisionlessPreShapeitConcat.concatenated_vcf
-        File collisionless_vcf_idx = CollisionlessPreShapeitConcat.concatenated_vcf_idx
-        File sites_only_vcf = SitesOnly.sites_only_vcf
-        File sites_only_vcf_idx = SitesOnly.sites_only_vcf_idx
+        File? filter_and_concat_vcf = FilterAndConcatConcat.concatenated_vcf
+        File? filter_and_concat_vcf_idx = FilterAndConcatConcat.concatenated_vcf_idx
+        File? collisionless_vcf = CollisionlessPreShapeitConcat.concatenated_vcf
+        File? collisionless_vcf_idx = CollisionlessPreShapeitConcat.concatenated_vcf_idx
+        File? sites_only_vcf = SitesOnly.sites_only_vcf
+        File? sites_only_vcf_idx = SitesOnly.sites_only_vcf_idx
         File common_chunks = CreateShapeitChunks.common_chunks
         File rare_chunks = CreateShapeitChunks.rare_chunks
         File chunks_terra_tsv = CreateShapeitChunks.chunks_terra_tsv
