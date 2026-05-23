@@ -231,8 +231,10 @@ task HiPhase {
         touch ~{reference_fasta_fai}
         ~{if defined(trgt_vcf_idx) then "touch " + trgt_vcf_idx else ""}
 
+        samtools view -b --use-index --customized-index --write-index @ $(nproc) "chrX" "chrY" "chrM" ~{bam} ~{bam_idx} > ~{sample_name}.XYM.bam
+
         hiphase \
-        --bam ~{bam} \
+        --bam ~{sample_name}.XYM.bam \
         --reference ~{reference_fasta} \
         --vcf ~{short_vcf} \
         --output-vcf ~{sample_name}.hiphase.short.bcf \
@@ -248,15 +250,15 @@ task HiPhase {
     >>>
 
     output {
-        File hiphase_short_vcf = "~{sample_name}.hiphase.short.bcf"
-        File hiphase_short_vcf_idx = "~{sample_name}.hiphase.short.bcf.csi"
-        File hiphase_sv_vcf = "~{sample_name}.hiphase.sv.bcf"
-        File hiphase_sv_vcf_idx = "~{sample_name}.hiphase.sv.bcf.csi"
-        File? hiphase_trgt_vcf = "~{sample_name}.hiphase.trgt.bcf"
-        File? hiphase_trgt_vcf_idx = "~{sample_name}.hiphase.trgt.bcf.csi"
-        File? haplotagged_bam = "~{sample_name}.hiphase.haplotagged.bam"
-        File? haplotagged_bam_idx = "~{sample_name}.hiphase.haplotagged.bam.csi"
-        Array[File] hiphase_metrics_files = glob("~{sample_name}.hiphase.*.*sv")
+        File hiphase_short_vcf = "~{sample_name}.hiphase.XYM.short.bcf"
+        File hiphase_short_vcf_idx = "~{sample_name}.hiphase.XYM.short.bcf.csi"
+        File hiphase_sv_vcf = "~{sample_name}.hiphase.XYM.sv.bcf"
+        File hiphase_sv_vcf_idx = "~{sample_name}.hiphase.XYM.sv.bcf.csi"
+        File? hiphase_trgt_vcf = "~{sample_name}.hiphase.XYM.trgt.bcf"
+        File? hiphase_trgt_vcf_idx = "~{sample_name}.hiphase.XYM.trgt.bcf.csi"
+        File? haplotagged_bam = "~{sample_name}.hiphase.XYM.haplotagged.bam"
+        File? haplotagged_bam_idx = "~{sample_name}.hiphase.XYM.haplotagged.bam.csi"
+        Array[File] hiphase_metrics_files = glob("~{sample_name}.hiphase.XYM.*.*sv")
     }
 
     #########################
@@ -268,7 +270,7 @@ task HiPhase {
         use_ssd:            true,
         preemptible_tries:  4,
         max_retries:        0,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/hiphase:v1.6.0 "
+        docker:             "us.gcr.io/broad-dsde-methods/slee/hiphase:v1.6.0"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
