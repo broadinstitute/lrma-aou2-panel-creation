@@ -66,7 +66,7 @@ struct RuntimeAttr {
     Int? cpu_cores
     Int? disk_gb
     Int? boot_disk_gb
-    Boolean? disk_type
+    String? disk_type
     Int? preemptible_tries
     Int? max_retries
     String? docker
