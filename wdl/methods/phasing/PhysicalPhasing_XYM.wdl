@@ -218,7 +218,7 @@ task HiPhase {
     # TODO adjust based on do_haplotagging?
     Int disk_gb = 10 + 2 * ceil(size(select_all([bam, short_vcf, sv_vcf, trgt_vcf, reference_fasta]), "GB"))
 
-    String haplotagging_args = if do_haplotagging then "--output-bam ~{sample_name}.hiphase.haplotagged.bam --haplotag-file ~{sample_name}.hiphase.haplotagged.tsv" else ""
+    String haplotagging_args = if do_haplotagging then "--output-bam ~{sample_name}.hiphase.XYM.haplotagged.bam --haplotag-file ~{sample_name}.hiphase.XYM.haplotagged.tsv" else ""
 
     command <<<
         set -euxo pipefail
@@ -238,15 +238,15 @@ task HiPhase {
         --bam ~{sample_name}.XYM.bam \
         --reference ~{reference_fasta} \
         --vcf ~{short_vcf} \
-        --output-vcf ~{sample_name}.hiphase.short.bcf \
+        --output-vcf ~{sample_name}.hiphase.XYM.short.bcf \
         --vcf ~{sv_vcf} \
-        --output-vcf ~{sample_name}.hiphase.sv.bcf \
+        --output-vcf ~{sample_name}.hiphase.XYM.sv.bcf \
         --csi-index \
-        --stats-file ~{sample_name}.hiphase.stats.csv \
-        --blocks-file ~{sample_name}.hiphase.blocks.tsv \
-        --summary-file ~{sample_name}.hiphase.summary.tsv \
+        --stats-file ~{sample_name}.hiphase.XYM.stats.csv \
+        --blocks-file ~{sample_name}.hiphase.XYM.blocks.tsv \
+        --summary-file ~{sample_name}.hiphase.XYM.summary.tsv \
         ~{haplotagging_args} \
-        ~{if defined(trgt_vcf) then "--vcf " + trgt_vcf + " --output-vcf " + sample_name + ".hiphase.trgt.bcf" else ""} \
+        ~{if defined(trgt_vcf) then "--vcf " + trgt_vcf + " --output-vcf " + sample_name + ".hiphase.XYM.trgt.bcf" else ""} \
         ~{extra_args}
     >>>
 
