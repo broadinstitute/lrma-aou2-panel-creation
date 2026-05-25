@@ -74,8 +74,9 @@ task PopBubblesPanel {
     command <<<
         set -euox pipefail
 
-        bcftools view ~{panel_vcf} | \
-            pypy ~{pop_python_script} ~{panel_id_split_vcf} | \
+        bcftools view ~{panel_id_split_vcf} -W=tbi -Oz -o panel.id.split.vcf.gz
+        bcftools view ~{panel_vcf} panel.id.split.vcf.gz | \
+            pypy ~{pop_python_script}  | \
             bcftools view -W=csi -Ob -o ~{output_prefix}.popped.bcf
     >>>
 
@@ -86,7 +87,7 @@ task PopBubblesPanel {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          1,
+        cpu_cores:          2,
         mem_gb:             6,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
