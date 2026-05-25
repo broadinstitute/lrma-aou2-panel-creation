@@ -116,6 +116,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             phased_vcf_idx = ChromosomeGLIMPSE2Ligate.ligated_vcf_idx,
             annotations_vcf = annotations_vcf,
             annotations_vcf_idx = annotations_vcf_idx,
+            region = chromosome,
             fix_variant_collisions_script = fix_variant_collisions_script,
             operation = operation,
             weight_tag = weight_tag,
