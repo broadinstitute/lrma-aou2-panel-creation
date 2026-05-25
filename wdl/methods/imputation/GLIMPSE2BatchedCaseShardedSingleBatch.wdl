@@ -36,10 +36,10 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File annotations_vcf
         File annotations_vcf_idx
         File fix_variant_collisions_script
-        Int operation
-        String weight_tag
-        Int is_weight_format_field
-        Float default_weight
+        Int operation = 1
+        String weight_tag = "SCORE"
+        Int is_weight_format_field = 0
+        Float default_weight = 0.05
 
         String docker
     }
@@ -134,8 +134,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     call BcftoolsConcatNaive as GLIMPSE2PosteriorsCollisionlessConcatVcfs {
         input:
-            vcfs = ChromosomeGLIMPSE2PosteriorsCollisionless.phased_collisionless_vcf,
-            vcf_idxs = ChromosomeGLIMPSE2PosteriorsCollisionless.phased_collisionless_vcf_idx,
+            vcfs = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf,
+            vcf_idxs = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf_idx,
             output_prefix = output_prefix + ".glimpse2.collisionless"
     }
 
@@ -477,23 +477,26 @@ task GLIMPSE2Ligate {
     }
 }
 
+# TODO consolidate with Stage2; break out annotation step
 task FixVariantCollisions {
     input {
-        File phased_vcf                     # biallelic
+        File phased_vcf                          # biallelic, can be locally or fully phased
         File phased_vcf_idx
         File annotations_vcf
         File annotations_vcf_idx
         File fix_variant_collisions_script
-        Int operation = 1                   # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
-        String weight_tag = "AC"            # ID of the weight field; weights are assumed to be non-negative
-        Int is_weight_format_field = 0      # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
-        Float default_weight = 0            # default weight if the weight field is not found
+        Int operation = 1                        # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
+        String weight_tag = "SCORE"              # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
+        Int is_weight_format_field = 0           # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
+        Float default_weight = 0.05              # default weight if the weight field is not found
+        String extra_args = "--use-af --verbosity 1"  # use AF as tie breaker
+        String region
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 50 + 4 * (ceil(size(phased_vcf, "GiB")))
+    Int disk_gb = 10 + 2 * (ceil(size(phased_vcf, "GiB")) + ceil(size(annotations_vcf, "GiB")))
 
     command <<<
         set -euxo pipefail
@@ -501,21 +504,24 @@ task FixVariantCollisions {
         rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
 
         # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        time bcftools annotate --no-version -c CHROM,POS,REF,ALT,ID,INFO/AC,INFO/AN, -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
+        time bcftools annotate --no-version -r ~{region} --regions-overlap 0 -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN,INFO/AN,INFO/AC,INFO/AF -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
         ./FixVariantCollisions \
             ~{operation} \
             ~{weight_tag} \
             ~{is_weight_format_field} \
             ~{default_weight} \
-            histogram.txt | \
+            ~{extra_args} \
+            --removed-counts-tsv ~{output_prefix}.removed.tsv \
+            --histogram-tsv ~{output_prefix}.histogram.tsv | \
         bcftools +setGT --no-version -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads 2 --write-index=tbi -Oz -o ~{output_prefix}.phased.collisionless.vcf.gz -- -t AF,AC,AN
+            bcftools +fill-tags --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
     >>>
 
     output {
-        File phased_collisionless_vcf = "~{output_prefix}.phased.collisionless.vcf.gz"
-        File phased_collisionless_vcf_idx = "~{output_prefix}.phased.collisionless.vcf.gz.tbi"
-        File histogram = "histogram.txt"
+        File collisionless_vcf = "~{output_prefix}.bcf"
+        File collisionless_vcf_idx = "~{output_prefix}.bcf.csi"
+        File collisionless_removed_counts_tsv = "~{output_prefix}.removed.tsv"
+        File collisionless_histogram_tsv = "~{output_prefix}.histogram.tsv"
     }
 
     #########################
@@ -525,9 +531,9 @@ task FixVariantCollisions {
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/pangenie-panel-creation-rust:v1"
+        preemptible_tries:  3,
+        max_retries:        0,
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
