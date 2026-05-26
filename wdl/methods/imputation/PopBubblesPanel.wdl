@@ -75,8 +75,8 @@ task PopBubblesPanel {
         set -euox pipefail
 
         bcftools view ~{panel_id_split_vcf} -G -W=tbi -Oz -o panel.id.split.vcf.gz
-        bcftools view ~{panel_vcf} panel.id.split.vcf.gz | \
-            pypy ~{pop_python_script} | \
+        bcftools view ~{panel_vcf} | \
+            pypy ~{pop_python_script} panel.id.split.vcf.gz | \
             bcftools view -W=csi -Ob -o ~{output_prefix}.popped.bcf
     >>>
 
