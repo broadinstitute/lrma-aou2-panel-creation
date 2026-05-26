@@ -53,7 +53,7 @@ task Shapeit4 {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 4 * ceil(size(vcf, "GiB"))
+    Int disk_gb = 10 + 2 * ceil(size(vcf, "GiB"))
     
     command <<<
         set -euxo pipefail

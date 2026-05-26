@@ -189,7 +189,7 @@ task BubblePanelCreation {
         time bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} --threads 2 ~{phased_vcf} | \
             ./bubble-utils/target/release/prepare_vcf_and_add_ids --missing ~{frac_missing} | \
             bcftools norm --no-version -m-any --do-not-normalize | tee \
-        >(  bcftools view --no-version --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.bcf ) | \
+        >(  bcftools view --no-version -G --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.bcf ) | \
          (  ./bubble-utils/target/release/merge_vcfs merge \
                 --header header.txt \
                 -r ~{reference_fasta} \
