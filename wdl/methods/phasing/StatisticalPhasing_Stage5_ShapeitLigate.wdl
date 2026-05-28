@@ -46,7 +46,7 @@ task LigateVcfs {
     command <<<
         set -euxo pipefail
 
-        ligate_static --input ~{write_lines(vcfs)} --output ~{output_prefix}.ligate.bcf
+        ligate_static --input ~{write_lines(vcfs)} --threads $(nproc) --output ~{output_prefix}.ligate.bcf
         bcftools +fill-tags --no-version --threads $(nproc) ~{output_prefix}.ligate.bcf \
             -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
         bcftools index ~{output_prefix}.bcf
@@ -59,7 +59,7 @@ task LigateVcfs {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          2,
+        cpu_cores:          4,
         mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
