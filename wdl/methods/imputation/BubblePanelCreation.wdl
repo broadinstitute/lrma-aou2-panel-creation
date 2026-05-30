@@ -68,7 +68,7 @@ workflow BubblePanelCreation {
     call ConcatVcfs.ConcatVcfs as ConcatBubblePanelCreation { input:
         vcfs = BubblePanelCreation.panel_vcf,
         vcf_idxs = BubblePanelCreation.panel_vcf_idx,
-        output_prefix = output_prefix + ".ligated.collisionless.bubble",
+        output_prefix = output_prefix + ".bubble",
         do_sort = false,
         extra_args = "--threads $(nproc) --naive"
     }
@@ -76,7 +76,7 @@ workflow BubblePanelCreation {
     call ConcatVcfs.ConcatVcfs as ConcatBubblePanelCreationIDSplit { input:
         vcfs = BubblePanelCreation.panel_id_split_vcf,
         vcf_idxs = BubblePanelCreation.panel_id_split_vcf_idx,
-        output_prefix = output_prefix + ".ligated.collisionless.id.split",
+        output_prefix = output_prefix + ".id.split",
         do_sort = false,
         extra_args = "--threads $(nproc) --naive"
     }
