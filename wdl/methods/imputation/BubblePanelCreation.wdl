@@ -4,8 +4,8 @@ import "../ConcatVcfs.wdl" as ConcatVcfs
 
 workflow BubblePanelCreation {
     input {
-        File phased_vcf
-        File phased_vcf_idx
+        File ligated_vcf
+        File ligated_vcf_idx
         File annotations_vcf        # output of FixVariantCollisions step before Shapeit4
         File annotations_vcf_idx
         File reference_fasta
@@ -28,8 +28,8 @@ workflow BubblePanelCreation {
 
     scatter (i in range(length(regions))) {
         call FixVariantCollisions { input:
-            phased_vcf = phased_vcf,
-            phased_vcf_idx = phased_vcf_idx,
+            phased_vcf = ligated_vcf,
+            phased_vcf_idx = ligated_vcf_idx,
             annotations_vcf = annotations_vcf,
             annotations_vcf_idx = annotations_vcf_idx,
             fix_variant_collisions_script = fix_variant_collisions_script,
