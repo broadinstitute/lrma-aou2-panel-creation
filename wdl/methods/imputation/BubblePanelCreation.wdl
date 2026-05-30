@@ -1,5 +1,7 @@
 version 1.0
 
+import "../ConcatVcfs.wdl" as ConcatVcfs
+
 workflow BubblePanelCreation {
     input {
         File phased_vcf
@@ -8,7 +10,7 @@ workflow BubblePanelCreation {
         File annotations_vcf_idx
         File reference_fasta
         File reference_fasta_fai
-        String region
+        Array[String] regions
         String output_prefix
 
         # inputs for FixVariantCollisions (see documentation for arguments in task)
@@ -24,47 +26,73 @@ workflow BubblePanelCreation {
         Float frac_missing = 0.2
     }
 
-    call FixVariantCollisions { input:
-        phased_vcf = phased_vcf,
-        phased_vcf_idx = phased_vcf_idx,
-        annotations_vcf = annotations_vcf,
-        annotations_vcf_idx = annotations_vcf_idx,
-        fix_variant_collisions_script = fix_variant_collisions_script,
-        operation = operation,
-        weight_tag = weight_tag,
-        is_weight_format_field = is_weight_format_field,
-        default_weight = default_weight,
-        region = region,
-        output_prefix = output_prefix + ".ligated.collisionless"
+    scatter (i in range(length(regions))) {
+        call FixVariantCollisions { input:
+            phased_vcf = phased_vcf,
+            phased_vcf_idx = phased_vcf_idx,
+            annotations_vcf = annotations_vcf,
+            annotations_vcf_idx = annotations_vcf_idx,
+            fix_variant_collisions_script = fix_variant_collisions_script,
+            operation = operation,
+            weight_tag = weight_tag,
+            is_weight_format_field = is_weight_format_field,
+            default_weight = default_weight,
+            region = regions[i],
+            output_prefix = output_prefix + ".ligated.collisionless" + ".region-" + i
+        }
+
+        call BubblePanelCreation { input:
+            phased_vcf = FixVariantCollisions.collisionless_vcf,
+            phased_vcf_idx = FixVariantCollisions.collisionless_vcf_idx,
+            reference_fasta = reference_fasta,
+            reference_fasta_fai = reference_fasta_fai,
+            region = regions[i],
+            prepare_vcf_and_add_ids_script = prepare_vcf_and_add_ids_script,
+            merge_vcfs_script = merge_vcfs_script,
+            cargo_toml = cargo_toml,
+            frac_missing = frac_missing,
+            weight_tag = weight_tag,
+            default_weight = default_weight,
+            output_prefix = output_prefix + ".ligated.collisionless.bubble" + ".region-" + i
+        }
     }
 
-    call BubblePanelCreation { input:
-        phased_vcf = FixVariantCollisions.collisionless_vcf,
-        phased_vcf_idx = FixVariantCollisions.collisionless_vcf_idx,
-        reference_fasta = reference_fasta,
-        reference_fasta_fai = reference_fasta_fai,
-        region = region,
-        prepare_vcf_and_add_ids_script = prepare_vcf_and_add_ids_script,
-        merge_vcfs_script = merge_vcfs_script,
-        cargo_toml = cargo_toml,
-        frac_missing = frac_missing,
-        weight_tag = weight_tag,
-        default_weight = default_weight,
-        output_prefix = output_prefix + ".ligated.collisionless.bubble"
+    call ConcatVcfs.ConcatVcfs as ConcatFixVariantCollisions { input:
+        vcfs = FixVariantCollisions.collisionless_vcf,
+        vcf_idxs = FixVariantCollisions.collisionless_vcf_idx,
+        output_prefix = output_prefix + ".ligated.collisionless",
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive"
+    }
+
+    call ConcatVcfs.ConcatVcfs as ConcatBubblePanelCreation { input:
+        vcfs = BubblePanelCreation.panel_vcf,
+        vcf_idxs = BubblePanelCreation.panel_vcf_idx,
+        output_prefix = output_prefix + ".ligated.collisionless.bubble",
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive"
+    }
+
+    call ConcatVcfs.ConcatVcfs as ConcatBubblePanelCreationIDSplit { input:
+        vcfs = BubblePanelCreation.panel_id_split_vcf,
+        vcf_idxs = BubblePanelCreation.panel_id_split_vcf_idx,
+        output_prefix = output_prefix + ".ligated.collisionless.id.split",
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive"
     }
 
     # make sure dict in header
     # TODO add preprocessing steps from KAGE Panel WDL
 
     output {
-        File phased_collisionless_vcf = FixVariantCollisions.collisionless_vcf
-        File phased_collisionless_vcf_idx = FixVariantCollisions.collisionless_vcf_idx
-        File phased_collisionless_removed_counts_tsv = FixVariantCollisions.collisionless_removed_counts_tsv
-        File phased_collisionless_histogram_tsv = FixVariantCollisions.collisionless_histogram_tsv
-        File panel_vcf = BubblePanelCreation.panel_vcf
-        File panel_vcf_idx = BubblePanelCreation.panel_vcf_idx
-        File panel_id_split_vcf = BubblePanelCreation.panel_id_split_vcf
-        File panel_id_split_vcf_idx = BubblePanelCreation.panel_id_split_vcf_idx
+        File ligated_collisionless_vcf = ConcatFixVariantCollisions.concatenated_vcf
+        File ligated_collisionless_vcf_idx = ConcatFixVariantCollisions.concatenated_vcf_idx
+        Array[File] ligated_collisionless_removed_counts_tsvs = FixVariantCollisions.collisionless_removed_counts_tsv
+        Array[File] ligated_collisionless_histogram_tsvs = FixVariantCollisions.collisionless_histogram_tsv
+        File panel_bubble_vcf = ConcatBubblePanelCreation.concatenated_vcf
+        File panel_bubble_vcf_idx = ConcatBubblePanelCreation.concatenated_vcf_idx
+        File panel_id_split_vcf = ConcatBubblePanelCreationIDSplit.concatenated_vcf
+        File panel_id_split_vcf_idx = ConcatBubblePanelCreationIDSplit.concatenated_vcf_idx
     }
 }
 
