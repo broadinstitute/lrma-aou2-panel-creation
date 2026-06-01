@@ -7,12 +7,28 @@ workflow ConcatVcfs {
         String output_prefix
         Boolean do_sort = false
         String extra_args = "--threads $(nproc) --naive"
+
+        Array[String]? regions      # if provided, concat within shards and then concat across shards
+    }
+
+    if (defined(regions)) {
+        scatter (region in select_first([regions])) {
+            call ConcatVcfs as ShardConcatVcfs {
+                input:
+                    vcfs = vcfs,
+                    vcf_idxs = vcf_idxs,
+                    output_prefix = output_prefix,
+                    do_sort = do_sort,
+                    extra_args = extra_args,
+                    region = region
+            }
+        }
     }
 
     call ConcatVcfs {
         input:
-            vcfs = vcfs,
-            vcf_idxs = vcf_idxs,
+            vcfs = select_first([ShardConcatVcfs.concatenated_vcf, vcfs]),
+            vcf_idxs = select_first([ShardConcatVcfs.concatenated_vcf_idx, vcf_idxs]),
             output_prefix = output_prefix,
             do_sort = do_sort,
             extra_args = extra_args
@@ -42,6 +58,7 @@ task ConcatVcfs {
         String output_prefix
         Boolean do_sort = false
         String? extra_args
+        String? region
 
         RuntimeAttr? runtime_attr_override
     }
@@ -79,13 +96,13 @@ task ConcatVcfs {
             mkdir sort_tmp_dir
             
             # Output as uncompressed BCF (-Ou) and route sort temp files to our directory (-T)
-            bcftools concat \
+            bcftools concat ~{"--region " + region} \
                 -f ~{write_lines(vcfs)} \
                 ~{extra_args} \
                 -Ou | bcftools sort -m 2G -T sort_tmp_dir/tmp -Ob -o ~{output_prefix}.bcf
         else
             echo "Concatenating directly to disk..."
-            bcftools concat \
+            bcftools concat ~{"--region " + region} \
                 -f ~{write_lines(vcfs)} \
                 ~{extra_args} \
                 -Ob -o ~{output_prefix}.bcf
