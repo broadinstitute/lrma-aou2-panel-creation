@@ -9,6 +9,8 @@ workflow ConcatVcfs {
         String extra_args = "--threads $(nproc) --naive"
 
         Array[String]? regions      # if provided, concat within shards and then concat across shards
+        String do_sort_shard = true
+        String extra_args_shard = "--threads $(nproc)"
     }
 
     if (defined(regions)) {
@@ -18,8 +20,8 @@ workflow ConcatVcfs {
                     vcfs = vcfs,
                     vcf_idxs = vcf_idxs,
                     output_prefix = output_prefix,
-                    do_sort = do_sort,
-                    extra_args = extra_args,
+                    do_sort = do_sort_shard,
+                    extra_args = extra_args_shard,
                     region = region
             }
         }
@@ -96,13 +98,13 @@ task ConcatVcfs {
             mkdir sort_tmp_dir
             
             # Output as uncompressed BCF (-Ou) and route sort temp files to our directory (-T)
-            bcftools concat ~{"--region " + region} \
+            bcftools concat ~{"--regions-overlap 0 --region " + region} \
                 -f ~{write_lines(vcfs)} \
                 ~{extra_args} \
                 -Ou | bcftools sort -m 2G -T sort_tmp_dir/tmp -Ob -o ~{output_prefix}.bcf
         else
             echo "Concatenating directly to disk..."
-            bcftools concat ~{"--region " + region} \
+            bcftools concat ~{"--regions-overlap 0 --region " + region} \
                 -f ~{write_lines(vcfs)} \
                 ~{extra_args} \
                 -Ob -o ~{output_prefix}.bcf
