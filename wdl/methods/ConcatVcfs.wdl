@@ -98,13 +98,13 @@ task ConcatVcfs {
             mkdir sort_tmp_dir
             
             # Output as uncompressed BCF (-Ou) and route sort temp files to our directory (-T)
-            bcftools concat ~{"--regions-overlap 0 --region " + region} \
+            bcftools concat ~{"--regions-overlap 0 -r " + region} \
                 -f ~{write_lines(vcfs)} \
                 ~{extra_args} \
                 -Ou | bcftools sort -m 2G -T sort_tmp_dir/tmp -Ob -o ~{output_prefix}.bcf
         else
             echo "Concatenating directly to disk..."
-            bcftools concat ~{"--regions-overlap 0 --region " + region} \
+            bcftools concat ~{"--regions-overlap 0 -r " + region} \
                 -f ~{write_lines(vcfs)} \
                 ~{extra_args} \
                 -Ob -o ~{output_prefix}.bcf
