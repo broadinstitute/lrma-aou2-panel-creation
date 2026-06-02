@@ -33,7 +33,8 @@ workflow PostprocessBubblePanel {
             panel_bubble_vcf_idx = panel_bubble_vcf_idx,
             reference_fasta_fai = reference_fasta_fai,
             region = regions[i],
-            output_prefix = output_prefix + ".bubble.split.region-" + i
+            output_prefix = output_prefix + ".bubble.split.region-" + i,
+            leave_out_samples = []
         }
     }
 
@@ -56,8 +57,8 @@ workflow PostprocessBubblePanel {
                 panel_bubble_vcf_idx = panel_bubble_vcf_idx,
                 reference_fasta_fai = reference_fasta_fai,
                 region = regions[i],
-                leave_out_samples = leave_out_samples,
-                output_prefix = output_prefix + ".bubble.split.leaveout.region-" + i
+                output_prefix = output_prefix + ".bubble.split.leaveout.region-" + i,
+                leave_out_samples = leave_out_samples
             }
         }
 
