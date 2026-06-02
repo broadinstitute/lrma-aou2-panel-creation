@@ -158,7 +158,7 @@ task SplitBubblesPanel {
     Int disk_gb = 10 + 2 * ceil(size(panel_bubble_vcf, "GB"))
 
     Array[String] leave_out_samples_array = select_first([leave_out_samples, []])
-    String leave_out_samples_pipe = if length(leave_out_samples_array) > 0 then "bcftools view -S ^" + write_lines(leave_out_samples_array) + " --force-samples -Ou | bcftools +fill-AN-AC -Ou |" else ""
+    File leave_out_samples_list = write_lines(leave_out_samples_array)
 
     command <<<
         set -euox pipefail
@@ -168,7 +168,7 @@ task SplitBubblesPanel {
             bcftools +setGT -Ou -- -t . -n 0p |
             bcftools +fill-AN-AC -Ou |
             bcftools reheader -f ~{reference_fasta_fai} |
-            ~{leave_out_samples_pipe}
+            if length(leave_out_samples_array) > 0 then "bcftools view -S ^" + ~{leave_out_samples_list} + " --force-samples -Ou | bcftools +fill-AN-AC -Ou |" else ""
             bcftools view -W=csi -Ob -o ~{output_prefix}.bcf
     >>>
 
