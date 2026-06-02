@@ -54,3 +54,6 @@ workflows:
 - name: ConcatVcfs
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/ConcatVcfs.wdl
+- name: TransferAWSOpenData
+  subclass: wdl
+  primaryDescriptorPath: /wdl/TransferAWSOpenData.wdl
