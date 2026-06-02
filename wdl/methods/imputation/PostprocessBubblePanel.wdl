@@ -127,7 +127,7 @@ task PopBubblesPanel {
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
-        max_retries:        0,
+        max_retries:        1,
         docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-pypy:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
@@ -185,7 +185,7 @@ task SplitBubblesPanel {
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
-        max_retries:        0,
+        max_retries:        1,
         docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
