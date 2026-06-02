@@ -168,7 +168,7 @@ task SplitBubblesPanel {
             bcftools +setGT -Ou -- -t . -n 0p |
             bcftools +fill-AN-AC -Ou |
             bcftools reheader -f ~{reference_fasta_fai} |
-            if length(leave_out_samples_array) > 0 then "bcftools view -S ^" + ~{leave_out_samples_list} + " --force-samples -Ou | bcftools +fill-AN-AC -Ou |" else ""
+            ~{if length(leave_out_samples_array) > 0 then "bcftools view -S ^" + leave_out_samples_list + " --force-samples -Ou |" else ""}
             bcftools view -W=csi -Ob -o ~{output_prefix}.bcf
     >>>
 
