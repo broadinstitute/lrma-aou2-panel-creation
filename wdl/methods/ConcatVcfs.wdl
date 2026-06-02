@@ -8,7 +8,7 @@ workflow ConcatVcfs {
         Boolean do_sort = false
         String extra_args = "--threads $(nproc) --naive"
 
-        Array[String]? regions      # if provided, concat within shards and then concat across shards
+        Array[String]? regions      # if provided, concat within shards and then concat across shards; e.g., concat HiPhase short + SV
         Boolean do_sort_shard = true
         String extra_args_shard = "--threads $(nproc)"
     }
