@@ -54,6 +54,7 @@ workflow PostprocessBubblePanel {
             call SplitBubblesPanel as SplitBubblesPanelLeaveOut { input:
                 panel_bubble_vcf = panel_bubble_vcf,
                 panel_bubble_vcf_idx = panel_bubble_vcf_idx,
+                reference_fasta_fai = reference_fasta_fai,
                 region = regions[i],
                 leave_out_samples = leave_out_samples,
                 output_prefix = output_prefix + ".bubble.split.leaveout.region-" + i
