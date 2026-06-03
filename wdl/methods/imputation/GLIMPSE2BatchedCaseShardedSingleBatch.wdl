@@ -15,7 +15,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     input {
         File input_vcf
         File input_vcf_idx
-        Array[String]? sample_names
+        Array[String] sample_names = []     # empty list to select all
 
         # per chromosome
         Array[String]+ chromosomes
@@ -81,7 +81,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     panel_split_vcf = panel_split_vcf[j],
                     panel_split_vcf_idx = panel_split_vcf_idx[j],
                     output_region = output_regions[k],
-                    sample_names = select_first([sample_names, []]),
+                    sample_names = sample_names,
                     output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".preprocessedPLs",
                     remap_simple_bubble_likelihoods_python_script = remap_simple_bubble_likelihoods_python_script,
                     swap_alleles_python_script = swap_alleles_python_script,
