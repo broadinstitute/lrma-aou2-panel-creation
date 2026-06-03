@@ -562,7 +562,7 @@ task BcftoolsConcatNaive {
     command <<<
         set -euxo pipefail
 
-        bcftools concat --no-version ~{sep=" " vcfs} --naive -Oz -o ~{output_prefix}.bcf
+        bcftools concat --no-version ~{sep=" " vcfs} --naive -Ob -o ~{output_prefix}.bcf
         bcftools index ~{output_prefix}.bcf
     >>>
 
