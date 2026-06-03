@@ -31,6 +31,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         # inputs for PreprocessPLs
         File remap_simple_bubble_likelihoods_python_script
         File swap_alleles_python_script
+        File? preprocess_regions_bed
+        String? preprocess_view_extra_args
 
         # inputs for FixVariantCollisions
         File annotations_vcf
@@ -85,6 +87,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".preprocessedPLs",
                     remap_simple_bubble_likelihoods_python_script = remap_simple_bubble_likelihoods_python_script,
                     swap_alleles_python_script = swap_alleles_python_script,
+                    preprocess_regions_bed = preprocess_regions_bed,
+                    preprocess_view_extra_args = preprocess_view_extra_args,
                     docker = docker
             }
 
@@ -292,6 +296,8 @@ task PreprocessPLs {
 
         File remap_simple_bubble_likelihoods_python_script
         File swap_alleles_python_script
+        File? preprocess_regions_bed
+        String? preprocess_view_extra_args
 
         String docker
 
@@ -310,9 +316,14 @@ task PreprocessPLs {
 
         # TODO stream; or, once shards are fixed, prepare beforehand?
         bcftools view --no-version -G ~{panel_split_vcf}##idx##~{panel_split_vcf_idx} \
-            --regions-overlap pos -r ~{output_region} -Ou | \
+            --regions-overlap pos -r ~{output_region} -Ou \
+            ~{"-T " + preprocess_regions_bed} \
+            ~{preprocess_view_extra_args} | \
         bcftools norm -m+any -N \
             --write-index=tbi -Oz -o panel.subset.sites.vcf.gz
+
+        echo "Number of sites to preprocess..."
+        bcftools index -n panel.subset.sites.vcf.gz
 
         pypy -m pip install --no-input tqdm
 
