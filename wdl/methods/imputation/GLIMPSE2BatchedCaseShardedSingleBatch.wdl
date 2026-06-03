@@ -447,12 +447,12 @@ task GLIMPSE2Ligate {
         wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_ligate_static
         chmod +x GLIMPSE2_ligate_static
 
-        ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.vcf.gz --thread $(nproc)
+        ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
     >>>
 
     output {
-        File ligated_vcf = "~{output_prefix}.vcf.gz"
-        File ligated_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
+        File ligated_vcf = "~{output_prefix}.bcf"
+        File ligated_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
@@ -562,13 +562,13 @@ task BcftoolsConcatNaive {
     command <<<
         set -euxo pipefail
 
-        bcftools concat --no-version ~{sep=" " vcfs} --naive -Oz -o ~{output_prefix}.vcf.gz
-        bcftools index -t ~{output_prefix}.vcf.gz
+        bcftools concat --no-version ~{sep=" " vcfs} --naive -Oz -o ~{output_prefix}.bcf
+        bcftools index ~{output_prefix}.bcf
     >>>
 
     output {
-        File concatenated_vcf = "~{output_prefix}.vcf.gz"
-        File concatenated_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
+        File concatenated_vcf = "~{output_prefix}.bcf"
+        File concatenated_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
