@@ -15,7 +15,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     input {
         File input_vcf
         File input_vcf_idx
-        Array[String] sample_names
+        Array[String]? sample_names
 
         # per chromosome
         Array[String]+ chromosomes
@@ -287,7 +287,7 @@ task PreprocessPLs {
         File panel_split_vcf
         File panel_split_vcf_idx
         String output_region
-        Array[String] sample_names
+        Array[String]? sample_names
         String output_prefix
 
         File remap_simple_bubble_likelihoods_python_script
@@ -299,6 +299,9 @@ task PreprocessPLs {
     }
 
     Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_vcf], "GB")) + 10
+
+    Array[String] samples_names_ = select_first([sample_names, []])
+    File sample_names_list = write_lines(samples_names_)
 
     command {
         set -euxo pipefail
@@ -318,7 +321,7 @@ task PreprocessPLs {
         bcftools view ~{input_vcf}##idx##~{input_vcf_idx} \
             -r ~{output_region} \
             --regions-overlap pos \
-            -S ~{write_lines(sample_names)} \
+            ~{if length(samples_names_) > 0 then "-S " + sample_names_list else ""} \
             --threads 2 | \
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
             --bubble panel.subset.sites.vcf.gz | \
