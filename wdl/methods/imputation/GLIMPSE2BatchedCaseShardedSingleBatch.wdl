@@ -95,7 +95,6 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     panel_split_chunk_bin = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,
                     input_region = input_regions[k],
                     output_region = output_regions[k],
-                    sample_names = sample_names,
                     genetic_map = genetic_maps[j],
                     output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".phased",
                     extra_phase_args = extra_phase_args,
@@ -366,7 +365,6 @@ task GLIMPSE2Phase {
         File panel_split_chunk_bin
         String input_region
         String output_region
-        Array[String] sample_names
         File genetic_map
         String output_prefix
         String? extra_phase_args
