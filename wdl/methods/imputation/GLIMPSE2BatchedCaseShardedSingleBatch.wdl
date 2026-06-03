@@ -31,8 +31,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         # inputs for PreprocessPLs
         File remap_simple_bubble_likelihoods_python_script
         File swap_alleles_python_script
-        File? preprocess_regions_bed
-        String? preprocess_view_extra_args
+        File preprocess_regions_bed
+        String preprocess_view_extra_args = ""
 
         # inputs for FixVariantCollisions
         File annotations_vcf
@@ -296,8 +296,8 @@ task PreprocessPLs {
 
         File remap_simple_bubble_likelihoods_python_script
         File swap_alleles_python_script
-        File? preprocess_regions_bed
-        String? preprocess_view_extra_args
+        File preprocess_regions_bed
+        String preprocess_view_extra_args
 
         String docker
 
