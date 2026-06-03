@@ -81,7 +81,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     panel_split_vcf = panel_split_vcf[j],
                     panel_split_vcf_idx = panel_split_vcf_idx[j],
                     output_region = output_regions[k],
-                    sample_names = sample_names,
+                    sample_names = select_first([sample_names, []]),
                     output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".preprocessedPLs",
                     remap_simple_bubble_likelihoods_python_script = remap_simple_bubble_likelihoods_python_script,
                     swap_alleles_python_script = swap_alleles_python_script,
@@ -287,7 +287,7 @@ task PreprocessPLs {
         File panel_split_vcf
         File panel_split_vcf_idx
         String output_region
-        Array[String]? sample_names
+        Array[String] sample_names
         String output_prefix
 
         File remap_simple_bubble_likelihoods_python_script
@@ -300,8 +300,7 @@ task PreprocessPLs {
 
     Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_vcf], "GB")) + 10
 
-    Array[String] samples_names_ = select_first([sample_names, []])
-    File sample_names_list = write_lines(samples_names_)
+    File sample_names_list = write_lines(sample_names)
 
     command {
         set -euxo pipefail
@@ -321,7 +320,7 @@ task PreprocessPLs {
         bcftools view ~{input_vcf}##idx##~{input_vcf_idx} \
             -r ~{output_region} \
             --regions-overlap pos \
-            ~{if length(samples_names_) > 0 then "-S " + sample_names_list else ""} \
+            ~{if length(sample_names) > 0 then "-S " + sample_names_list else ""} \
             --threads 2 | \
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
             --bubble panel.subset.sites.vcf.gz | \
