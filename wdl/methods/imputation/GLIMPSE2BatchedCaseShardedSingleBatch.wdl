@@ -450,7 +450,7 @@ task GLIMPSE2Ligate {
         ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
 
         # when generating BCF output, the index appears to be corrupt (possibly due to https://github.com/samtools/htslib/issues/1740), so we regenerate with bcftools
-        bcftools index ~{output_prefix}.bcf
+        bcftools index -f ~{output_prefix}.bcf
     >>>
 
     output {
