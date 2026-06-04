@@ -436,9 +436,6 @@ task GLIMPSE2Ligate {
     command <<<
         set -euox pipefail
 
-        wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_ligate
-        chmod +x GLIMPSE2_ligate
-
         ./GLIMPSE2_ligate --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
 
         # when generating BCF output, the index appears to be corrupt (possibly due to https://github.com/samtools/htslib/issues/1740), so we regenerate with bcftools
