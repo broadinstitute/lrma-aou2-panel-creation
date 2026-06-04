@@ -33,6 +33,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File swap_alleles_python_script
         File preprocess_regions_bed
         String preprocess_view_extra_args = ""
+        String remap_simple_bubble_likelihoods_extra_args = ""
 
         # inputs for FixVariantCollisions
         File annotations_vcf
@@ -89,6 +90,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     swap_alleles_python_script = swap_alleles_python_script,
                     preprocess_regions_bed = preprocess_regions_bed,
                     preprocess_view_extra_args = preprocess_view_extra_args,
+                    remap_simple_bubble_likelihoods_extra_args = remap_simple_bubble_likelihoods_extra_args,
                     docker = docker
             }
 
@@ -298,6 +300,7 @@ task PreprocessPLs {
         File swap_alleles_python_script
         File preprocess_regions_bed
         String preprocess_view_extra_args
+        String remap_simple_bubble_likelihoods_extra_args
 
         String docker
 
@@ -334,7 +337,8 @@ task PreprocessPLs {
             ~{if length(sample_names) > 0 then "-S " + sample_names_list else ""} \
             --threads 2 | \
         pypy ~{remap_simple_bubble_likelihoods_python_script} \
-            --bubble panel.subset.sites.vcf.gz | \
+            --bubble panel.subset.sites.vcf.gz \
+            ~{remap_simple_bubble_likelihoods_extra_args} | \
         bcftools +tag2tag -Ou -- --LPL-to-PL | \
         bcftools norm -m-any -Ou | \
         bcftools filter -i 'INFO/BMAP != "."' | \
