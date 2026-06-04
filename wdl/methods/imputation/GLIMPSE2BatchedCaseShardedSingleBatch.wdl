@@ -380,17 +380,7 @@ task GLIMPSE2Phase {
             cmd="$cmd --checkpoint-file-in ~{output_prefix}.checkpoint.bin" 
         fi
 
-        #check for read error
-        #This currently triggers a warning message from htslib, but doesn't return any error.
-        #We need to make sure that stderr is maintained since cromwell looks for oom strings
-        #in stderr
-
-        eval "$cmd" 2> >(tee glimpse_stderr.log >&2) 
-
-        if grep -q "EOF marker is absent" glimpse_stderr.log; then 
-            echo "An input file appears to be truncated. This may be either a truly truncated file which needs to be fixed, or a networking error which can just be retried."
-            exit 1
-        fi
+        eval "$cmd"
 
         # take input VCF header and add GLIMPSE INFO and FORMAT lines (GLIMPSE header only contains a single chromosome and breaks bcftools concat --naive)
         bcftools view --no-version -h ~{input_vcf} | grep '^##' > input.header.txt
