@@ -369,7 +369,7 @@ task GLIMPSE2Phase {
         set -euxo pipefail
 
         cmd="/bin/GLIMPSE2_phase \
-                -input-gl ~{input_vcf} \
+                --input-gl ~{input_vcf} \
                 -R ~{panel_split_chunk_bin} \
                 --thread $(nproc) \
                 ~{extra_phase_args} \
