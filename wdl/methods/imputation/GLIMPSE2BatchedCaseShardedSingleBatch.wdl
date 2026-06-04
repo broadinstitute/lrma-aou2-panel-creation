@@ -1,15 +1,6 @@
 version 1.0
 
-struct RuntimeAttributes {
-    Int? cpu
-    Int? command_mem_gb
-    Int? additional_mem_gb
-    Int? disk_size_gb
-    Int? boot_disk_size_gb
-    Boolean? use_ssd
-    Int? preemptible
-    Int? max_retries
-}
+import "../ConcatVcfs.wdl" as ConcatVcfs
 
 workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     input {
@@ -17,11 +8,10 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File input_vcf_idx
         Array[String] sample_names = []     # empty list to select all
 
-        # per chromosome
-        Array[String]+ chromosomes
-        Array[File]+ genetic_maps
-        Array[File] panel_split_vcf          # "split" here means "split to biallelic"; "split" below means "chunked"
-        Array[File] panel_split_vcf_idx
+        String chromosome
+        File genetic_maps_tsv
+        File panel_bubble_split_vcf          # "split" here means "split to biallelic"; "split" below means "chunked"
+        File panel_bubble_split_vcf_idx
 
         String extra_chunk_args = "--thread $(nproc) --window-mb 5 --buffer-mb 0.5 --sequential"
         String extra_split_args = "--keep-monomorphic-ref-sites"
@@ -31,126 +21,115 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         # inputs for PreprocessPLs
         File remap_simple_bubble_likelihoods_python_script
         File swap_alleles_python_script
-        File preprocess_regions_bed
-        String preprocess_view_extra_args = ""
-        String remap_simple_bubble_likelihoods_extra_args = ""
+        File? preprocess_regions_bed
+        String? preprocess_view_extra_args
+        String? remap_simple_bubble_likelihoods_extra_args
 
-        # inputs for FixVariantCollisions
-        File annotations_vcf
-        File annotations_vcf_idx
-        File fix_variant_collisions_script
-        Int operation = 1
-        String weight_tag = "SCORE"
-        Int is_weight_format_field = 0
-        Float default_weight = 0.05
+        # inputs for PopAndMarkCollisions
+        File panel_id_split_vcf
+        File panel_id_split_vcf_idx
+        File pop_python_script                      # modified version of convert-to-biallelic.py
 
-        String docker
+        String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
     }
 
-    scatter (j in range(length(chromosomes))) {
-        String chromosome = chromosomes[j]
+    Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
 
-        call GLIMPSE2Chunk as ChromosomeGLIMPSE2Chunk {
-            input:
-                vcf = panel_split_vcf[j],
-                vcf_idx = panel_split_vcf_idx[j],
-                region = chromosome,
-                genetic_map = genetic_maps[j],
-                output_prefix = output_prefix + "." + chromosome,
-                extra_chunk_args = extra_chunk_args,
-                docker = docker
-        }
-
-        Array[String] input_regions = read_lines(ChromosomeGLIMPSE2Chunk.input_regions)
-        Array[String] output_regions = read_lines(ChromosomeGLIMPSE2Chunk.output_regions)
-
-        scatter (k in range(length(input_regions))) {
-            call GLIMPSE2SplitReference as ChunkedGLIMPSE2SplitReference {
-                input:
-                    panel_split_vcf = panel_split_vcf[j],
-                    panel_split_vcf_idx = panel_split_vcf_idx[j],
-                    input_region = input_regions[k],
-                    output_region = output_regions[k],
-                    genetic_map = genetic_maps[j],
-                    output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".split",
-                    extra_split_args = extra_split_args,
-                    docker = docker
-            }
-
-            call PreprocessPLs as ChunkedPreprocessPLs {
-                input:
-                    input_vcf = input_vcf,
-                    input_vcf_idx = input_vcf_idx,
-                    panel_split_vcf = panel_split_vcf[j],
-                    panel_split_vcf_idx = panel_split_vcf_idx[j],
-                    output_region = output_regions[k],
-                    sample_names = sample_names,
-                    output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".preprocessedPLs",
-                    remap_simple_bubble_likelihoods_python_script = remap_simple_bubble_likelihoods_python_script,
-                    swap_alleles_python_script = swap_alleles_python_script,
-                    preprocess_regions_bed = preprocess_regions_bed,
-                    preprocess_view_extra_args = preprocess_view_extra_args,
-                    remap_simple_bubble_likelihoods_extra_args = remap_simple_bubble_likelihoods_extra_args,
-                    docker = docker
-            }
-
-            call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
-                input:
-                    input_vcf = ChunkedPreprocessPLs.preprocessed_pls_bcf,
-                    input_vcf_idx = ChunkedPreprocessPLs.preprocessed_pls_bcf_csi,
-                    panel_split_chunk_bin = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,
-                    input_region = input_regions[k],
-                    output_region = output_regions[k],
-                    genetic_map = genetic_maps[j],
-                    output_prefix = output_prefix + "." + chromosome + ".shard-" + k + ".phased",
-                    extra_phase_args = extra_phase_args,
-                    docker = docker
-            }
-        }
-
-        call GLIMPSE2Ligate as ChromosomeGLIMPSE2Ligate {
-            input:
-                phased_bcfs = ChunkedGLIMPSE2Phase.phased_bcf,
-                phased_bcf_csis = ChunkedGLIMPSE2Phase.phased_bcf_csi,
-                output_prefix = output_prefix + "." + chromosome + ".ligated",
-                docker = docker
-        }
-
-        call FixVariantCollisions as ChromosomeGLIMPSE2PosteriorsCollisionless { input:
-            phased_vcf = ChromosomeGLIMPSE2Ligate.ligated_vcf,
-            phased_vcf_idx = ChromosomeGLIMPSE2Ligate.ligated_vcf_idx,
-            annotations_vcf = annotations_vcf,
-            annotations_vcf_idx = annotations_vcf_idx,
+    call GLIMPSE2Chunk {
+        input:
+            vcf = panel_bubble_split_vcf,
+            vcf_idx = panel_bubble_split_vcf_idx,
             region = chromosome,
-            fix_variant_collisions_script = fix_variant_collisions_script,
-            operation = operation,
-            weight_tag = weight_tag,
-            is_weight_format_field = is_weight_format_field,
-            default_weight = default_weight,
-            output_prefix = output_prefix + "." + chromosome + ".glimpse2.collisionless"
+            genetic_map = genetic_maps_dict[chromosome],
+            output_prefix = output_prefix,
+            extra_chunk_args = extra_chunk_args,
+            docker = glimpse2_docker
+    }
+
+    Array[String] input_regions_ = read_lines(GLIMPSE2Chunk.input_regions)
+    Array[String] output_regions_ = read_lines(GLIMPSE2Chunk.output_regions)
+
+    scatter (k in range(length(output_regions_))) {
+        call GLIMPSE2SplitReference as ChunkedGLIMPSE2SplitReference {
+            input:
+                panel_bubble_split_vcf = panel_bubble_split_vcf,
+                panel_bubble_split_vcf_idx = panel_bubble_split_vcf_idx,
+                input_region = input_regions_[k],
+                output_region = output_regions_[k],
+                genetic_map = genetic_maps_dict[chromosome],
+                output_prefix = output_prefix + ".shard-" + k + ".split",
+                extra_split_args = extra_split_args,
+                docker = glimpse2_docker
+        }
+
+        call PreprocessPLs as ChunkedPreprocessPLs {
+            input:
+                input_vcf = input_vcf,
+                input_vcf_idx = input_vcf_idx,
+                panel_bubble_split_vcf = panel_bubble_split_vcf,
+                panel_bubble_split_vcf_idx = panel_bubble_split_vcf_idx,
+                output_region = output_regions_[k],
+                sample_names = sample_names,
+                output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
+                remap_simple_bubble_likelihoods_python_script = remap_simple_bubble_likelihoods_python_script,
+                swap_alleles_python_script = swap_alleles_python_script,
+                preprocess_regions_bed = preprocess_regions_bed,
+                preprocess_view_extra_args = preprocess_view_extra_args,
+                remap_simple_bubble_likelihoods_extra_args = remap_simple_bubble_likelihoods_extra_args
+        }
+
+        call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
+            input:
+                input_vcf = ChunkedPreprocessPLs.preprocessed_pls_bcf,
+                input_vcf_idx = ChunkedPreprocessPLs.preprocessed_pls_bcf_csi,
+                panel_split_chunk_bin = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,
+                input_region = input_regions_[k],
+                output_region = output_regions_[k],
+                genetic_map = genetic_maps_dict[chromosome],
+                output_prefix = output_prefix + ".shard-" + k + ".glimpse2.phased",
+                extra_phase_args = extra_phase_args,
+                docker = glimpse2_docker
         }
     }
 
-    call BcftoolsConcatNaive as GLIMPSE2PosteriorsConcatVcfs {
+    call GLIMPSE2Ligate {
         input:
-            vcfs = ChromosomeGLIMPSE2Ligate.ligated_vcf,
-            vcf_idxs = ChromosomeGLIMPSE2Ligate.ligated_vcf_idx,
-            output_prefix = output_prefix + ".glimpse2.posteriors"
+            phased_bcfs = ChunkedGLIMPSE2Phase.phased_bcf,
+            phased_bcf_csis = ChunkedGLIMPSE2Phase.phased_bcf_csi,
+            output_prefix = output_prefix + ".glimpse2.bubble",
+            docker = glimpse2_docker
     }
 
-    call BcftoolsConcatNaive as GLIMPSE2PosteriorsCollisionlessConcatVcfs {
-        input:
-            vcfs = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf,
-            vcf_idxs = ChromosomeGLIMPSE2PosteriorsCollisionless.collisionless_vcf_idx,
-            output_prefix = output_prefix + ".glimpse2.collisionless"
+    scatter (k in range(length(output_regions_))) {
+        call PopAndMarkCollisions { input:
+            posteriors_vcf = GLIMPSE2Ligate.ligated_vcf,
+            posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx,
+            panel_bubble_split_vcf = panel_bubble_split_vcf,
+            panel_bubble_split_vcf_idx = panel_bubble_split_vcf_idx,
+            panel_id_split_vcf = panel_id_split_vcf,
+            panel_id_split_vcf_idx = panel_id_split_vcf_idx,
+            pop_python_script = pop_python_script,
+            region = output_regions_[k],
+            output_prefix = output_prefix + ".glimpse2.popped"
+        }
+    }
+    
+    call ConcatVcfs.ConcatVcfs as ConcatPopAndMarkCollisions { input:
+        vcfs = PopAndMarkCollisions.popped_vcf,
+        vcf_idxs = PopAndMarkCollisions.popped_vcf_idx,
+        output_prefix = output_prefix + ".popped",
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive"
     }
 
     output {
-        Array[Array[File]] chromosome_panel_split_chunk_bins = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin
-        File glimpse2_posteriors_vcf = GLIMPSE2PosteriorsConcatVcfs.concatenated_vcf
-        File glimpse2_posteriors_vcf_idx = GLIMPSE2PosteriorsConcatVcfs.concatenated_vcf_idx
-        File glimpse2_posteriors_collisionless_vcf = GLIMPSE2PosteriorsCollisionlessConcatVcfs.concatenated_vcf
-        File glimpse2_posteriors_collisionless_vcf_idx = GLIMPSE2PosteriorsCollisionlessConcatVcfs.concatenated_vcf_idx
+        Array[String] input_regions = input_regions_
+        Array[String] output_regions = output_regions_
+        Array[File] panel_split_chunk_bins = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin
+        File glimpse2_bubble_posteriors_vcf = GLIMPSE2Ligate.ligated_vcf
+        File glimpse2_bubble_posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx
+        File glimpse2_popped_posteriors_vcf = ConcatPopAndMarkCollisions.concatenated_vcf
+        File glimpse2_popped_posteriors_vcf_idx = ConcatPopAndMarkCollisions.concatenated_vcf_idx
     }
 }
 
@@ -183,10 +162,7 @@ task GLIMPSE2Chunk {
     command <<<
         set -euxo pipefail
 
-        wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_chunk_static
-        chmod +x GLIMPSE2_chunk_static
-
-        ./GLIMPSE2_chunk_static \
+        /bin/GLIMPSE2_chunk \
             -I ~{vcf} \
             --region ~{region} \
             --map ~{genetic_map} \
@@ -228,8 +204,8 @@ task GLIMPSE2Chunk {
 
 task GLIMPSE2SplitReference {
     input {
-        File panel_split_vcf
-        File panel_split_vcf_idx
+        File panel_bubble_split_vcf
+        File panel_bubble_split_vcf_idx
         String input_region
         String output_region
         File genetic_map
@@ -240,16 +216,13 @@ task GLIMPSE2SplitReference {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size(panel_split_vcf, "GB")) + 10
+    Int disk_size_gb = 2 * ceil(size(panel_bubble_split_vcf, "GB")) + 10
 
     command <<<
         set -euxo pipefail
 
-        wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_split_reference_static
-        chmod +x GLIMPSE2_split_reference_static
-
-        ./GLIMPSE2_split_reference_static \
-            -R ~{panel_split_vcf} \
+        /bin/GLIMPSE2_split_reference \
+            -R ~{panel_bubble_split_vcf} \
             --input-region ~{input_region} \
             --output-region ~{output_region} \
             --map ~{genetic_map} \
@@ -265,7 +238,7 @@ task GLIMPSE2SplitReference {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          4,
-        mem_gb:             7,
+        mem_gb:             8,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -290,24 +263,24 @@ task PreprocessPLs {
     input {
         File input_vcf
         File input_vcf_idx
-        File panel_split_vcf
-        File panel_split_vcf_idx
+        File panel_bubble_split_vcf
+        File panel_bubble_split_vcf_idx
         String output_region
         Array[String] sample_names
         String output_prefix
 
         File remap_simple_bubble_likelihoods_python_script
         File swap_alleles_python_script
-        File preprocess_regions_bed
-        String preprocess_view_extra_args
-        String remap_simple_bubble_likelihoods_extra_args
+        File? preprocess_regions_bed
+        String? preprocess_view_extra_args
+        String? remap_simple_bubble_likelihoods_extra_args
 
         String docker
 
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_vcf], "GB")) + 10
+    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_bubble_split_vcf], "GB")) + 10
 
     File sample_names_list = write_lines(sample_names)
 
@@ -318,7 +291,7 @@ task PreprocessPLs {
 #        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
 
         # TODO stream; or, once shards are fixed, prepare beforehand?
-        bcftools view --no-version -G ~{panel_split_vcf}##idx##~{panel_split_vcf_idx} \
+        bcftools view --no-version -G ~{panel_bubble_split_vcf}##idx##~{panel_bubble_split_vcf_idx} \
             --regions-overlap pos -r ~{output_region} -Ou \
             ~{"-T " + preprocess_regions_bed} \
             ~{preprocess_view_extra_args} | \
@@ -361,7 +334,7 @@ task PreprocessPLs {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             docker
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-pypy:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -375,6 +348,7 @@ task PreprocessPLs {
     }
 }
 
+# checkpoint implementation borrowed from https://github.com/broadinstitute/palantir-workflows/blob/main/GlimpseImputationPipeline/Glimpse2Imputation.wdl
 task GLIMPSE2Phase {
     input {
         File input_vcf
@@ -391,20 +365,34 @@ task GLIMPSE2Phase {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_split_chunk_bin], "GB")) + 10
+    Int disk_size_gb = 10 + 2 * ceil(size([input_vcf, panel_split_chunk_bin], "GB"))
 
     command {
         set -euxo pipefail
 
-        wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_phase_static
-        chmod +x GLIMPSE2_phase_static
+        cmd="/bin/GLIMPSE2_phase \
+                -input-gl ~{input_vcf} \
+                -R ~{panel_split_chunk_bin} \
+                --thread $(nproc) \
+                ~{extra_phase_args} \
+                --output ~{output_prefix}.raw.bcf \
+                --checkpoint-file-out ~{output_prefix}.checkpoint.bin"
 
-        ./GLIMPSE2_phase_static \
-            --input-gl ~{input_vcf} \
-            -R ~{panel_split_chunk_bin} \
-            --thread $(nproc) \
-            ~{extra_phase_args} \
-            --output ~{output_prefix}.raw.bcf
+        if [ -s "~{output_prefix}.checkpoint.bin" ]; then
+            cmd="$cmd --checkpoint-file-in ~{output_prefix}.checkpoint.bin" 
+        fi
+
+        #check for read error
+        #This currently triggers a warning message from htslib, but doesn't return any error.
+        #We need to make sure that stderr is maintained since cromwell looks for oom strings
+        #in stderr
+
+        eval "$cmd" 2> >(tee glimpse_stderr.log >&2) 
+
+        if grep -q "EOF marker is absent" glimpse_stderr.log; then 
+            echo "An input file appears to be truncated. This may be either a truly truncated file which needs to be fixed, or a networking error which can just be retried."
+            exit 1
+        fi
 
         # take input VCF header and add GLIMPSE INFO and FORMAT lines (GLIMPSE header only contains a single chromosome and breaks bcftools concat --naive)
         bcftools view --no-version -h ~{input_vcf} | grep '^##' > input.header.txt
@@ -422,14 +410,15 @@ task GLIMPSE2Phase {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          1,
-        mem_gb:             7,
+        cpu_cores:          4,
+        mem_gb:             8,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
-        preemptible_tries:  2,
+        preemptible_tries:  9,
         max_retries:        1,
-        docker:             docker
+        docker:             docker,
+        checkpointFile: "~{output_prefix}.checkpoint.bin"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -459,10 +448,10 @@ task GLIMPSE2Ligate {
     command <<<
         set -euox pipefail
 
-        wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_ligate_static
-        chmod +x GLIMPSE2_ligate_static
+        wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_ligate
+        chmod +x GLIMPSE2_ligate
 
-        ./GLIMPSE2_ligate_static --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
+        ./GLIMPSE2_ligate --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
 
         # when generating BCF output, the index appears to be corrupt (possibly due to https://github.com/samtools/htslib/issues/1740), so we regenerate with bcftools
         bcftools index -f ~{output_prefix}.bcf
@@ -476,7 +465,7 @@ task GLIMPSE2Ligate {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
-        mem_gb:             7,
+        mem_gb:             8,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -496,109 +485,53 @@ task GLIMPSE2Ligate {
     }
 }
 
-# TODO consolidate with Stage2; break out annotation step
-task FixVariantCollisions {
+
+task PopAndMarkCollisions {
     input {
-        File phased_vcf                          # biallelic, can be locally or fully phased
-        File phased_vcf_idx
-        File annotations_vcf
-        File annotations_vcf_idx
-        File fix_variant_collisions_script
-        Int operation = 1                        # 0=can only remove an entire VCF record; 1=can remove single ones from a GT
-        String weight_tag = "SCORE"              # ID of the weight field; weights are assumed to be non-negative; we set to SCORE to prefer kanpig records (and moreover, those with higher SCORE) over DeepVariant records (these should have no SCORE, and will be assigned the low default_weight below)
-        Int is_weight_format_field = 0           # given a VCF record in a sample, assign it a weight encoded in the INFO field (0) or in the sample column (1)
-        Float default_weight = 0.05              # default weight if the weight field is not found
-        String extra_args = "--use-af --verbosity 1"  # use AF as tie breaker
+        # all VCFs should be split to biallelic
+        File posteriors_vcf
+        File posteriors_vcf_idx
+        File panel_bubble_split_vcf
+        File panel_bubble_split_vcf_idx
+        File panel_id_split_vcf
+        File panel_id_split_vcf_idx
+        File pop_python_script                      # modified version of convert-to-biallelic.py
         String region
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 2 * (ceil(size(phased_vcf, "GiB")) + ceil(size(annotations_vcf, "GiB")))
+    Int disk_gb = 10 + 3 * ceil(size([posteriors_vcf, panel_bubble_split_vcf, panel_id_split_vcf], "GB"))
 
     command <<<
-        set -euxo pipefail
+        set -euox pipefail
 
-        rustc -O ~{fix_variant_collisions_script} -o FixVariantCollisions
+        pypy -m pip install tqdm
 
-        # after FixVariantCollisions, replace all missing alleles (correctly) emitted with reference alleles, since this is expected by PanGenie panel-creation script
-        time bcftools annotate --no-version -r ~{region} --regions-overlap 0 -c CHROM,POS,REF,ALT,ID,INFO/SCORE,INFO/SVLEN,INFO/AN,INFO/AC,INFO/AF -a ~{annotations_vcf} ~{phased_vcf} --threads 2 | \
-        ./FixVariantCollisions \
-            ~{operation} \
-            ~{weight_tag} \
-            ~{is_weight_format_field} \
-            ~{default_weight} \
-            ~{extra_args} \
-            --removed-counts-tsv ~{output_prefix}.removed.tsv \
-            --histogram-tsv ~{output_prefix}.histogram.tsv | \
-        bcftools +setGT --no-version -Ou -- -t . -n 0p | \
-            bcftools +fill-tags --no-version --threads 2 --write-index=csi -Ob -o ~{output_prefix}.bcf -- -t AF,AC,AN
+        # annotate bubble IDs
+        bcftools annotate -r region --regions-overlap 0 -a ~{panel_bubble_split_vcf} ~{posteriors_vcf} \
+            -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
+        pypy ~{pop_python_script} \
+            --panel_id_split_vcf ~{panel_id_split_vcf} \
+            bcftools view -W -Ob -o ~{output_prefix}.bcf
     >>>
 
     output {
-        File collisionless_vcf = "~{output_prefix}.bcf"
-        File collisionless_vcf_idx = "~{output_prefix}.bcf.csi"
-        File collisionless_removed_counts_tsv = "~{output_prefix}.removed.tsv"
-        File collisionless_histogram_tsv = "~{output_prefix}.histogram.tsv"
+        File popped_vcf = "~{output_prefix}.bcf"
+        File popped_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          6,
-        mem_gb:             8,
-        disk_gb:            disk_gb,
-        boot_disk_gb:       10,
-        use_ssd:            true,
-        preemptible_tries:  3,
-        max_retries:        0,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
-}
-
-task BcftoolsConcatNaive {
-    input {
-        Array[File] vcfs
-        Array[File] vcf_idxs
-        String output_prefix
-
-        RuntimeAttr? runtime_attr_override
-    }
-
-    Int disk_gb = 50 + 4 * ceil(size(vcfs, "GiB"))
-
-    command <<<
-        set -euxo pipefail
-
-        bcftools concat --no-version ~{sep=" " vcfs} --naive -Ob -o ~{output_prefix}.bcf
-        bcftools index ~{output_prefix}.bcf
-    >>>
-
-    output {
-        File concatenated_vcf = "~{output_prefix}.bcf"
-        File concatenated_vcf_idx = "~{output_prefix}.bcf.csi"
-    }
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          4,
+        cpu_cores:          2,
         mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-pypy:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
