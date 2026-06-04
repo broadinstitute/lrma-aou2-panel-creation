@@ -20,6 +20,7 @@ workflow BubblePanelCreation {
         Int is_weight_format_field = 0
         Float default_weight = 0.05
 
+        String final_view_args = "-i 'MAC>=2'"
         File prepare_vcf_and_add_ids_script
         File merge_vcfs_script
         File cargo_toml
@@ -47,6 +48,7 @@ workflow BubblePanelCreation {
             reference_fasta = reference_fasta,
             reference_fasta_fai = reference_fasta_fai,
             region = regions[i],
+            final_view_args = final_view_args,
             prepare_vcf_and_add_ids_script = prepare_vcf_and_add_ids_script,
             merge_vcfs_script = merge_vcfs_script,
             cargo_toml = cargo_toml,
@@ -186,6 +188,7 @@ task BubblePanelCreation {
         String region
         String output_prefix
 
+        String final_view_args = "-i 'MAC>=2'"
         File prepare_vcf_and_add_ids_script
         File merge_vcfs_script
         File cargo_toml
@@ -214,7 +217,8 @@ task BubblePanelCreation {
 
         # validate variants against reference, run bubble prepare-vcf and add-ids scripts, split to biallelic, and run bubble merge script;
         # everything should be normalized or in the desired representation at this point
-        time bcftools norm --no-version -r ~{region} --regions-overlap 0 --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} --threads 2 ~{phased_vcf} | \
+        time bcftools view -r ~{region} --regions-overlap 0 ~{final_view_args} --threads 2 ~{phased_vcf} -Ou | \
+            bcftools norm --no-version --do-not-normalize --check-ref e --fasta-ref ~{reference_fasta} | \
             ./bubble-utils/target/release/prepare_vcf_and_add_ids --missing ~{frac_missing} | \
             bcftools norm --no-version -m-any --do-not-normalize | tee \
         >(  bcftools view --no-version -G --write-index=csi -Ob -o ~{output_prefix}.prepare.id.split.bcf ) | \
