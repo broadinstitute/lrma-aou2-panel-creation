@@ -275,8 +275,6 @@ task PreprocessPLs {
         String? preprocess_view_extra_args
         String? remap_simple_bubble_likelihoods_extra_args
 
-        String docker
-
         RuntimeAttr? runtime_attr_override
     }
 
