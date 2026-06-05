@@ -498,8 +498,8 @@ task PopAndMarkCollisions {
         bcftools annotate -r region --regions-overlap 0 -a ~{panel_bubble_split_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
         pypy ~{pop_python_script} \
-            --panel_id_split_vcf ~{panel_id_split_vcf} \
-            bcftools view -W -Ob -o ~{output_prefix}.bcf
+            ~{panel_id_split_vcf} | \
+        bcftools view -W -Ob -o ~{output_prefix}.bcf
     >>>
 
     output {
