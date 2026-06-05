@@ -118,7 +118,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         vcfs = PopAndMarkCollisions.popped_vcf_gz,
         vcf_idxs = PopAndMarkCollisions.popped_vcf_gz_tbi,
         output_prefix = output_prefix + ".popped",
-        do_bcf = true
+        do_bcf = false
     }
 
     output {
