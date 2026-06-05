@@ -64,42 +64,77 @@ def process_group(group_lines):
         return
         
     num_samples = len(parsed_lines[0]) - 9
+    chrom = parsed_lines[0][0]
     
-    # Inject CL to FORMAT if not present and pad sample fields with default 0,0
-    for fields in parsed_lines:
+    # Pre-parse meta-data, formats, and sample objects to eliminate redundant string parsing bottlenecks
+    line_meta = []
+    samples_data = [[] for _ in range(len(parsed_lines))]
+    gp_cache = [[-1.0] * num_samples for _ in range(len(parsed_lines))]
+    
+    for i, fields in enumerate(parsed_lines):
+        info_field = { k.split('=')[0] : k.split('=')[1] for k in fields[7].split(';') if "=" in k}
         fmt = fields[8].split(':')
+        
+        added_cl = False
         if 'CL' not in fmt:
-            fields[8] = fields[8] + ':CL'
-            for s in range(num_samples):
-                fields[9+s] += ':0,0'
-                
+            fmt.append('CL')
+            fields[8] = ':'.join(fmt)
+            added_cl = True
+            
+        fmt_idx = {k: idx for idx, k in enumerate(fmt)}
+        
+        id_str = info_field.get('ID', '')
+        num_constituents = len(id_str.replace(',', ':').split(':')) if id_str else 0
+        
+        atomic_vars = set()
+        is_known = False
+        if id_str:
+            for info_id in id_str.split(','):
+                for j in info_id.split(':'):
+                    if j in chrom_to_variants[chrom]:
+                        atomic_vars.add(j)
+                        is_known = True
+                        
+        line_meta.append({
+            'info': info_field,
+            'fmt': fmt,
+            'fmt_idx': fmt_idx,
+            'ids': atomic_vars,
+            'num_const': num_constituents,
+            'is_known': is_known,
+            'raw_fields': fields
+        })
+        
+        gp_idx = fmt_idx.get('GP', -1)
+        
+        for s in range(num_samples):
+            s_vals = fields[9+s].split(':')
+            if added_cl and len(s_vals) < len(fmt):
+                s_vals.append('0,0')
+            samples_data[i].append(s_vals)
+            
+            if gp_idx != -1 and gp_idx < len(s_vals):
+                gp_str = s_vals[gp_idx]
+                if gp_str != '.':
+                    gp_cache[i][s] = max([float(x) for x in gp_str.split(',')])
+
     # Annotate and revert collisions at the bubble level
     for s in range(num_samples):
-        col = 9 + s
         hap0_ones = []
         hap1_ones = []
         
-        for i, fields in enumerate(parsed_lines):
-            fmt = fields[8].split(':')
-            if 'GT' not in fmt: continue
-            gt_idx = fmt.index('GT')
-            sample_data = fields[col].split(':')
-            gt = sample_data[gt_idx]
-            
+        for i, meta in enumerate(line_meta):
+            gt_idx = meta['fmt_idx'].get('GT', -1)
+            if gt_idx == -1: continue
+            gt = samples_data[i][s][gt_idx]
             if '|' not in gt: continue
+            
             alleles = gt.split('|')
+            gp_val = gp_cache[i][s]
+            num_const = meta['num_const']
             
-            info_field = { k.split('=')[0] : k.split('=')[1] for k in fields[7].split(';') if "=" in k}
-            num_constituents = len(info_field.get('ID', '').replace(',', ':').split(':')) if 'ID' in info_field else 0
-            
-            gp_val = -1.0
-            if 'GP' in fmt:
-                gp_idx = fmt.index('GP')
-                if gp_idx < len(sample_data) and sample_data[gp_idx] != '.':
-                    gp_val = max([float(x) for x in sample_data[gp_idx].split(',')])
-                    
-            if alleles[0] == '1': hap0_ones.append((gp_val, num_constituents, i))
-            if alleles[1] == '1': hap1_ones.append((gp_val, num_constituents, i))
+            if alleles[0] == '1': hap0_ones.append((gp_val, num_const, i))
+            if alleles[1] == '1': hap1_ones.append((gp_val, num_const, i))
             
         # Determine specific reason for collision loss on Hap0 and revert GT
         if len(hap0_ones) > 1:
@@ -111,22 +146,19 @@ def process_group(group_lines):
                 elif w_const < l_const: reason = '2'
                 else: reason = '3'
                 
-                fmt = parsed_lines[i][8].split(':')
-                cl_idx = fmt.index('CL')
-                gt_idx = fmt.index('GT')
-                s_data = parsed_lines[i][col].split(':')
+                meta = line_meta[i]
+                cl_idx = meta['fmt_idx']['CL']
+                gt_idx = meta['fmt_idx']['GT']
                 
                 # Update CL
-                cl_vals = s_data[cl_idx].split(',')
+                cl_vals = samples_data[i][s][cl_idx].split(',')
                 cl_vals[0] = reason
-                s_data[cl_idx] = ','.join(cl_vals)
+                samples_data[i][s][cl_idx] = ','.join(cl_vals)
                 
                 # Revert GT
-                gt_vals = s_data[gt_idx].split('|')
+                gt_vals = samples_data[i][s][gt_idx].split('|')
                 gt_vals[0] = '0'
-                s_data[gt_idx] = '|'.join(gt_vals)
-                
-                parsed_lines[i][col] = ':'.join(s_data)
+                samples_data[i][s][gt_idx] = '|'.join(gt_vals)
                 
         # Determine specific reason for collision loss on Hap1 and revert GT
         if len(hap1_ones) > 1:
@@ -138,78 +170,59 @@ def process_group(group_lines):
                 elif w_const < l_const: reason = '2'
                 else: reason = '3'
                 
-                fmt = parsed_lines[i][8].split(':')
-                cl_idx = fmt.index('CL')
-                gt_idx = fmt.index('GT')
-                s_data = parsed_lines[i][col].split(':')
+                meta = line_meta[i]
+                cl_idx = meta['fmt_idx']['CL']
+                gt_idx = meta['fmt_idx']['GT']
                 
                 # Update CL
-                cl_vals = s_data[cl_idx].split(',')
+                cl_vals = samples_data[i][s][cl_idx].split(',')
                 cl_vals[1] = reason
-                s_data[cl_idx] = ','.join(cl_vals)
+                samples_data[i][s][cl_idx] = ','.join(cl_vals)
                 
                 # Revert GT
-                gt_vals = s_data[gt_idx].split('|')
+                gt_vals = samples_data[i][s][gt_idx].split('|')
                 gt_vals[1] = '0'
-                s_data[gt_idx] = '|'.join(gt_vals)
-                
-                parsed_lines[i][col] = ':'.join(s_data)
-
-    # Separate out unknown/passthrough records and collect known atomic targets
-    all_atomic_vars = set()
-    passthrough_lines = []
-    
-    for fields in parsed_lines:
-        info_field = { i.split('=')[0] : i.split('=')[1] for i in fields[7].split(';') if "=" in i}
-        if 'ID' not in info_field:
-            passthrough_lines.append(fields)
-            continue
-            
-        is_known = False
-        for info_id in info_field['ID'].split(','):
-            for j in info_id.split(':'):
-                if j in chrom_to_variants[fields[0]]:
-                    all_atomic_vars.add((j, int(chrom_to_variants[fields[0]][j][0])))
-                    is_known = True
-                    
-        if not is_known:
-            passthrough_lines.append(fields)
+                samples_data[i][s][gt_idx] = '|'.join(gt_vals)
 
     # Output passthrough lines untouched (reverted GTs and CL annotations are preserved)
-    for fields in passthrough_lines:
-        print('\t'.join(fields))
+    all_atomic_vars = set()
+    for i, meta in enumerate(line_meta):
+        if not meta['is_known']:
+            fields = meta['raw_fields']
+            for s in range(num_samples):
+                fields[9+s] = ':'.join(samples_data[i][s])
+            print('\t'.join(fields))
+        else:
+            for j in meta['ids']:
+                all_atomic_vars.add((j, int(chrom_to_variants[chrom][j][0])))
 
     # Pop bubbles by projecting grouped GTs directly onto mapped atomic variants
-    sorted_atomic_vars = list(all_atomic_vars)
-    sorted_atomic_vars.sort(key=lambda x: x[1])
+    sorted_atomic_vars = sorted(list(all_atomic_vars), key=lambda x: x[1])
     
-    for (var_id, coord) in sorted_atomic_vars:
-        template_fields = None
-        for fields in parsed_lines:
-            info_field = { i.split('=')[0] : i.split('=')[1] for i in fields[7].split(';') if "=" in i}
-            if 'ID' not in info_field: continue
-            
-            for info_id in info_field['ID'].split(','):
-                if var_id in info_id.split(':'):
-                    template_fields = fields
-                    break
-            if template_fields: break
-            
-        if not template_fields: continue
+    for var_id, coord in sorted_atomic_vars:
+        template_i = -1
+        for i, meta in enumerate(line_meta):
+            if var_id in meta['ids']:
+                template_i = i
+                break
+        if template_i == -1: continue
         
-        vcf_line = list(template_fields[:9])
+        t_meta = line_meta[template_i]
+        t_fields = t_meta['raw_fields']
+        
+        vcf_line = list(t_fields[:9])
         vcf_line[1] = str(coord)
-        vcf_line[2] = chrom_to_variants[template_fields[0]][var_id][1]
-        vcf_line[3] = chrom_to_variants[template_fields[0]][var_id][2]
-        vcf_line[4] = chrom_to_variants[template_fields[0]][var_id][3]
+        vcf_line[2] = chrom_to_variants[chrom][var_id][1]
+        vcf_line[3] = chrom_to_variants[chrom][var_id][2]
+        vcf_line[4] = chrom_to_variants[chrom][var_id][3]
         
-        template_info = { i.split('=')[0] : i.split('=')[1] for i in template_fields[7].split(';') if "=" in i}
-        vcf_line[7] = 'ID=' + var_id
-        for k,v in template_info.items():
-            if k in ['MA', 'UK', 'RAF', 'AF', 'INFO']:
-                vcf_line[7] += ';' + k + '=' + v
-                
-        fmt_in = template_fields[8].split(':')
+        new_info = [f"ID={var_id}"]
+        for k in ['MA', 'UK', 'RAF', 'AF', 'INFO']:
+            if k in t_meta['info']:
+                new_info.append(f"{k}={t_meta['info'][k]}")
+        vcf_line[7] = ';'.join(new_info)
+            
+        fmt_in = t_meta['fmt']
         fmt_out = ['GT']
         if 'DS' in fmt_in: fmt_out.append('DS')
         if 'GP' in fmt_in: fmt_out.append('GP')
@@ -217,8 +230,10 @@ def process_group(group_lines):
         if 'CL' in fmt_in: fmt_out.append('CL')
         vcf_line[8] = ':'.join(fmt_out)
         
+        # Pre-filter paths overlapping this specific constituent variant to bypass redundant loops
+        lines_with_var = [i for i, meta in enumerate(line_meta) if var_id in meta['ids']]
+        
         for s in range(num_samples):
-            col = 9 + s
             max_gp_for_ds_gp = -1.0
             best_ds = '.'
             best_gp = '.'
@@ -229,60 +244,43 @@ def process_group(group_lines):
             h0_losers = []
             h1_losers = []
             
-            for fields in parsed_lines:
-                info_field = { i.split('=')[0] : i.split('=')[1] for i in fields[7].split(';') if "=" in i}
-                if 'ID' not in info_field: continue
+            for i in lines_with_var:
+                meta = line_meta[i]
+                s_vals = samples_data[i][s]
                 
-                contains_var = False
-                for info_id in info_field['ID'].split(','):
-                    if var_id in info_id.split(':'):
-                        contains_var = True
-                        break
+                gt_idx = meta['fmt_idx'].get('GT', -1)
+                if gt_idx != -1:
+                    gt = s_vals[gt_idx]
+                    if '|' in gt:
+                        a_gt = gt.split('|')
+                        cl_idx = meta['fmt_idx']['CL']
+                        a_cl = s_vals[cl_idx].split(',')
                         
-                if contains_var:
-                    f_fmt = fields[8].split(':')
-                    s_data = fields[col].split(':')
-                    
-                    if 'GT' in f_fmt:
-                        gt_idx = f_fmt.index('GT')
-                        gt = s_data[gt_idx]
-                        cl_idx = f_fmt.index('CL')
-                        cl = s_data[cl_idx]
-                        
-                        if '|' in gt:
-                            a_gt = gt.split('|')
-                            a_cl = cl.split(',')
+                        if a_gt[0] == '1' and a_cl[0] == '0':
+                            hap0_winner = True
+                        elif a_cl[0] != '0':
+                            h0_losers.append(int(a_cl[0]))
                             
-                            if a_gt[0] == '1' and a_cl[0] == '0':
-                                hap0_winner = True
-                            elif a_cl[0] != '0':
-                                h0_losers.append(int(a_cl[0]))
-                                
-                            if a_gt[1] == '1' and a_cl[1] == '0':
-                                hap1_winner = True
-                            elif a_cl[1] != '0':
-                                h1_losers.append(int(a_cl[1]))
+                        if a_gt[1] == '1' and a_cl[1] == '0':
+                            hap1_winner = True
+                        elif a_cl[1] != '0':
+                            h1_losers.append(int(a_cl[1]))
+                
+                curr_max_gp = gp_cache[i][s]
+                if curr_max_gp > max_gp_for_ds_gp:
+                    max_gp_for_ds_gp = curr_max_gp
+                    ds_idx = meta['fmt_idx'].get('DS', -1)
+                    if ds_idx != -1: best_ds = s_vals[ds_idx]
+                    gp_idx = meta['fmt_idx'].get('GP', -1)
+                    if gp_idx != -1: best_gp = s_vals[gp_idx]
                     
-                    curr_max_gp = -1.0
-                    if 'GP' in f_fmt:
-                        gp_idx = f_fmt.index('GP')
-                        if s_data[gp_idx] != '.':
-                            curr_max_gp = max([float(x) for x in s_data[gp_idx].split(',')])
+                gq_idx = meta['fmt_idx'].get('GQ', -1)
+                if gq_idx != -1:
+                    gq_val = s_vals[gq_idx]
+                    if gq_val != '.':
+                        if best_gq == '.' or float(gq_val) > float(best_gq):
+                            best_gq = gq_val
                             
-                    if curr_max_gp > max_gp_for_ds_gp:
-                        max_gp_for_ds_gp = curr_max_gp
-                        if 'DS' in f_fmt:
-                            best_ds = s_data[f_fmt.index('DS')]
-                        if 'GP' in f_fmt:
-                            best_gp = s_data[f_fmt.index('GP')]
-                                
-                    if 'GQ' in f_fmt and 'GQ' in fmt_out:
-                        gq_idx = f_fmt.index('GQ')
-                        gq_val = s_data[gq_idx]
-                        if gq_val != '.':
-                            if best_gq == '.' or float(gq_val) > float(best_gq):
-                                best_gq = gq_val
-                                
             # Reverted logic: GT is '1' only if a winning path supported it.
             hap0_val = '1' if hap0_winner else '0'
             hap1_val = '1' if hap1_winner else '0'
@@ -291,8 +289,8 @@ def process_group(group_lines):
             hap1_cl = '0' if hap1_winner or not h1_losers else str(max(h1_losers))
             
             s_out = [f"{hap0_val}|{hap1_val}"]
-            if 'DS' in fmt_out: s_out.append(str(best_ds))
-            if 'GP' in fmt_out: s_out.append(str(best_gp))
+            if 'DS' in fmt_out: s_out.append(best_ds)
+            if 'GP' in fmt_out: s_out.append(best_gp)
             if 'GQ' in fmt_out: s_out.append(str(best_gq) if best_gq != '.' else '.')
             if 'CL' in fmt_out: s_out.append(f"{hap0_cl},{hap1_cl}")
             
