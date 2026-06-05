@@ -495,7 +495,7 @@ task PopAndMarkCollisions {
         pypy -m pip install tqdm
 
         # annotate bubble IDs
-        bcftools annotate -r region --regions-overlap 0 -a ~{panel_bubble_split_vcf} ~{posteriors_vcf} \
+        bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
         pypy ~{pop_python_script} \
             ~{panel_id_split_vcf_gz} | \
