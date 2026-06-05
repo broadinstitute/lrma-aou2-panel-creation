@@ -25,7 +25,7 @@ workflow PostprocessBubblePanel {
             panel_id_split_vcf_idx = panel_id_split_vcf_idx,
             pop_python_script = pop_python_script,
             region = regions[i],
-            output_prefix = output_prefix + ".popped.region-" + i
+            output_prefix = output_prefix + ".region-" + i
         }
 
         call SplitBubblesPanel { input:
@@ -38,13 +38,20 @@ workflow PostprocessBubblePanel {
         }
     }
 
-    call ConcatVcfs.ConcatVcfs as ConcatPopBubblesPanel { input:
+    call ConcatVcfs.ConcatVcfs as ConcatIdSplit { input:
+        vcfs = PopBubblesPanel.id_split_vcf_gz,
+        vcf_idxs = PopBubblesPanel.id_split_vcf_gz_tbi,
+        output_prefix = output_prefix + ".id.split",
+        do_bcf = false
+    }
+
+    call ConcatVcfs.ConcatVcfs as ConcatPopped { input:
         vcfs = PopBubblesPanel.popped_vcf,
         vcf_idxs = PopBubblesPanel.popped_vcf_idx,
         output_prefix = output_prefix + ".popped"
     }
 
-    call ConcatVcfs.ConcatVcfs as ConcatSplitBubblesPanel { input:
+    call ConcatVcfs.ConcatVcfs as ConcatBubbleSplit { input:
         vcfs = SplitBubblesPanel.split_bubbles_vcf,
         vcf_idxs = SplitBubblesPanel.split_bubbles_vcf_idx,
         output_prefix = output_prefix + ".bubble.split"
@@ -62,7 +69,7 @@ workflow PostprocessBubblePanel {
             }
         }
 
-        call ConcatVcfs.ConcatVcfs as ConcatSplitBubblesPanelLeaveOut { input:
+        call ConcatVcfs.ConcatVcfs as ConcatBubbleSplitLeaveOut { input:
             vcfs = SplitBubblesPanelLeaveOut.split_bubbles_vcf,
             vcf_idxs = SplitBubblesPanelLeaveOut.split_bubbles_vcf_idx,
             output_prefix = output_prefix + ".bubble.split.leaveout"
@@ -70,12 +77,14 @@ workflow PostprocessBubblePanel {
     }
 
     output {
-        File panel_popped_vcf = ConcatPopBubblesPanel.concatenated_vcf
-        File panel_popped_vcf_idx = ConcatPopBubblesPanel.concatenated_vcf_idx
-        File panel_bubble_split_vcf = ConcatSplitBubblesPanel.concatenated_vcf
-        File panel_bubble_split_vcf_idx = ConcatSplitBubblesPanel.concatenated_vcf_idx
-        File? panel_bubble_split_leaveout_vcf = ConcatSplitBubblesPanelLeaveOut.concatenated_vcf
-        File? panel_bubble_split_leaveout_vcf_idx = ConcatSplitBubblesPanelLeaveOut.concatenated_vcf_idx
+        File panel_id_split_vcf_gz = ConcatIdSplit.concatenated_vcf
+        File panel_id_split_vcf_gz_tbi = ConcatIdSplit.concatenated_vcf_idx
+        File panel_popped_vcf = ConcatPopped.concatenated_vcf
+        File panel_popped_vcf_idx = ConcatPopped.concatenated_vcf_idx
+        File panel_bubble_split_vcf = ConcatBubbleSplit.concatenated_vcf
+        File panel_bubble_split_vcf_idx = ConcatBubbleSplit.concatenated_vcf_idx
+        File? panel_bubble_split_leaveout_vcf = ConcatBubbleSplitLeaveOut.concatenated_vcf
+        File? panel_bubble_split_leaveout_vcf_idx = ConcatBubbleSplitLeaveOut.concatenated_vcf_idx
     }
 }
 
@@ -108,15 +117,17 @@ task PopBubblesPanel {
     command <<<
         set -euox pipefail
 
-        bcftools view -r ~{region} --regions-overlap 0 ~{panel_id_split_vcf} -G -W=tbi -Oz -o panel.id.split.vcf.gz
+        bcftools view -r ~{region} --regions-overlap 0 ~{panel_id_split_vcf} -G -W=tbi -Oz -o ~{output_prefix}.id.split.vcf.gz
         bcftools view -r ~{region} --regions-overlap 0 ~{panel_bubble_vcf} | \
-            pypy ~{pop_python_script} panel.id.split.vcf.gz | \
-            bcftools view -W=csi -Ob -o ~{output_prefix}.bcf
+            pypy ~{pop_python_script} ~{output_prefix}.id.split.vcf.gz | \
+            bcftools view -W=csi -Ob -o ~{output_prefix}.popped.bcf
     >>>
 
     output {
-        File popped_vcf = "~{output_prefix}.bcf"
-        File popped_vcf_idx = "~{output_prefix}.bcf.csi"
+        File id_split_vcf_gz = "~{output_prefix}.id.split.vcf.gz"
+        File id_split_vcf_gz_tbi = "~{output_prefix}.id.split.vcf.gz.tbi"
+        File popped_vcf = "~{output_prefix}.popped.bcf"
+        File popped_vcf_idx = "~{output_prefix}.popped.bcf.csi"
     }
 
     #########################

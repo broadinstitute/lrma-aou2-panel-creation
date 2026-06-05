@@ -26,8 +26,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         String? remap_simple_bubble_likelihoods_extra_args
 
         # inputs for PopAndMarkCollisions
-        File panel_id_split_vcf
-        File panel_id_split_vcf_idx
+        File panel_id_split_vcf_gz
+        File panel_id_split_vcf_gz_tbi
         File pop_python_script                      # modified version of convert-to-biallelic.py
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
@@ -102,12 +102,12 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     scatter (k in range(length(output_regions_))) {
         call PopAndMarkCollisions { input:
-            posteriors_vcf = GLIMPSE2Ligate.ligated_vcf,
-            posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx,
+            posteriors_vcf = GLIMPSE2Ligate.ligated_vcf_gz,
+            posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_gz_tbi,
             panel_bubble_split_vcf = panel_bubble_split_vcf,
             panel_bubble_split_vcf_idx = panel_bubble_split_vcf_idx,
-            panel_id_split_vcf = panel_id_split_vcf,
-            panel_id_split_vcf_idx = panel_id_split_vcf_idx,
+            panel_id_split_vcf_gz = panel_id_split_vcf_gz,
+            panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
             pop_python_script = pop_python_script,
             region = output_regions_[k],
             output_prefix = output_prefix + ".glimpse2.popped"
@@ -115,21 +115,20 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     }
     
     call ConcatVcfs.ConcatVcfs as ConcatPopAndMarkCollisions { input:
-        vcfs = PopAndMarkCollisions.popped_vcf,
-        vcf_idxs = PopAndMarkCollisions.popped_vcf_idx,
+        vcfs = PopAndMarkCollisions.popped_vcf_gz,
+        vcf_idxs = PopAndMarkCollisions.popped_vcf_gz_tbi,
         output_prefix = output_prefix + ".popped",
-        do_sort = false,
-        extra_args = "--threads $(nproc) --naive"
+        do_bcf = true
     }
 
     output {
         Array[String] input_regions = input_regions_
         Array[String] output_regions = output_regions_
         Array[File] panel_split_chunk_bins = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin
-        File glimpse2_bubble_posteriors_vcf = GLIMPSE2Ligate.ligated_vcf
-        File glimpse2_bubble_posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx
-        File glimpse2_popped_posteriors_vcf = ConcatPopAndMarkCollisions.concatenated_vcf
-        File glimpse2_popped_posteriors_vcf_idx = ConcatPopAndMarkCollisions.concatenated_vcf_idx
+        File glimpse2_bubble_posteriors_vcf_gz = GLIMPSE2Ligate.ligated_vcf_gz
+        File glimpse2_bubble_posteriors_vcf_gz_tbi = GLIMPSE2Ligate.ligated_vcf_gz_tbi
+        File glimpse2_popped_posteriors_vcf_gz = ConcatPopAndMarkCollisions.concatenated_vcf
+        File glimpse2_popped_posteriors_vcf_gz_tbi = ConcatPopAndMarkCollisions.concatenated_vcf_idx
     }
 }
 
@@ -436,15 +435,16 @@ task GLIMPSE2Ligate {
     command <<<
         set -euox pipefail
 
-        /bin/GLIMPSE2_ligate --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
+        /bin/GLIMPSE2_ligate --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.vcf.gz --thread $(nproc)
 
+        # we emit vcf.gz now, but we leave this comment for future reference:
         # when generating BCF output, the index appears to be corrupt (possibly due to https://github.com/samtools/htslib/issues/1740), so we regenerate with bcftools
-        bcftools index -f ~{output_prefix}.bcf
+        # bcftools index -f ~{output_prefix}.bcf
     >>>
 
     output {
-        File ligated_vcf = "~{output_prefix}.bcf"
-        File ligated_vcf_idx = "~{output_prefix}.bcf.csi"
+        File ligated_vcf_gz = "~{output_prefix}.vcf.gz"
+        File ligated_vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
     }
 
     #########################
@@ -478,8 +478,8 @@ task PopAndMarkCollisions {
         File posteriors_vcf_idx
         File panel_bubble_split_vcf
         File panel_bubble_split_vcf_idx
-        File panel_id_split_vcf
-        File panel_id_split_vcf_idx
+        File panel_id_split_vcf_gz                  # python script requires vcf.gz
+        File panel_id_split_vcf_gz_tbi
         File pop_python_script                      # modified version of convert-to-biallelic.py
         String region
         String output_prefix
@@ -487,7 +487,7 @@ task PopAndMarkCollisions {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 3 * ceil(size([posteriors_vcf, panel_bubble_split_vcf, panel_id_split_vcf], "GB"))
+    Int disk_gb = 10 + 3 * ceil(size([posteriors_vcf, panel_bubble_split_vcf, panel_id_split_vcf_gz], "GB"))
 
     command <<<
         set -euox pipefail
@@ -498,13 +498,13 @@ task PopAndMarkCollisions {
         bcftools annotate -r region --regions-overlap 0 -a ~{panel_bubble_split_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
         pypy ~{pop_python_script} \
-            ~{panel_id_split_vcf} | \
-        bcftools view -W -Ob -o ~{output_prefix}.bcf
+            ~{panel_id_split_vcf_gz} | \
+        bcftools view -W=tbi -Oz -o ~{output_prefix}.vcf.gz
     >>>
 
     output {
-        File popped_vcf = "~{output_prefix}.bcf"
-        File popped_vcf_idx = "~{output_prefix}.bcf.csi"
+        File popped_vcf_gz = "~{output_prefix}.vcf.gz"
+        File popped_vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
     }
 
     #########################

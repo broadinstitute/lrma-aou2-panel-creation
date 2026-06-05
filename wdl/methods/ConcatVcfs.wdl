@@ -5,10 +5,11 @@ workflow ConcatVcfs {
         Array[File] vcfs
         Array[File] vcf_idxs
         String output_prefix
+        String do_bcf = true
         Boolean do_sort = false
         String extra_args = "--threads $(nproc) --naive"
 
-        Array[String]? regions      # if provided, concat within shards and then concat across shards; e.g., concat HiPhase short + SV
+        Array[String]? regions      # if provided, concat within shards and then concat across shards; useful for concat of HiPhase short + SV
         Boolean do_sort_shard = true
         String extra_args_shard = "--threads $(nproc)"
     }
@@ -20,6 +21,7 @@ workflow ConcatVcfs {
                     vcfs = vcfs,
                     vcf_idxs = vcf_idxs,
                     output_prefix = output_prefix,
+                    do_bcf = do_bcf,
                     do_sort = do_sort_shard,
                     extra_args = extra_args_shard,
                     region = region
@@ -32,6 +34,7 @@ workflow ConcatVcfs {
             vcfs = select_first([ShardConcatVcfs.concatenated_vcf, vcfs]),
             vcf_idxs = select_first([ShardConcatVcfs.concatenated_vcf_idx, vcf_idxs]),
             output_prefix = output_prefix,
+            do_bcf = do_bcf,
             do_sort = do_sort,
             extra_args = extra_args
     }
@@ -58,6 +61,7 @@ task ConcatVcfs {
         Array[File] vcfs
         Array[File] vcf_idxs
         String output_prefix
+        Boolean do_bcf = true
         Boolean do_sort = false
         String? extra_args
         String? region
@@ -68,6 +72,11 @@ task ConcatVcfs {
     # If sorting, provide extra disk space for the temporary sort shards
     Int disk_gb = if do_sort then 10 + 4 * ceil(size(vcfs, "GiB")) else 10 + 2 * ceil(size(vcfs, "GiB"))
 
+    String format_arg = if do_bcf then "-Ob" else "-Oz"
+    String suffix = if do_bcf then "bcf" else "vcf.gz"
+    String idx_suffix = if do_bcf then "bcf.csi" else "vcf.gz.tbi"
+    String index_arg = if do_bcf then "-c" else "-t"
+
     command <<<
         set -euox pipefail
 
@@ -75,10 +84,10 @@ task ConcatVcfs {
         (
             echo "Starting concat monitoring..." >&2
             while true; do
-                if [ -f "~{output_prefix}.bcf" ]; then
+                if [ -f "~{output_prefix}.~{suffix}" ]; then
                     # Phase 2/No-Sort: Final file is being written
-                    SIZE=$(ls -lh "~{output_prefix}.bcf" | awk '{print $5}')
-                    echo "[Heartbeat] Final output ~{output_prefix}.bcf is currently $SIZE..." >&2
+                    SIZE=$(ls -lh "~{output_prefix}.~{suffix}" | awk '{print $5}')
+                    echo "[Heartbeat] Final output ~{output_prefix}.~{suffix} is currently $SIZE..." >&2
                 elif [ -d "sort_tmp_dir" ]; then
                     # Phase 1 (Sorting): Temp directory is filling up
                     SIZE=$(du -sh sort_tmp_dir | awk '{print $1}')
@@ -101,24 +110,24 @@ task ConcatVcfs {
             bcftools concat ~{"--regions-overlap 0 -r " + region} \
                 -f ~{write_lines(vcfs)} \
                 ~{extra_args} \
-                -Ou | bcftools sort -m 2G -T sort_tmp_dir/tmp -Ob -o ~{output_prefix}.bcf
+                -Ou | bcftools sort -m 2G -T sort_tmp_dir/tmp ~{format_arg} -o ~{output_prefix}.~{suffix}
         else
             echo "Concatenating directly to disk..."
             bcftools concat ~{"--regions-overlap 0 -r " + region} \
                 -f ~{write_lines(vcfs)} \
                 ~{extra_args} \
-                -Ob -o ~{output_prefix}.bcf
+                ~{format_arg} -o ~{output_prefix}.~{suffix}
         fi
 
-        bcftools index ~{output_prefix}.bcf
+        bcftools index ~{index_arg} ~{output_prefix}.~{suffix}
 
         # Kill the background monitor the second the pipeline finishes
         kill $HEARTBEAT_PID || true
     >>>
 
     output {
-        File concatenated_vcf = "~{output_prefix}.bcf"
-        File concatenated_vcf_idx = "~{output_prefix}.bcf.csi"
+        File concatenated_vcf = "~{output_prefix}.~{suffix}"
+        File concatenated_vcf_idx = "~{output_prefix}.~{idx_suffix}"
     }
 
     #########################
