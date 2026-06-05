@@ -13,11 +13,12 @@ def generate_test_vcf():
         in_out.write('##FORMAT=<ID=CL_TRUTH,Number=2,Type=Integer,Description="Truth for Collision Boolean (Hap0,Hap1)">\n')
         in_out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join([f"SAMP{i}" for i in range(1, 11)]) + "\n")
         
+        # Reordered expected headers to precisely match the pipeline's injection order
         exp_out.write("##fileformat=VCFv4.2\n")
+        exp_out.write('##FORMAT=<ID=CL,Number=2,Type=Integer,Description="Collision indicator array (Hap0,Hap1): 0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort">\n')
         exp_out.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n')
         exp_out.write('##FORMAT=<ID=GP,Number=G,Type=Float,Description="Genotype Probabilities">\n')
         exp_out.write('##FORMAT=<ID=CL_TRUTH,Number=2,Type=Integer,Description="Truth for Collision Boolean (Hap0,Hap1)">\n')
-        exp_out.write('##FORMAT=<ID=CL,Number=2,Type=Integer,Description="Collision indicator array (Hap0,Hap1): 0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort">\n')
         exp_out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join([f"SAMP{i}" for i in range(1, 11)]) + "\n")
         
         # --- Define bases for the atomic components ---
@@ -134,7 +135,8 @@ def generate_test_vcf():
                             elif winner_h0_tuple[1] < len(path_indices[p]): h0_losers.append(2)
                             else: h0_losers.append(3)
                             
-                    h0_gt = '1' if (h0_winner or h0_losers) else '0'
+                    # Reverted logic: expected GT is '1' ONLY if supported by the winning path
+                    h0_gt = '1' if h0_winner else '0'
                     h0_cl = '0' if h0_winner or not h0_losers else str(max(h0_losers))
                     
                     h1_winner = winner_h1_tuple[2] in paths_for_c if winner_h1_tuple else False
@@ -145,7 +147,8 @@ def generate_test_vcf():
                             elif winner_h1_tuple[1] < len(path_indices[p]): h1_losers.append(2)
                             else: h1_losers.append(3)
                             
-                    h1_gt = '1' if (h1_winner or h1_losers) else '0'
+                    # Reverted logic: expected GT is '1' ONLY if supported by the winning path
+                    h1_gt = '1' if h1_winner else '0'
                     h1_cl = '0' if h1_winner or not h1_losers else str(max(h1_losers))
                     
                     expected_sample_data[c].append(f"{h0_gt}|{h1_gt}:{h0_cl},{h1_cl}")
@@ -179,5 +182,5 @@ if __name__ == "__main__":
     generate_test_vcf()
     print("Successfully generated 'resource.vcf', 'input.vcf', and 'expected.vcf'.")
     print("Test pipeline command:")
-    print("cat input.vcf | python convert-to-biallelic.py resource.vcf > output.vcf")
+    print("cat input.vcf | python pop-glimpse2-max-gp.py resource.vcf > output.vcf")
     print("diff expected.vcf output.vcf")

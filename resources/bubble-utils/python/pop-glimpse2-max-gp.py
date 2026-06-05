@@ -11,16 +11,18 @@
 #     Collisions: A biological impossibility introduced during phasing/imputation (e.g., by GLIMPSE2) where a sample is simultaneously assigned multiple, mutually exclusive bubble paths on the exact same haplotype.
 #     GP (Genotype Posterior): A statistical array indicating the caller's confidence in a specific genotype call (e.g., 0|0, 0|1, 1|1).
 #     The objective was to take GLIMPSE2's independent biallelic calls for these bubble paths, resolve any physical collisions using statistical and biological heuristics, and "pop" the paths back into a clean VCF of constituent variants.
+
 # Differences from the Original PanGenie Script
 #   The original PanGenie convert-to-biallelic.py script was designed for a simpler data topology. Our modified script introduces several major functional shifts:
 #   Handling Biallelic Input: The original script expected a single multiallelic VCF record for an entire bubble. Because GLIMPSE2 splits paths into independent biallelic records, our script groups incoming lines by their genomic coordinate (POS) to reconstruct the bubble state dynamically.
 #   In-Memory Projection: Rather than looping through a pre-defined multiallelic string, our script projects the Genotype (GT) and Genotype Quality (GQ) calls directly from the grouped biallelic records onto mapped constituent variants stored in memory.
-#   Collision Resolution and Tracking: The original script assumed clean, unconflicted paths. Our script scans the grouped alleles for overlapping haplotype calls, identifies the mathematically or biologically optimal path, and annotates suboptimal paths.
+#   Collision Resolution and Reversion: The original script assumed clean, unconflicted paths. Our script scans the grouped alleles for overlapping haplotype calls, identifies the mathematically or biologically optimal path, reverts the suboptimal GT calls to reference, and flags them.
 #   Shared Constituent Handling: Our script seamlessly handles overlapping topologies where multiple diverging paths share the same underlying constituent variants, ensuring the final output accurately reflects the presence of a variant if any winning path traverses it.
+
 # Key Design Choices
 #   Throughout the session, we iterated on several design choices to ensure the pipeline was biologically sound and strictly adhered to VCF specifications.
 #   Bypassing Upstream Merging: We chose to resolve collisions dynamically in memory rather than forcing an upstream merge using tools like bcftools norm. Standard VCF tools actively discard the phase conflicts (e.g., 1+2|0) that our script needs to observe to accurately score and resolve collisions.
-#   Non-Destructive Annotation (The CL Field): Instead of destructively overwriting suboptimal colliding GT calls back to the reference (0), we implemented a custom FORMAT/CL (Collision) field. This preserves the raw GLIMPSE2 output for downstream analysis while clearly flagging which paths are invalid.
+#   Collision Reversion and Annotation (The CL Field): Suboptimal colliding GT calls are reverted back to the reference (0) to ensure a clean representation of the final resolved haplotype. Concurrently, a custom FORMAT/CL (Collision) field is added to annotate these reverted calls. This clearly flags which paths were originally proposed by the caller but were invalidated during tie-breaking.
 #   Strict VCFv4.2 Typing: We opted to define the CL field as a two-element Integer array (Number=2, Type=Integer) rather than a visual String (0|1). This forces comma separation (0,1), conforming to strict standard VCF parsing rules for arrays.
 #   Tiered Tie-Breaking Logic: To resolve collisions, we implemented a three-tier heuristic. The pipeline prefers the path with the highest maximum GP. If tied, it falls back to a parsimony metric (preferring the path with the fewest constituent variants). If still tied, it defaults to a stable sort.
 #   High-Resolution Collision Tracking: The CL array outputs specific integer codes (0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort). When a constituent variant is supported by multiple losing paths, it receives the "best" score among its losers, providing granular traceability.
@@ -70,7 +72,7 @@ def process_group(group_lines):
             for s in range(num_samples):
                 fields[9+s] += ':0,0'
                 
-    # Annotate collisions at the bubble level
+    # Annotate and revert collisions at the bubble level
     for s in range(num_samples):
         col = 9 + s
         hap0_ones = []
@@ -98,7 +100,7 @@ def process_group(group_lines):
             if alleles[0] == '1': hap0_ones.append((gp_val, num_constituents, i))
             if alleles[1] == '1': hap1_ones.append((gp_val, num_constituents, i))
             
-        # Determine specific reason for collision loss on Hap0
+        # Determine specific reason for collision loss on Hap0 and revert GT
         if len(hap0_ones) > 1:
             hap0_ones.sort(key=lambda x: (x[0], -x[1]), reverse=True)
             w_gp, w_const, _ = hap0_ones[0]
@@ -110,13 +112,22 @@ def process_group(group_lines):
                 
                 fmt = parsed_lines[i][8].split(':')
                 cl_idx = fmt.index('CL')
+                gt_idx = fmt.index('GT')
                 s_data = parsed_lines[i][col].split(':')
+                
+                # Update CL
                 cl_vals = s_data[cl_idx].split(',')
                 cl_vals[0] = reason
                 s_data[cl_idx] = ','.join(cl_vals)
+                
+                # Revert GT
+                gt_vals = s_data[gt_idx].split('|')
+                gt_vals[0] = '0'
+                s_data[gt_idx] = '|'.join(gt_vals)
+                
                 parsed_lines[i][col] = ':'.join(s_data)
                 
-        # Determine specific reason for collision loss on Hap1
+        # Determine specific reason for collision loss on Hap1 and revert GT
         if len(hap1_ones) > 1:
             hap1_ones.sort(key=lambda x: (x[0], -x[1]), reverse=True)
             w_gp, w_const, _ = hap1_ones[0]
@@ -128,10 +139,19 @@ def process_group(group_lines):
                 
                 fmt = parsed_lines[i][8].split(':')
                 cl_idx = fmt.index('CL')
+                gt_idx = fmt.index('GT')
                 s_data = parsed_lines[i][col].split(':')
+                
+                # Update CL
                 cl_vals = s_data[cl_idx].split(',')
                 cl_vals[1] = reason
                 s_data[cl_idx] = ','.join(cl_vals)
+                
+                # Revert GT
+                gt_vals = s_data[gt_idx].split('|')
+                gt_vals[1] = '0'
+                s_data[gt_idx] = '|'.join(gt_vals)
+                
                 parsed_lines[i][col] = ':'.join(s_data)
 
     # Separate out unknown/passthrough records and collect known atomic targets
@@ -154,7 +174,7 @@ def process_group(group_lines):
         if not is_known:
             passthrough_lines.append(fields)
 
-    # Output passthrough lines untouched
+    # Output passthrough lines untouched (reverted GTs and CL annotations are preserved)
     for fields in passthrough_lines:
         print('\t'.join(fields))
 
@@ -227,13 +247,15 @@ def process_group(group_lines):
                             a_gt = gt.split('|')
                             a_cl = cl.split(',')
                             
-                            if a_gt[0] == '1':
-                                if a_cl[0] == '0': hap0_winner = True
-                                else: h0_losers.append(int(a_cl[0]))
+                            if a_gt[0] == '1' and a_cl[0] == '0':
+                                hap0_winner = True
+                            elif a_cl[0] != '0':
+                                h0_losers.append(int(a_cl[0]))
                                 
-                            if a_gt[1] == '1':
-                                if a_cl[1] == '0': hap1_winner = True
-                                else: h1_losers.append(int(a_cl[1]))
+                            if a_gt[1] == '1' and a_cl[1] == '0':
+                                hap1_winner = True
+                            elif a_cl[1] != '0':
+                                h1_losers.append(int(a_cl[1]))
                                 
                     if 'GQ' in f_fmt and 'GQ' in fmt_out:
                         gq_idx = f_fmt.index('GQ')
@@ -242,8 +264,9 @@ def process_group(group_lines):
                             if best_gq == '.' or float(gq_val) > float(best_gq):
                                 best_gq = gq_val
                                 
-            hap0_val = '1' if (hap0_winner or h0_losers) else '0'
-            hap1_val = '1' if (hap1_winner or h1_losers) else '0'
+            # Reverted logic: GT is '1' only if a winning path supported it.
+            hap0_val = '1' if hap0_winner else '0'
+            hap1_val = '1' if hap1_winner else '0'
             
             hap0_cl = '0' if hap0_winner or not h0_losers else str(max(h0_losers))
             hap1_cl = '0' if hap1_winner or not h1_losers else str(max(h1_losers))
@@ -265,6 +288,9 @@ for line in sys.stdin:
         if any([i in line for i in ['INFO=<ID=AF', 'INFO=<ID=AK', 'FORMAT=<ID=GL', 'FORMAT=<ID=KC']]):
             continue
         if line.startswith('#CHROM') and not cl_header_added:
+            print('##FORMAT=<ID=CL,Number=2,Type=Integer,Description="Collision indicator array (Hap0,Hap1): 0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort">')
+            cl_header_added = True
+        elif line.startswith('##FORMAT=') and not cl_header_added:
             print('##FORMAT=<ID=CL,Number=2,Type=Integer,Description="Collision indicator array (Hap0,Hap1): 0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort">')
             cl_header_added = True
         print(line[:-1])
