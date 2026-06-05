@@ -5,7 +5,7 @@ workflow ConcatVcfs {
         Array[File] vcfs
         Array[File] vcf_idxs
         String output_prefix
-        String do_bcf = true
+        Boolean do_bcf = true
         Boolean do_sort = false
         String extra_args = "--threads $(nproc) --naive"
 
