@@ -8,16 +8,24 @@ def generate_test_vcf():
         res_out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
         
         in_out.write("##fileformat=VCFv4.2\n")
+        in_out.write('##INFO=<ID=RAF,Number=A,Type=Float,Description="Alternate allele frequency in the reference panel">\n')
+        in_out.write('##INFO=<ID=AF,Number=A,Type=Float,Description="Alternate allele frequency">\n')
+        in_out.write('##INFO=<ID=INFO,Number=1,Type=Float,Description="Imputation information score">\n')
         in_out.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n')
-        in_out.write('##FORMAT=<ID=GP,Number=G,Type=Float,Description="Genotype Probabilities">\n')
+        in_out.write('##FORMAT=<ID=DS,Number=1,Type=Float,Description="Estimated Alternate Allele Dosage : [P(0/1)+2*P(1/1)]">\n')
+        in_out.write('##FORMAT=<ID=GP,Number=G,Type=Float,Description="Estimated Posterior Probabilities for Genotypes 0/0, 0/1 and 1/1">\n')
         in_out.write('##FORMAT=<ID=CL_TRUTH,Number=2,Type=Integer,Description="Truth for Collision Boolean (Hap0,Hap1)">\n')
         in_out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join([f"SAMP{i}" for i in range(1, 11)]) + "\n")
         
         # Reordered expected headers to precisely match the pipeline's injection order
         exp_out.write("##fileformat=VCFv4.2\n")
+        exp_out.write('##INFO=<ID=RAF,Number=A,Type=Float,Description="Alternate allele frequency in the reference panel">\n')
+        exp_out.write('##INFO=<ID=AF,Number=A,Type=Float,Description="Alternate allele frequency">\n')
+        exp_out.write('##INFO=<ID=INFO,Number=1,Type=Float,Description="Imputation information score">\n')
         exp_out.write('##FORMAT=<ID=CL,Number=2,Type=Integer,Description="Collision indicator array (Hap0,Hap1): 0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort">\n')
         exp_out.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n')
-        exp_out.write('##FORMAT=<ID=GP,Number=G,Type=Float,Description="Genotype Probabilities">\n')
+        exp_out.write('##FORMAT=<ID=DS,Number=1,Type=Float,Description="Estimated Alternate Allele Dosage : [P(0/1)+2*P(1/1)]">\n')
+        exp_out.write('##FORMAT=<ID=GP,Number=G,Type=Float,Description="Estimated Posterior Probabilities for Genotypes 0/0, 0/1 and 1/1">\n')
         exp_out.write('##FORMAT=<ID=CL_TRUTH,Number=2,Type=Integer,Description="Truth for Collision Boolean (Hap0,Hap1)">\n')
         exp_out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join([f"SAMP{i}" for i in range(1, 11)]) + "\n")
         
@@ -60,7 +68,10 @@ def generate_test_vcf():
                 [2, 3]        
             ]
 
-            # --- Generate Samples, Collisions, and Expected Truth ---
+            # --- Pre-generate Samples to Compute AF ---
+            samples_data = []
+            path_alt_counts = [0, 0, 0, 0]
+            
             for s in range(10):
                 hap0_calls = [0]*4
                 hap1_calls = [0]*4
@@ -71,8 +82,12 @@ def generate_test_vcf():
                 if random.random() < 0.3: hap0_calls[random.randint(0, 3)] = 1
                 if random.random() < 0.3: hap1_calls[random.randint(0, 3)] = 1
                     
+                for a in range(4):
+                    path_alt_counts[a] += hap0_calls[a] + hap1_calls[a]
+                    
                 gps = []
                 gp_strs = []
+                ds_strs = []
                 for a in range(4):
                     # Calculate index for GP array: 0 for 0|0, 1 for 0|1 or 1|0, 2 for 1|1
                     gt_idx = hap0_calls[a] + hap1_calls[a]
@@ -93,6 +108,29 @@ def generate_test_vcf():
                     strs = [f"{x:.2f}" for x in rounded]
                     gp_strs.append(",".join(strs))
                     gps.append(rounded)
+                    
+                    # Compute expected DS = P(0/1) + 2*P(1/1)
+                    ds_val = rounded[1] + 2.0 * rounded[2]
+                    ds_strs.append(f"{ds_val:.2f}")
+                    
+                samples_data.append({
+                    'hap0_calls': hap0_calls,
+                    'hap1_calls': hap1_calls,
+                    'gps': gps,
+                    'gp_strs': gp_strs,
+                    'ds_strs': ds_strs
+                })
+                
+            path_afs = [count / 20.0 for count in path_alt_counts]
+
+            # --- Generate Collisions and Expected Truth per Sample ---
+            for s in range(10):
+                s_data = samples_data[s]
+                hap0_calls = s_data['hap0_calls']
+                hap1_calls = s_data['hap1_calls']
+                gps = s_data['gps']
+                gp_strs = s_data['gp_strs']
+                ds_strs = s_data['ds_strs']
                 
                 hap0_ones = [(max(gps[a]), len(path_indices[a]), a) for a in range(4) if hap0_calls[a] == 1]
                 hap1_ones = [(max(gps[a]), len(path_indices[a]), a) for a in range(4) if hap1_calls[a] == 1]
@@ -120,8 +158,9 @@ def generate_test_vcf():
                     cl_truth = f"{cl0},{cl1}"
                     
                     gt = f"{hap0_calls[a]}|{hap1_calls[a]}"
+                    ds_str = ds_strs[a]
                     gp_str = gp_strs[a]
-                    input_sample_data[a].append(f"{gt}:{gp_str}:{cl_truth}")
+                    input_sample_data[a].append(f"{gt}:{ds_str}:{gp_str}:{cl_truth}")
                 
                 # 2. Calculate expected output data (component level)
                 for c in range(4):
@@ -135,7 +174,6 @@ def generate_test_vcf():
                             elif winner_h0_tuple[1] < len(path_indices[p]): h0_losers.append(2)
                             else: h0_losers.append(3)
                             
-                    # Reverted logic: expected GT is '1' ONLY if supported by the winning path
                     h0_gt = '1' if h0_winner else '0'
                     h0_cl = '0' if h0_winner or not h0_losers else str(max(h0_losers))
                     
@@ -147,16 +185,26 @@ def generate_test_vcf():
                             elif winner_h1_tuple[1] < len(path_indices[p]): h1_losers.append(2)
                             else: h1_losers.append(3)
                             
-                    # Reverted logic: expected GT is '1' ONLY if supported by the winning path
                     h1_gt = '1' if h1_winner else '0'
                     h1_cl = '0' if h1_winner or not h1_losers else str(max(h1_losers))
                     
-                    expected_sample_data[c].append(f"{h0_gt}|{h1_gt}:{h0_cl},{h1_cl}")
+                    # Retrieve DS/GP for the constituent based on max GP logic
+                    max_gp_val = -1.0
+                    best_gp_str = "."
+                    best_ds_str = "."
+                    for p in paths_for_c:
+                        curr_max_gp = max(gps[p])
+                        if curr_max_gp > max_gp_val:
+                            max_gp_val = curr_max_gp
+                            best_gp_str = gp_strs[p]
+                            best_ds_str = ds_strs[p]
+                    
+                    expected_sample_data[c].append(f"{h0_gt}|{h1_gt}:{best_ds_str}:{best_gp_str}:{h0_cl},{h1_cl}")
 
             # --- Write Input VCF Records ---
             for a in range(4):
-                info = f"ID={path_info_ids[a]}"
-                fmt = "GT:GP:CL_TRUTH"
+                info = f"ID={path_info_ids[a]};RAF={path_afs[a]:.2f};AF={path_afs[a]:.2f};INFO=0.95"
+                fmt = "GT:DS:GP:CL_TRUTH"
                 
                 path_alt = ""
                 for i in range(4):
@@ -173,8 +221,12 @@ def generate_test_vcf():
                 res_pos = bubble_pos + c 
                 orig_var_id = f"var_{b}_{c}"
                 comp_id = f"comp_{b}_{c}"
-                info = f"ID={comp_id}"
-                fmt = "GT:CL"
+                
+                # Retrieve INFO metadata from the first path that maps to this component (identical to pipeline logic)
+                first_mapped_path_idx = path_indices_for_c[c][0]
+                info = f"ID={comp_id};RAF={path_afs[first_mapped_path_idx]:.2f};AF={path_afs[first_mapped_path_idx]:.2f};INFO=0.95"
+                
+                fmt = "GT:DS:GP:CL"
                 row = ["chr1", str(res_pos), orig_var_id, comp_refs[c], comp_alts[c], ".", ".", info, fmt] + expected_sample_data[c]
                 exp_out.write("\t".join(row) + "\n")
 
