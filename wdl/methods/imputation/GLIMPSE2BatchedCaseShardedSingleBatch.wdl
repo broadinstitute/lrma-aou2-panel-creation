@@ -28,7 +28,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         # inputs for PopAndMarkCollisions
         File panel_id_split_vcf_gz
         File panel_id_split_vcf_gz_tbi
-        File pop_python_script                      # modified version of convert-to-biallelic.py
+        File pop_glimpse2_script      # modified version of convert-to-biallelic.py
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
     }
@@ -108,7 +108,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             panel_bubble_split_vcf_idx = panel_bubble_split_vcf_idx,
             panel_id_split_vcf_gz = panel_id_split_vcf_gz,
             panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
-            pop_python_script = pop_python_script,
+            pop_glimpse2_script = pop_glimpse2_script,
             region = output_regions_[k],
             output_prefix = output_prefix + ".glimpse2.popped"
         }
@@ -479,7 +479,7 @@ task PopAndMarkCollisions {
         File panel_bubble_split_vcf_idx
         File panel_id_split_vcf_gz                  # python script requires vcf.gz
         File panel_id_split_vcf_gz_tbi
-        File pop_python_script                      # modified version of convert-to-biallelic.py
+        File pop_glimpse2_script             # modified version of convert-to-biallelic.py
         String region
         String output_prefix
 
@@ -491,13 +491,12 @@ task PopAndMarkCollisions {
     command <<<
         set -euox pipefail
 
-        pypy -m pip install tqdm
+        rustc -O ~{pop_glimpse2_script} -o PopGLIMPSE2
 
         # annotate bubble IDs
         bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
-        pypy ~{pop_python_script} \
-            ~{panel_id_split_vcf_gz} | \
+        ./PopGLIMPSE2 ~{panel_id_split_vcf_gz} | \
         bcftools view -W=tbi -Oz -o ~{output_prefix}.vcf.gz
     >>>
 
@@ -515,7 +514,7 @@ task PopAndMarkCollisions {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-pypy:v1"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
