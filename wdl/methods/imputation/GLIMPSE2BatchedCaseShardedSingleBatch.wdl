@@ -491,6 +491,7 @@ task PopAndMarkCollisions {
     command <<<
         set -euox pipefail
 
+        cargo add flate2
         rustc -O ~{pop_glimpse2_script} -o PopGLIMPSE2
 
         # annotate bubble IDs
