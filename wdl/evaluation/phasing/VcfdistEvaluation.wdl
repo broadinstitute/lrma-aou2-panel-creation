@@ -59,6 +59,7 @@ workflow VcfdistEvaluation {
             region = region,
             bed_file = confident_regions_bed_files[i],
             reference_fasta_fai = reference_fasta_fai
+            do_naively_phase = false
         }
     }
 
