@@ -29,6 +29,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File panel_id_split_vcf_gz
         File panel_id_split_vcf_gz_tbi
         File pop_glimpse2_script      # modified version of convert-to-biallelic.py
+        File cargo_toml
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
     }
@@ -109,6 +110,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             panel_id_split_vcf_gz = panel_id_split_vcf_gz,
             panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
             pop_glimpse2_script = pop_glimpse2_script,
+            cargo_toml = cargo_toml,
             region = output_regions_[k],
             output_prefix = output_prefix + ".glimpse2.popped"
         }
@@ -477,9 +479,10 @@ task PopAndMarkCollisions {
         File posteriors_vcf_idx
         File panel_bubble_split_vcf
         File panel_bubble_split_vcf_idx
-        File panel_id_split_vcf_gz                  # python script requires vcf.gz
+        File panel_id_split_vcf_gz           # python script requires vcf.gz
         File panel_id_split_vcf_gz_tbi
         File pop_glimpse2_script             # modified version of convert-to-biallelic.py
+        File cargo_toml
         String region
         String output_prefix
 
@@ -491,13 +494,17 @@ task PopAndMarkCollisions {
     command <<<
         set -euox pipefail
 
-        cargo add flate2
-        rustc -O ~{pop_glimpse2_script} -o PopGLIMPSE2
+        mkdir -p pop-glimpse2/src/bin
+        cp ~{pop_glimpse2_script} pop-glimpse2/src/bin/pop-glimpse2-max-gp.rs
+        cp ~{cargo_toml} pop-glimpse2
+        cd pop-glimpse2
+        cargo build --release
+        cd ..
 
         # annotate bubble IDs
         bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
-        ./PopGLIMPSE2 ~{panel_id_split_vcf_gz} | \
+        ./pop-glimpse2/target/release/pop-glimpse2-max-gp ~{panel_id_split_vcf_gz} | \
         bcftools view -W=tbi -Oz -o ~{output_prefix}.vcf.gz
     >>>
 
