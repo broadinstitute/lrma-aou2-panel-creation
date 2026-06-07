@@ -501,7 +501,7 @@ task PopAndMarkCollisions {
         cargo build --release
         cd ..
 
-        # annotate bubble IDs
+        # annotate bubble IDs; TODO use a sites-only instead of panel_bubble_split_vcf
         bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
         ./pop-glimpse2/target/release/pop-glimpse2-max-gp ~{panel_id_split_vcf_gz} | \

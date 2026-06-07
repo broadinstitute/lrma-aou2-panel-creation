@@ -57,6 +57,12 @@ workflow PostprocessBubblePanel {
         output_prefix = output_prefix + ".bubble.split"
     }
 
+    call ConcatVcfs.ConcatVcfs as ConcatBubbleSplitSitesOnly { input:
+        vcfs = SplitBubblesPanel.split_bubbles_sites_only_vcf,
+        vcf_idxs = SplitBubblesPanel.split_bubbles_sites_only_vcf_idx,
+        output_prefix = output_prefix + ".bubble.split.sites"
+    }
+
     if (defined(leave_out_samples)) {
         scatter (i in range(length(regions))) {
             call SplitBubblesPanel as SplitBubblesPanelLeaveOut { input:
@@ -74,6 +80,12 @@ workflow PostprocessBubblePanel {
             vcf_idxs = SplitBubblesPanelLeaveOut.split_bubbles_vcf_idx,
             output_prefix = output_prefix + ".bubble.split.leaveout"
         }
+        
+        call ConcatVcfs.ConcatVcfs as ConcatBubbleSplitSitesOnlyLeaveOut { input:
+            vcfs = SplitBubblesPanelLeaveOut.split_bubbles_sites_only_vcf,
+            vcf_idxs = SplitBubblesPanelLeaveOut.split_bubbles_sites_only_vcf_idx,
+            output_prefix = output_prefix + ".bubble.split.sites.leaveout"
+        }
     }
 
     output {
@@ -83,8 +95,12 @@ workflow PostprocessBubblePanel {
         File panel_popped_vcf_idx = ConcatPopped.concatenated_vcf_idx
         File panel_bubble_split_vcf = ConcatBubbleSplit.concatenated_vcf
         File panel_bubble_split_vcf_idx = ConcatBubbleSplit.concatenated_vcf_idx
+        File panel_bubble_split_sites_only_vcf = ConcatBubbleSplitSitesOnly.concatenated_vcf
+        File panel_bubble_split_sites_only_vcf_idx = ConcatBubbleSplitSitesOnly.concatenated_vcf_idx
         File? panel_bubble_split_leaveout_vcf = ConcatBubbleSplitLeaveOut.concatenated_vcf
         File? panel_bubble_split_leaveout_vcf_idx = ConcatBubbleSplitLeaveOut.concatenated_vcf_idx
+        File? panel_bubble_split_sites_only_leaveout_vcf = ConcatBubbleSplitSitesOnlyLeaveOut.concatenated_vcf
+        File? panel_bubble_split_sites_only_leaveout_vcf_idx = ConcatBubbleSplitSitesOnlyLeaveOut.concatenated_vcf_idx
     }
 }
 
@@ -120,7 +136,7 @@ task PopBubblesPanel {
         bcftools view -r ~{region} --regions-overlap 0 ~{panel_id_split_vcf} -G -W=tbi -Oz -o ~{output_prefix}.id.split.vcf.gz
         bcftools view -r ~{region} --regions-overlap 0 ~{panel_bubble_vcf} | \
             pypy ~{pop_python_script} ~{output_prefix}.id.split.vcf.gz | \
-            bcftools view -W=csi -Ob -o ~{output_prefix}.popped.bcf
+            bcftools sort -W=csi -Ob -o ~{output_prefix}.popped.bcf
     >>>
 
     output {
@@ -180,12 +196,16 @@ task SplitBubblesPanel {
             bcftools +fill-AN-AC -Ou |
             bcftools reheader -f ~{reference_fasta_fai} |
             ~{if length(leave_out_samples_array) > 0 then "bcftools view -S ^" + leave_out_samples_list + " --force-samples -Ou |" else ""}
-            bcftools view -W=csi -Ob -o ~{output_prefix}.bcf
+            bcftools sort -W=csi -Ob -o ~{output_prefix}.bcf
+
+        bcftools view -G ~{output_prefix}.bcf -W=csi -Ob -o ~{output_prefix}.sites.bcf
     >>>
 
     output {
         File split_bubbles_vcf = "~{output_prefix}.bcf"
         File split_bubbles_vcf_idx = "~{output_prefix}.bcf.csi"
+        File split_bubbles_sites_only_vcf = "~{output_prefix}.sites.bcf"
+        File split_bubbles_sites_only_vcf_idx = "~{output_prefix}.sites.bcf.csi"
     }
 
     #########################

@@ -1,10 +1,12 @@
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder; // FIX: Upgraded to MultiGzDecoder to handle bgzip streams
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write, BufWriter};
 
-// Struct to hold VCF record data for the current group
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 struct Record {
     chrom: String,
     pos: String,
@@ -27,7 +29,8 @@ struct Record {
 fn smart_open(filename: &str) -> Box<dyn BufRead> {
     let file = File::open(filename).expect("Cannot open file");
     if filename.ends_with(".gz") {
-        Box::new(BufReader::new(GzDecoder::new(file)))
+        // MultiGzDecoder guarantees the entire bgzip file is read, not just the first 64KB block
+        Box::new(BufReader::new(MultiGzDecoder::new(file))) 
     } else {
         Box::new(BufReader::new(file))
     }
@@ -46,6 +49,8 @@ fn parse_info(info_str: &str) -> HashMap<String, String> {
 fn process_group(
     group_lines: &[String],
     chrom_to_variants: &HashMap<String, HashMap<String, (u32, String, String, String)>>,
+    printed_phys_vars: &mut HashMap<(String, u32, String, String, String), ()>,
+    out_handle: &mut impl Write,
 ) {
     if group_lines.is_empty() {
         return;
@@ -58,7 +63,7 @@ fn process_group(
 
     if parsed_lines[0].len() <= 9 {
         for fields in parsed_lines {
-            println!("{}", fields.join("\t"));
+            writeln!(out_handle, "{}", fields.join("\t")).unwrap();
         }
         return;
     }
@@ -68,7 +73,6 @@ fn process_group(
 
     let mut records: Vec<Record> = Vec::with_capacity(parsed_lines.len());
 
-    // 1. Pre-parse and initialize records
     for fields in parsed_lines.iter_mut() {
         let info_map = parse_info(fields[7]);
         
@@ -85,23 +89,36 @@ fn process_group(
             fmt_idx.insert(k.to_string(), idx);
         }
 
+        let mut is_known = true;
         let mut num_const = 0;
         let mut atomic_ids = HashSet::new();
-        let mut is_known = false;
 
         if let Some(id_str) = info_map.get("ID") {
-            // FIX: Bind the new String to a variable so it lives long enough for the splits to borrow it.
             let replaced_id = id_str.replace(',', ":");
             let constituents: Vec<&str> = replaced_id.split(':').map(|s| s.trim()).collect();
             num_const = constituents.len();
-            for j in constituents {
+            
+            for j in &constituents {
                 if let Some(chrom_map) = chrom_to_variants.get(&chrom) {
-                    if chrom_map.contains_key(j) {
-                        atomic_ids.insert(j.to_string());
-                        is_known = true;
+                    if !chrom_map.contains_key(*j) {
+                        eprintln!("WARNING: Assigned ID '{}' not found in resource VCF. Path containing this variant at {}:{} will be passed through unpopped.", j, chrom, fields[1]);
+                        is_known = false;
+                        break;
                     }
+                } else {
+                    eprintln!("WARNING: Chromosome '{}' not found in resource VCF when looking up assigned ID '{}'. Path at {}:{} will be passed through unpopped.", chrom, j, chrom, fields[1]);
+                    is_known = false;
+                    break;
                 }
             }
+            
+            if is_known {
+                for j in constituents {
+                    atomic_ids.insert(j.to_string());
+                }
+            }
+        } else {
+            is_known = false;
         }
 
         let mut samples = Vec::with_capacity(num_samples);
@@ -145,7 +162,6 @@ fn process_group(
         });
     }
 
-    // 2. Annotate and revert collisions
     for s in 0..num_samples {
         let mut hap0_ones: Vec<(f32, usize, usize)> = Vec::new();
         let mut hap1_ones: Vec<(f32, usize, usize)> = Vec::new();
@@ -167,7 +183,7 @@ fn process_group(
         let sort_logic = |a: &(f32, usize, usize), b: &(f32, usize, usize)| {
             let gp_cmp = b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal);
             if gp_cmp == std::cmp::Ordering::Equal {
-                a.1.cmp(&b.1) // Parsimony: lower constituent count first
+                a.1.cmp(&b.1) 
             } else {
                 gp_cmp
             }
@@ -178,7 +194,6 @@ fn process_group(
             let (w_gp, w_const, _) = hap0_ones[0];
             for &(l_gp, l_const, i) in hap0_ones.iter().skip(1) {
                 let reason = if w_gp > l_gp { "1" } else if w_const < l_const { "2" } else { "3" };
-                
                 let rec = &mut records[i];
                 let cl_idx = rec.fmt_idx["CL"];
                 let gt_idx = rec.fmt_idx["GT"];
@@ -201,7 +216,6 @@ fn process_group(
             let (w_gp, w_const, _) = hap1_ones[0];
             for &(l_gp, l_const, i) in hap1_ones.iter().skip(1) {
                 let reason = if w_gp > l_gp { "1" } else if w_const < l_const { "2" } else { "3" };
-                
                 let rec = &mut records[i];
                 let cl_idx = rec.fmt_idx["CL"];
                 let gt_idx = rec.fmt_idx["GT"];
@@ -220,7 +234,6 @@ fn process_group(
         }
     }
 
-    // 3. Output passthroughs and gather atomic targets
     let mut all_atomic_vars = HashSet::new();
     for rec in &records {
         if !rec.is_known {
@@ -230,7 +243,7 @@ fn process_group(
                 rec.filter.clone(), rec.info_raw.clone(), rec.fmt_raw.clone()
             ];
             out.extend(rec.samples.clone());
-            println!("{}", out.join("\t"));
+            writeln!(out_handle, "{}", out.join("\t")).unwrap();
         } else {
             for j in &rec.atomic_ids {
                 if let Some(data) = chrom_to_variants.get(&rec.chrom).and_then(|m| m.get(j)) {
@@ -240,18 +253,26 @@ fn process_group(
         }
     }
 
-    // 4. Pop Bubbles
     let mut sorted_atomic_vars: Vec<_> = all_atomic_vars.into_iter().collect();
     sorted_atomic_vars.sort_by_key(|x| x.1);
 
-    for (var_id, coord) in sorted_atomic_vars {
-        let template_idx = records.iter().position(|r| r.atomic_ids.contains(&var_id));
+    for (assigned_id, coord) in sorted_atomic_vars {
+        let template_idx = records.iter().position(|r| r.atomic_ids.contains(&assigned_id));
         if template_idx.is_none() { continue; }
         let t_idx = template_idx.unwrap();
         let t_rec = &records[t_idx];
-        let var_data = &chrom_to_variants[&t_rec.chrom][&var_id];
+        
+        // var_data = (POS, original ID, REF, ALT)
+        let var_data = &chrom_to_variants[&t_rec.chrom][&assigned_id];
 
-        let mut new_info = vec![format!("ID={}", var_id)];
+        // Unique Key Deduplication: (CHROM, POS, Original ID, REF, ALT)
+        let phys_sig = (t_rec.chrom.clone(), coord, var_data.1.clone(), var_data.2.clone(), var_data.3.clone());
+        if printed_phys_vars.contains_key(&phys_sig) {
+            continue; 
+        }
+        printed_phys_vars.insert(phys_sig, ());
+
+        let mut new_info = vec![format!("ID={}", assigned_id)];
         for k in ["MA", "UK", "RAF", "AF", "INFO"] {
             if let Some(v) = t_rec.info_map.get(k) {
                 new_info.push(format!("{}={}", k, v));
@@ -267,9 +288,9 @@ fn process_group(
         let mut vcf_line = vec![
             t_rec.chrom.clone(),
             coord.to_string(),
-            var_data.1.clone(),
-            var_data.2.clone(),
-            var_data.3.clone(),
+            var_data.1.clone(), // Emits original ID in VCF Column 3
+            var_data.2.clone(), // REF
+            var_data.3.clone(), // ALT
             ".".to_string(),
             ".".to_string(),
             new_info.join(";"),
@@ -278,7 +299,7 @@ fn process_group(
 
         let lines_with_var: Vec<usize> = records.iter()
             .enumerate()
-            .filter(|(_, r)| r.atomic_ids.contains(&var_id))
+            .filter(|(_, r)| r.atomic_ids.contains(&assigned_id))
             .map(|(i, _)| i)
             .collect();
 
@@ -346,7 +367,7 @@ fn process_group(
 
             vcf_line.push(s_out.join(":"));
         }
-        println!("{}", vcf_line.join("\t"));
+        writeln!(out_handle, "{}", vcf_line.join("\t")).unwrap();
     }
 }
 
@@ -359,7 +380,7 @@ fn main() {
     
     let vcf_path = &args[1];
     
-    // chrom -> ID -> (pos, orig_id, ref, alt)
+    eprintln!("Loading resource VCF into memory...");
     let mut chrom_to_variants: HashMap<String, HashMap<String, (u32, String, String, String)>> = HashMap::new();
     
     let reader = smart_open(vcf_path);
@@ -370,29 +391,36 @@ fn main() {
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
         if fields.len() < 8 { continue; }
         
-        let mut id_val = "";
         for item in fields[7].split(';') {
-            if item.starts_with("ID=") {
-                id_val = &item[3..];
+            if let Some(id_val) = item.strip_prefix("ID=") {
+                let r_pos: u32 = fields[1].parse().unwrap_or(0);
+                let r_chrom = fields[0].to_string();
+                let original_id = fields[2].to_string(); 
+                let val = (r_pos, original_id, fields[3].to_string(), fields[4].to_string());
+                
+                chrom_to_variants.entry(r_chrom)
+                    .or_default()
+                    .insert(id_val.trim().to_string(), val);
                 break;
             }
         }
-        
-        if id_val.is_empty() { continue; }
-        let id_keys: Vec<&str> = id_val.split(',').collect();
-        let main_id = id_keys[0];
-        
-        let pos: u32 = fields[1].parse().unwrap();
-        chrom_to_variants.entry(fields[0].to_string())
-            .or_default()
-            .insert(main_id.to_string(), (pos, fields[2].to_string(), fields[3].to_string(), fields[4].to_string()));
     }
+    eprintln!("Finished loading resource VCF.");
+
+    let stdout = io::stdout();
+    let mut out_handle = BufWriter::new(stdout.lock());
+
+    // Tracker to guarantee REF/ALT/original ID remains a unique output key
+    let mut printed_phys_vars: HashMap<(String, u32, String, String, String), ()> = HashMap::new();
 
     let stdin = io::stdin();
     let mut cl_header_added = false;
     let mut current_pos: Option<String> = None;
-    let mut group = Vec::new();
+    let mut current_chrom: String = String::new();
+    let mut group: Vec<String> = Vec::new(); 
+    let mut records_processed: usize = 0;
 
+    eprintln!("Starting projection from stdin...");
     for line_result in stdin.lock().lines() {
         let line = line_result.unwrap();
         if line.starts_with('#') {
@@ -400,34 +428,60 @@ fn main() {
                 continue;
             }
             if line.starts_with("#CHROM") && !cl_header_added {
-                println!("##FORMAT=<ID=CL,Number=2,Type=Integer,Description=\"Collision indicator array (Hap0,Hap1): 0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort\">");
+                writeln!(out_handle, "##FORMAT=<ID=CL,Number=2,Type=Integer,Description=\"Collision indicator array (Hap0,Hap1): 0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort\">").unwrap();
                 cl_header_added = true;
             } else if line.starts_with("##FORMAT=") && !cl_header_added {
-                println!("##FORMAT=<ID=CL,Number=2,Type=Integer,Description=\"Collision indicator array (Hap0,Hap1): 0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort\">");
+                writeln!(out_handle, "##FORMAT=<ID=CL,Number=2,Type=Integer,Description=\"Collision indicator array (Hap0,Hap1): 0=optimal, 1=lost by GP, 2=lost by parsimony, 3=lost by stable sort\">").unwrap();
                 cl_header_added = true;
             }
-            println!("{}", line);
+            writeln!(out_handle, "{}", line).unwrap();
             continue;
         }
 
         let fields: Vec<&str> = line.splitn(3, '\t').collect();
         if fields.len() < 2 { continue; }
+        
+        let chrom = fields[0].to_string();
         let pos = fields[1].to_string();
+
+        records_processed += 1;
+        if records_processed % 10_000 == 0 {
+            eprintln!("Processed {} input records... (Currently at {}:{})", records_processed, chrom, pos);
+        }
 
         if current_pos.is_none() {
             current_pos = Some(pos.clone());
+            current_chrom = chrom.clone();
         }
 
-        // FIX: Dereferenced current_pos with *
-        if pos != *current_pos.as_ref().unwrap() {
-            process_group(&group, &chrom_to_variants);
+        if pos != *current_pos.as_ref().unwrap() || chrom != current_chrom {
+            process_group(
+                &group, 
+                &chrom_to_variants, 
+                &mut printed_phys_vars, 
+                &mut out_handle
+            );
+            
             group.clear();
+            
+            let current_pos_u32 = pos.parse::<u32>().unwrap_or(0);
+            printed_phys_vars.retain(|(c, p, _, _, _), _| c == &chrom && *p >= current_pos_u32.saturating_sub(50_000));
+            
             current_pos = Some(pos);
+            current_chrom = chrom;
         }
         group.push(line);
     }
 
     if !group.is_empty() {
-        process_group(&group, &chrom_to_variants);
+        process_group(
+            &group, 
+            &chrom_to_variants, 
+            &mut printed_phys_vars, 
+            &mut out_handle
+        );
     }
+    
+    out_handle.flush().unwrap();
+    eprintln!("Finished! Processed a total of {} input records.", records_processed);
 }
