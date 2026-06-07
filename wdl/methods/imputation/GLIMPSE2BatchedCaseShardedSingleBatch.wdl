@@ -10,7 +10,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
         String chromosome
         File genetic_maps_tsv
-        File panel_bubble_split_vcf          # "split" here means "split to biallelic"; "split" below means "chunked"
+        File panel_bubble_split_vcf          # "split" here means "split to biallelic"; "split" just below means "chunked"
         File panel_bubble_split_vcf_idx
 
         String extra_chunk_args = "--thread $(nproc) --window-mb 5 --buffer-mb 0.5 --sequential"
@@ -26,6 +26,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         String? remap_simple_bubble_likelihoods_extra_args
 
         # inputs for PopAndMarkCollisions
+        File panel_bubble_split_sites_only_vcf
+        File panel_bubble_split_sites_only_vcf_idx
         File panel_id_split_vcf_gz
         File panel_id_split_vcf_gz_tbi
         File pop_glimpse2_script      # modified version of convert-to-biallelic.py
@@ -105,8 +107,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         call PopAndMarkCollisions { input:
             posteriors_vcf = GLIMPSE2Ligate.ligated_vcf_gz,
             posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_gz_tbi,
-            panel_bubble_split_vcf = panel_bubble_split_vcf,
-            panel_bubble_split_vcf_idx = panel_bubble_split_vcf_idx,
+            panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
+            panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
             panel_id_split_vcf_gz = panel_id_split_vcf_gz,
             panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
             pop_glimpse2_script = pop_glimpse2_script,
@@ -477,11 +479,11 @@ task PopAndMarkCollisions {
         # all VCFs should be split to biallelic
         File posteriors_vcf
         File posteriors_vcf_idx
-        File panel_bubble_split_vcf
-        File panel_bubble_split_vcf_idx
-        File panel_id_split_vcf_gz           # python script requires vcf.gz
+        File panel_bubble_split_sites_only_vcf          # for annotation of INFO fields
+        File panel_bubble_split_sites_only_vcf_idx
+        File panel_id_split_vcf_gz           # pop script requires vcf.gz
         File panel_id_split_vcf_gz_tbi
-        File pop_glimpse2_script             # modified version of convert-to-biallelic.py
+        File pop_glimpse2_script             # modified version of convert-to-biallelic.py translated to Rust
         File cargo_toml
         String region
         String output_prefix
@@ -489,7 +491,7 @@ task PopAndMarkCollisions {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 3 * ceil(size([posteriors_vcf, panel_bubble_split_vcf, panel_id_split_vcf_gz], "GB"))
+    Int disk_gb = 10 + 3 * ceil(size([posteriors_vcf, panel_bubble_split_sites_only_vcf, panel_id_split_vcf_gz], "GB"))
 
     command <<<
         set -euox pipefail
@@ -502,7 +504,7 @@ task PopAndMarkCollisions {
         cd ..
 
         # annotate bubble IDs; TODO use a sites-only instead of panel_bubble_split_vcf
-        bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_vcf} ~{posteriors_vcf} \
+        bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_sites_only_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
         ./pop-glimpse2/target/release/pop-glimpse2-max-gp ~{panel_id_split_vcf_gz} | \
         bcftools sort -W=tbi -Oz -o ~{output_prefix}.vcf.gz
