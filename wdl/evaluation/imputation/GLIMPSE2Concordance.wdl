@@ -61,10 +61,7 @@ workflow GLIMPSE2Concordance {
     }
 
     output {
-        File r2_plot_inTRH = PlotResults.r2_plot_inTRH
-        File r2_plot_outTRH = PlotResults.r2_plot_outTRH
-        File nrd_plot_inTRH = PlotResults.nrd_plot_inTRH
-        File nrd_plot_outTRH = PlotResults.nrd_plot_outTRH
+        Array[File] concordance_plots = [PlotResults.r2_plot_inTRH, PlotResults.r2_plot_outTRH, PlotResults.nrd_plot_inTRH, PlotResults.nrd_plot_outTRH]
         Array[Array[File]] concordance_files = [all_rsquare_grp_files, all_rsquare_spl_files, all_error_grp_files, all_error_spl_files, all_error_cal_files]
     }
 }
