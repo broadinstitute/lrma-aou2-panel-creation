@@ -15,13 +15,6 @@ workflow GLIMPSE2Concordance {
     Array[String] trh_bins = ["outTRH", "inTRH"]
     Array[String] length_bins = ["SV_DEL", "DEL", "SNP", "INS", "SV_INS"]
 
-    call FillTagsPanel {input:
-        panel_vcf = panel_vcf,
-        panel_vcf_idx = panel_vcf_idx,
-        region = region,
-        output_prefix = output_prefix
-    }
-
     call AnnotateImputed { input:
         imputed_vcf = imputed_vcf,
         imputed_vcf_idx = imputed_vcf_idx,
@@ -36,8 +29,8 @@ workflow GLIMPSE2Concordance {
             call FilterAndConcordance { input:
                 annotated_bcf = AnnotateImputed.annotated_vcf,
                 annotated_bcf_index = AnnotateImputed.annotated_vcf_idx,
-                panel_vcf = FillTagsPanel.filled_vcf,
-                panel_vcf_idx = FillTagsPanel.filled_vcf_idx,
+                panel_vcf = panel_vcf,
+                panel_vcf_idx = panel_vcf_idx,
                 trh_bin = trh_bin,
                 length_bin = length_bin,
                 region = region,
@@ -75,55 +68,6 @@ struct RuntimeAttr {
     Int? preemptible_tries
     Int? max_retries
     String? docker
-}
-
-task FillTagsPanel {
-    input {
-        File panel_vcf
-        File panel_vcf_idx
-        String region
-        String output_prefix
-
-        RuntimeAttr? runtime_attr_override
-    }
-
-    Int disk_gb = 10 + 3 * ceil(size(panel_vcf, "GiB"))
-
-    command <<<
-        set -euox pipefail
-        
-        bcftools +fill-tags ~{panel_vcf} \
-            --threads $(nproc) \
-            -r ~{region} \
-            --write-index=csi -Ob -o ~{output_prefix}.panel.fill.bcf -- -t AC,AN,AF
-    >>>
-
-    output {
-        File filled_vcf = "~{output_prefix}.panel.fill.bcf"
-        File filled_vcf_idx = "~{output_prefix}.panel.fill.bcf.csi"
-    }
-
-    #########################
-    RuntimeAttr default_attr = object {
-        cpu_cores:          2,
-        mem_gb:             8,
-        disk_gb:            disk_gb,
-        boot_disk_gb:       10,
-        disk_type:          "SSD",
-        preemptible_tries:  2,
-        max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
-        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type])
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
-        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
-        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
-        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-    }
 }
 
 task AnnotateImputed {
@@ -414,9 +358,9 @@ task PlotResults {
 
     output {
         File r2_plot_inTRH = "~{output_prefix}.inTRH.r2.png"
-        File r2_plot_outTRH = "~{output_prefix}.outTRG.r2.png"
+        File r2_plot_outTRH = "~{output_prefix}.outTRH.r2.png"
         File nrd_plot_inTRH = "~{output_prefix}.inTRH.nrd.png"
-        File nrd_plot_outTRH = "~{output_prefix}.outTRG.nrd.png"
+        File nrd_plot_outTRH = "~{output_prefix}.outTRH.nrd.png"
     }
 
     #########################

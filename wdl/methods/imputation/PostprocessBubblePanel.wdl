@@ -190,6 +190,7 @@ task PopBubblesPanel {
 
         bcftools view -r ~{region} --regions-overlap 0 ~{panel_bubble_vcf} | \
             pypy ~{pop_python_script} ~{panel_id_split_vcf_gz} | \
+            bcftools +fill-tags -Ou -- -t AC,AN,AF | \
             bcftools sort -W=csi -Ob -o ~{output_prefix}.popped.bcf
         bcftools view ~{output_prefix}.popped.bcf -G -W=tbi -Ob -o ~{output_prefix}.popped.sites.bcf
     >>>
