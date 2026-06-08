@@ -54,8 +54,10 @@ workflow GLIMPSE2Concordance {
     }
 
     output {
-        Array[File] r2_plots = PlotResults.r2_plots
-        Array[File] nrd_plots = PlotResults.nrd_plots
+        File r2_plot_inTRH = PlotResults.r2_plot_inTRH
+        File r2_plot_outTRH = PlotResults.r2_plot_outTRH
+        File nrd_plot_inTRH = PlotResults.nrd_plot_inTRH
+        File nrd_plot_outTRH = PlotResults.nrd_plot_outTRH
     }
 }
 
@@ -354,8 +356,10 @@ task PlotResults {
     >>>
 
     output {
-        Array[File] r2_plots = glob("*.r2.png")
-        Array[File] nrd_plots = glob("*.nrd.png")
+        File r2_plot_inTRH = "~{output_prefix}.inTRH.r2.png"
+        File r2_plot_outTRH = "~{output_prefix}.outTRG.r2.png"
+        File nrd_plot_inTRH = "~{output_prefix}.inTRH.nrd.png"
+        File nrd_plot_outTRH = "~{output_prefix}.outTRG.nrd.png"
     }
 
     #########################
