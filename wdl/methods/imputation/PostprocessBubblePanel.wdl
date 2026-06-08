@@ -17,12 +17,18 @@ workflow PostprocessBubblePanel {
         File pop_python_script
     }
 
+    call ConvertToVcfGz as ConvertToVcfGzIdSplit { input:
+        vcf = panel_id_split_vcf,
+        vcf_idx = panel_id_split_vcf_idx,
+        output_prefix = output_prefix + ".id.split.sites"
+    }
+
     scatter (i in range(length(regions))) {
         call PopBubblesPanel { input:
             panel_bubble_vcf = panel_bubble_vcf,
             panel_bubble_vcf_idx = panel_bubble_vcf_idx,
-            panel_id_split_vcf = panel_id_split_vcf,
-            panel_id_split_vcf_idx = panel_id_split_vcf_idx,
+            panel_id_split_vcf_gz = ConvertToVcfGzIdSplit.vcf_gz,
+            panel_id_split_vcf_gz_tbi = ConvertToVcfGzIdSplit.vcf_gz_tbi,
             pop_python_script = pop_python_script,
             region = regions[i],
             output_prefix = output_prefix + ".region-" + i
@@ -36,13 +42,6 @@ workflow PostprocessBubblePanel {
             output_prefix = output_prefix + ".bubble.split.region-" + i,
             leave_out_samples = []
         }
-    }
-
-    call ConcatVcfs.ConcatVcfs as ConcatIdSplit { input:
-        vcfs = PopBubblesPanel.id_split_vcf_gz,
-        vcf_idxs = PopBubblesPanel.id_split_vcf_gz_tbi,
-        output_prefix = output_prefix + ".id.split",
-        do_bcf = false
     }
 
     call ConcatVcfs.ConcatVcfs as ConcatPopped { input:
@@ -95,8 +94,8 @@ workflow PostprocessBubblePanel {
     }
 
     output {
-        File panel_id_split_vcf_gz = ConcatIdSplit.concatenated_vcf
-        File panel_id_split_vcf_gz_tbi = ConcatIdSplit.concatenated_vcf_idx
+        File panel_id_split_vcf_gz = ConvertToVcfGzIdSplit.vcf_gz
+        File panel_id_split_vcf_gz_tbi = ConvertToVcfGzIdSplit.vcf_gz_tbi
 
         File panel_popped_vcf = ConcatPopped.concatenated_vcf
         File panel_popped_vcf_idx = ConcatPopped.concatenated_vcf_idx
@@ -126,12 +125,57 @@ struct RuntimeAttr {
     String? docker
 }
 
+task ConvertToVcfGz {
+    input {
+        File vcf
+        File vcf_idx
+        String output_prefix
+
+        RuntimeAttr? runtime_attr_override
+    }
+
+    Int disk_gb = 10 + 2 * ceil(size(vcf, "GB"))
+
+    command <<<
+        set -euox pipefail
+
+        bcftools view ~{vcf} -W=tbi -Oz -o ~{output_prefix}.vcf.gz
+    >>>
+
+    output {
+        File vcf_gz = "~{output_prefix}.vcf.gz"
+        File vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          2,
+        mem_gb:             6,
+        disk_gb:            disk_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+    }
+}
+
 task PopBubblesPanel {
     input {
         File panel_bubble_vcf
         File panel_bubble_vcf_idx
-        File panel_id_split_vcf
-        File panel_id_split_vcf_idx
+        File panel_id_split_vcf_gz
+        File panel_id_split_vcf_gz_tbi
         File pop_python_script
         String region
         String output_prefix
@@ -139,21 +183,18 @@ task PopBubblesPanel {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 2 * ceil(size([panel_bubble_vcf, panel_id_split_vcf], "GB"))
+    Int disk_gb = 10 + 2 * ceil(size([panel_bubble_vcf, panel_id_split_vcf_gz], "GB"))
 
     command <<<
         set -euox pipefail
 
-        bcftools view -r ~{region} --regions-overlap 0 ~{panel_id_split_vcf} -G -W=tbi -Oz -o ~{output_prefix}.id.split.vcf.gz
         bcftools view -r ~{region} --regions-overlap 0 ~{panel_bubble_vcf} | \
-            pypy ~{pop_python_script} ~{output_prefix}.id.split.vcf.gz | \
+            pypy ~{pop_python_script} ~{panel_id_split_vcf_gz} | \
             bcftools sort -W=csi -Ob -o ~{output_prefix}.popped.bcf
         bcftools view ~{output_prefix}.popped.bcf -G -W=tbi -Ob -o ~{output_prefix}.popped.sites.bcf
     >>>
 
     output {
-        File id_split_vcf_gz = "~{output_prefix}.id.split.vcf.gz"
-        File id_split_vcf_gz_tbi = "~{output_prefix}.id.split.vcf.gz.tbi"
         File popped_vcf = "~{output_prefix}.popped.bcf"
         File popped_vcf_idx = "~{output_prefix}.popped.bcf.csi"
         File popped_sites_only_vcf = "~{output_prefix}.popped.sites.bcf"
