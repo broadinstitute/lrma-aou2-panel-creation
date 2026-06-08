@@ -20,7 +20,7 @@ workflow PostprocessBubblePanel {
     call ConvertToVcfGz as ConvertToVcfGzIdSplit { input:
         vcf = panel_id_split_vcf,
         vcf_idx = panel_id_split_vcf_idx,
-        output_prefix = output_prefix + ".id.split.sites"
+        output_prefix = output_prefix + ".id.split"
     }
 
     scatter (i in range(length(regions))) {
