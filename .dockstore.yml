@@ -42,6 +42,9 @@ workflows:
 - name: VcfdistEvaluation
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistEvaluation.wdl
+- name: GLIMPSE2Concordance
+  subclass: wdl
+  primaryDescriptorPath: /wdl/evaluation/imputation/GLIMPSE2Concordance.wdl
 - name: HierarchicallyMergeVcfs
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/HierarchicallyMergeVcfs.wdl
