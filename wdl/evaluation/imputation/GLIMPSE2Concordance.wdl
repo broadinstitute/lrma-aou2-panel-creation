@@ -15,28 +15,33 @@ workflow GLIMPSE2Concordance {
     Array[String] trh_bins = ["outTRH", "inTRH"]
     Array[String] length_bins = ["SV_DEL", "DEL", "SNP", "INS", "SV_INS"]
 
-    call AnnotateVcf {
-        input:
-            imputed_vcf = imputed_vcf,
-            imputed_vcf_idx = imputed_vcf_idx,
-            trh_bed = trh_bed,
-            trh_bed_idx = trh_bed_idx,
-            region = region,
-            output_prefix = output_prefix
+    call FillTagsPanel {input:
+        panel_vcf = panel_vcf,
+        panel_vcf_idx = panel_vcf_idx,
+        region = region,
+        output_prefix = output_prefix
+    }
+
+    call AnnotateImputed { input:
+        imputed_vcf = imputed_vcf,
+        imputed_vcf_idx = imputed_vcf_idx,
+        trh_bed = trh_bed,
+        trh_bed_idx = trh_bed_idx,
+        region = region,
+        output_prefix = output_prefix
     }
 
     scatter (trh_bin in trh_bins) {
         scatter (length_bin in length_bins) {
-            call FilterAndConcordance {
-                input:
-                    annotated_bcf = AnnotateVcf.annotated_bcf,
-                    annotated_bcf_index = AnnotateVcf.annotated_bcf_index,
-                    panel_vcf = panel_vcf,
-                    panel_vcf_idx = panel_vcf_idx,
-                    trh_bin = trh_bin,
-                    length_bin = length_bin,
-                    region = region,
-                    output_prefix = output_prefix + "." + trh_bin + "." + length_bin
+            call FilterAndConcordance { input:
+                annotated_bcf = AnnotateImputed.annotated_vcf,
+                annotated_bcf_index = AnnotateImputed.annotated_vcf_idx,
+                panel_vcf = FillTagsPanel.filled_vcf,
+                panel_vcf_idx = FillTagsPanel.filled_vcf_idx,
+                trh_bin = trh_bin,
+                length_bin = length_bin,
+                region = region,
+                output_prefix = output_prefix + "." + trh_bin + "." + length_bin
             }
         }
     }
@@ -44,13 +49,12 @@ workflow GLIMPSE2Concordance {
     Array[File] all_rsquare_files = flatten(flatten(FilterAndConcordance.rsquare_files))
     Array[File] all_error_files = flatten(flatten(FilterAndConcordance.error_files))
 
-    call PlotResults {
-        input:
-            rsquare_files = all_rsquare_files,
-            error_files = all_error_files,
-            output_prefix = output_prefix,
-            panel_name = basename(panel_vcf),
-            imputed_name = basename(imputed_vcf)
+    call PlotResults { input:
+        rsquare_files = all_rsquare_files,
+        error_files = all_error_files,
+        output_prefix = output_prefix,
+        panel_name = basename(panel_vcf),
+        imputed_name = basename(imputed_vcf)
     }
 
     output {
@@ -72,7 +76,56 @@ struct RuntimeAttr {
     String? docker
 }
 
-task AnnotateVcf {
+task FillTagsPanel {
+    input {
+        File panel_vcf
+        File panel_vcf_idx
+        String region
+        String output_prefix
+
+        RuntimeAttr? runtime_attr_override
+    }
+
+    Int disk_gb = 10 + 3 * ceil(size(panel_vcf, "GiB"))
+
+    command <<<
+        set -euox pipefail
+        
+        bcftools +fill-tags ~{panel_vcf} \
+            --threads $(nproc) \
+            -r ~{region} \
+            --write-index=csi -Ob -o ~{output_prefix}.panel.fill.bcf -- -t AC,AN,AF
+    >>>
+
+    output {
+        File filled_vcf = "~{output_prefix}.panel.fill.bcf"
+        File filled_vcf_idx = "~{output_prefix}.panel.fill.bcf.csi"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          2,
+        mem_gb:             8,
+        disk_gb:            disk_gb,
+        boot_disk_gb:       10,
+        disk_type:          "SSD",
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type])
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+    }
+}
+
+task AnnotateImputed {
     input {
         File imputed_vcf
         File imputed_vcf_idx
@@ -93,17 +146,17 @@ task AnnotateVcf {
             --threads $(nproc) \
             -r ~{region} \
             -a ~{trh_bed} -c CHROM,FROM,TO -m +TRH \
-            --write-index=csi -Ob -o ~{output_prefix}.annotated.bcf
+            --write-index=csi -Ob -o ~{output_prefix}.imputed.annotated.bcf
     >>>
 
     output {
-        File annotated_bcf = "~{output_prefix}.annotated.bcf"
-        File annotated_bcf_index = "~{output_prefix}.annotated.bcf.csi"
+        File annotated_vcf = "~{output_prefix}.imputed.annotated.bcf"
+        File annotated_vcf_idx = "~{output_prefix}.imputed.annotated.bcf.csi"
     }
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          4,
+        cpu_cores:          2,
         mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
