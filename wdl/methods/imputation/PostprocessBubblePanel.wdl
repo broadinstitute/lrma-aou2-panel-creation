@@ -6,8 +6,8 @@ workflow PostprocessBubblePanel {
     input {
         File panel_bubble_vcf
         File panel_bubble_vcf_idx
-        File panel_id_split_vcf
-        File panel_id_split_vcf_idx
+        File panel_id_split_vcf_gz
+        File panel_id_split_vcf_gz_tbi
         File reference_fasta_fai
         Array[String] regions
         Array[String]? leave_out_samples
@@ -21,8 +21,8 @@ workflow PostprocessBubblePanel {
         call PopBubblesPanel { input:
             panel_bubble_vcf = panel_bubble_vcf,
             panel_bubble_vcf_idx = panel_bubble_vcf_idx,
-            panel_id_split_vcf = panel_id_split_vcf,
-            panel_id_split_vcf_idx = panel_id_split_vcf_idx,
+            panel_id_split_vcf_gz = panel_id_split_vcf_gz,
+            panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
             pop_python_script = pop_python_script,
             region = regions[i],
             output_prefix = output_prefix + ".region-" + i
@@ -130,8 +130,8 @@ task PopBubblesPanel {
     input {
         File panel_bubble_vcf
         File panel_bubble_vcf_idx
-        File panel_id_split_vcf
-        File panel_id_split_vcf_idx
+        File panel_id_split_vcf_gz
+        File panel_id_split_vcf_gz_tbi
         File pop_python_script
         String region
         String output_prefix
@@ -139,14 +139,13 @@ task PopBubblesPanel {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 2 * ceil(size([panel_bubble_vcf, panel_id_split_vcf], "GB"))
+    Int disk_gb = 10 + 2 * ceil(size([panel_bubble_vcf, panel_id_split_vcf_gz], "GB"))
 
     command <<<
         set -euox pipefail
 
-        bcftools view -r ~{region} --regions-overlap 0 ~{panel_id_split_vcf} -G -W=tbi -Oz -o ~{output_prefix}.id.split.vcf.gz
         bcftools view -r ~{region} --regions-overlap 0 ~{panel_bubble_vcf} | \
-            pypy ~{pop_python_script} ~{output_prefix}.id.split.vcf.gz | \
+            pypy ~{pop_python_script} ~{panel_id_split_vcf_gz} | \
             bcftools sort -W=csi -Ob -o ~{output_prefix}.popped.bcf
         bcftools view ~{output_prefix}.popped.bcf -G -W=tbi -Ob -o ~{output_prefix}.popped.sites.bcf
     >>>
