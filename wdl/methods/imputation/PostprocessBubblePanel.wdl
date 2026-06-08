@@ -51,6 +51,12 @@ workflow PostprocessBubblePanel {
         output_prefix = output_prefix + ".popped"
     }
 
+    call ConcatVcfs.ConcatVcfs as ConcatPoppedSitesOnly { input:
+        vcfs = PopBubblesPanel.popped_sites_only_vcf,
+        vcf_idxs = PopBubblesPanel.popped_sites_only_vcf_idx,
+        output_prefix = output_prefix + ".popped.sites"
+    }
+
     call ConcatVcfs.ConcatVcfs as ConcatBubbleSplit { input:
         vcfs = SplitBubblesPanel.split_bubbles_vcf,
         vcf_idxs = SplitBubblesPanel.split_bubbles_vcf_idx,
@@ -91,12 +97,17 @@ workflow PostprocessBubblePanel {
     output {
         File panel_id_split_vcf_gz = ConcatIdSplit.concatenated_vcf
         File panel_id_split_vcf_gz_tbi = ConcatIdSplit.concatenated_vcf_idx
+
         File panel_popped_vcf = ConcatPopped.concatenated_vcf
         File panel_popped_vcf_idx = ConcatPopped.concatenated_vcf_idx
+        File panel_popped_sites_only_vcf = ConcatPoppedSitesOnly.concatenated_vcf
+        File panel_popped_sites_only_vcf_idx = ConcatPoppedSitesOnly.concatenated_vcf_idx
+
         File panel_bubble_split_vcf = ConcatBubbleSplit.concatenated_vcf
         File panel_bubble_split_vcf_idx = ConcatBubbleSplit.concatenated_vcf_idx
         File panel_bubble_split_sites_only_vcf = ConcatBubbleSplitSitesOnly.concatenated_vcf
         File panel_bubble_split_sites_only_vcf_idx = ConcatBubbleSplitSitesOnly.concatenated_vcf_idx
+
         File? panel_bubble_split_leaveout_vcf = ConcatBubbleSplitLeaveOut.concatenated_vcf
         File? panel_bubble_split_leaveout_vcf_idx = ConcatBubbleSplitLeaveOut.concatenated_vcf_idx
         File? panel_bubble_split_sites_only_leaveout_vcf = ConcatBubbleSplitSitesOnlyLeaveOut.concatenated_vcf
@@ -137,6 +148,7 @@ task PopBubblesPanel {
         bcftools view -r ~{region} --regions-overlap 0 ~{panel_bubble_vcf} | \
             pypy ~{pop_python_script} ~{output_prefix}.id.split.vcf.gz | \
             bcftools sort -W=csi -Ob -o ~{output_prefix}.popped.bcf
+        bcftools view ~{output_prefix}.popped.bcf -G -W=tbi -Ob -o ~{output_prefix}.popped.sites.bcf
     >>>
 
     output {
@@ -144,6 +156,8 @@ task PopBubblesPanel {
         File id_split_vcf_gz_tbi = "~{output_prefix}.id.split.vcf.gz.tbi"
         File popped_vcf = "~{output_prefix}.popped.bcf"
         File popped_vcf_idx = "~{output_prefix}.popped.bcf.csi"
+        File popped_sites_only_vcf = "~{output_prefix}.popped.sites.bcf"
+        File popped_sites_only_vcf_idx = "~{output_prefix}.popped.sites.bcf.csi"
     }
 
     #########################
