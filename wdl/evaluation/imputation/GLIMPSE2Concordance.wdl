@@ -46,12 +46,15 @@ workflow GLIMPSE2Concordance {
         }
     }
 
-    Array[File] all_rsquare_files = flatten(flatten(FilterAndConcordance.rsquare_files))
-    Array[File] all_error_files = flatten(flatten(FilterAndConcordance.error_files))
+    Array[File] all_rsquare_grp_files = flatten(flatten(FilterAndConcordance.rsquare_grp_files))
+    Array[File] all_rsquare_spl_files = flatten(flatten(FilterAndConcordance.rsquare_spl_files))
+    Array[File] all_error_grp_files = flatten(flatten(FilterAndConcordance.error_grp_files))
+    Array[File] all_error_spl_files = flatten(flatten(FilterAndConcordance.error_spl_files))
+    Array[File] all_error_cal_files = flatten(flatten(FilterAndConcordance.error_cal_files))
 
     call PlotResults { input:
-        rsquare_files = all_rsquare_files,
-        error_files = all_error_files,
+        rsquare_grp_files = all_rsquare_grp_files,
+        error_spl_files = all_error_spl_files,
         output_prefix = output_prefix,
         panel_name = basename(panel_vcf),
         imputed_name = basename(imputed_vcf)
@@ -62,6 +65,11 @@ workflow GLIMPSE2Concordance {
         File r2_plot_outTRH = PlotResults.r2_plot_outTRH
         File nrd_plot_inTRH = PlotResults.nrd_plot_inTRH
         File nrd_plot_outTRH = PlotResults.nrd_plot_outTRH
+        Array[File] rsquare_grp_files = all_rsquare_grp_files
+        Array[File] rsquare_spl_files = all_rsquare_spl_files
+        Array[File] error_grp_files = all_error_grp_files
+        Array[File] error_spl_files = all_error_spl_files
+        Array[File] error_cal_files = all_error_cal_files
     }
 }
 
@@ -233,8 +241,11 @@ task FilterAndConcordance {
     >>>
 
     output {
-        Array[File] rsquare_files = glob("*.rsquare.grp.txt.gz")
-        Array[File] error_files = glob("*.error.spl.txt.gz")
+        Array[File] rsquare_grp_files = glob("*.rsquare.grp.txt.gz")
+        Array[File] rsquare_spl_files = glob("*.rsquare.spl.txt.gz")
+        Array[File] error_grp_files = glob("*.error.grp.txt.gz")
+        Array[File] error_spl_files = glob("*.error.spl.txt.gz")
+        Array[File] error_cal_files = glob("*.error.cal.txt.gz")
     }
 
     #########################
@@ -262,8 +273,8 @@ task FilterAndConcordance {
 
 task PlotResults {
     input {
-        Array[File] rsquare_files
-        Array[File] error_files
+        Array[File] rsquare_grp_files
+        Array[File] error_spl_files
         String output_prefix
         String panel_name
         String imputed_name
@@ -271,7 +282,7 @@ task PlotResults {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + ceil(size(rsquare_files, "GiB") + size(error_files, "GiB"))
+    Int disk_gb = 10 + ceil(size(rsquare_grp_files, "GiB") + size(error_spl_files, "GiB"))
 
     command <<<
         set -euox pipefail
@@ -405,7 +416,7 @@ task PlotResults {
             plt.close()
         EOF
 
-        python3 plot_script.py "~{sep=',' rsquare_files}" "~{sep=',' error_files}" "~{panel_name}" "~{imputed_name}"
+        python3 plot_script.py "~{sep=',' rsquare_grp_files}" "~{sep=',' error_spl_files}" "~{panel_name}" "~{imputed_name}"
     >>>
 
     output {
