@@ -366,7 +366,7 @@ task GLIMPSE2Phase {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 10 + 2 * ceil(size([input_vcf, panel_split_chunk_bin], "GB"))
+    Int disk_size_gb = 10 + 3 * ceil(size([input_vcf, panel_split_chunk_bin], "GB"))
 
     command {
         set -euxo pipefail
