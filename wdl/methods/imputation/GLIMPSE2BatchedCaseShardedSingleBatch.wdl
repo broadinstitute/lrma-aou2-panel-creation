@@ -25,7 +25,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         String? preprocess_view_extra_args
         String? remap_simple_bubble_likelihoods_extra_args
 
-        # inputs for PopAndMarkCollisions
+        # inputs for PopAndMarginalizeCollisions
         File panel_bubble_split_sites_only_vcf
         File panel_bubble_split_sites_only_vcf_idx
         File panel_id_split_vcf_gz
@@ -104,7 +104,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     }
 
     scatter (k in range(length(output_regions_))) {
-        call PopAndMarkCollisions { input:
+        call PopAndMarginalizeCollisions { input:
             posteriors_vcf = GLIMPSE2Ligate.ligated_vcf_gz,
             posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_gz_tbi,
             panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
@@ -118,9 +118,9 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         }
     }
     
-    call ConcatVcfs.ConcatVcfs as ConcatPopAndMarkCollisions { input:
-        vcfs = PopAndMarkCollisions.popped_vcf_gz,
-        vcf_idxs = PopAndMarkCollisions.popped_vcf_gz_tbi,
+    call ConcatVcfs.ConcatVcfs as ConcatPopAndMarginalizeCollisions { input:
+        vcfs = PopAndMarginalizeCollisions.popped_vcf_gz,
+        vcf_idxs = PopAndMarginalizeCollisions.popped_vcf_gz_tbi,
         output_prefix = output_prefix + ".glimpse2.popped",
         do_bcf = false
     }
@@ -131,8 +131,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         Array[File] panel_split_chunk_bins = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin
         File glimpse2_bubble_posteriors_vcf_gz = GLIMPSE2Ligate.ligated_vcf_gz
         File glimpse2_bubble_posteriors_vcf_gz_tbi = GLIMPSE2Ligate.ligated_vcf_gz_tbi
-        File glimpse2_popped_posteriors_vcf_gz = ConcatPopAndMarkCollisions.concatenated_vcf
-        File glimpse2_popped_posteriors_vcf_gz_tbi = ConcatPopAndMarkCollisions.concatenated_vcf_idx
+        File glimpse2_popped_posteriors_vcf_gz = ConcatPopAndMarginalizeCollisions.concatenated_vcf
+        File glimpse2_popped_posteriors_vcf_gz_tbi = ConcatPopAndMarginalizeCollisions.concatenated_vcf_idx
     }
 }
 
@@ -474,7 +474,7 @@ task GLIMPSE2Ligate {
 }
 
 
-task PopAndMarkCollisions {
+task PopAndMarginalizeCollisions {
     input {
         # all VCFs should be split to biallelic
         File posteriors_vcf
