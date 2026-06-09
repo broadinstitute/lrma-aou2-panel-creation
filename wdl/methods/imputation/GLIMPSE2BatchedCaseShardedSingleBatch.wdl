@@ -121,7 +121,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     call ConcatVcfs.ConcatVcfs as ConcatPopAndMarkCollisions { input:
         vcfs = PopAndMarkCollisions.popped_vcf_gz,
         vcf_idxs = PopAndMarkCollisions.popped_vcf_gz_tbi,
-        output_prefix = output_prefix + ".popped",
+        output_prefix = output_prefix + ".glimpse2.popped",
         do_bcf = false
     }
 
@@ -497,7 +497,7 @@ task PopAndMarkCollisions {
         set -euox pipefail
 
         mkdir -p pop-glimpse2/src/bin
-        cp ~{pop_glimpse2_script} pop-glimpse2/src/bin/pop-glimpse2-max-gp.rs
+        cp ~{pop_glimpse2_script} pop-glimpse2/src/bin/pop-glimpse2.rs
         cp ~{cargo_toml} pop-glimpse2
         cd pop-glimpse2
         cargo build --release
@@ -506,7 +506,7 @@ task PopAndMarkCollisions {
         # annotate bubble IDs; TODO use a sites-only instead of panel_bubble_split_vcf
         bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_sites_only_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
-        ./pop-glimpse2/target/release/pop-glimpse2-max-gp ~{panel_id_split_vcf_gz} | \
+        ./pop-glimpse2/target/release/pop-glimpse2 ~{panel_id_split_vcf_gz} | \
         bcftools sort -W=tbi -Oz -o ~{output_prefix}.vcf.gz
     >>>
 
