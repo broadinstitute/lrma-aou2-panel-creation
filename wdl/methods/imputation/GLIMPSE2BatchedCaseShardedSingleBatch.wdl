@@ -408,8 +408,7 @@ task GLIMPSE2Phase {
         use_ssd:            true,
         preemptible_tries:  9,
         max_retries:        1,
-        docker:             docker,
-        checkpointFile: "~{output_prefix}.checkpoint.bin"
+        docker:             docker
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -420,6 +419,7 @@ task GLIMPSE2Phase {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        checkpointFile:         "~{output_prefix}.checkpoint.bin"
     }
 }
 
