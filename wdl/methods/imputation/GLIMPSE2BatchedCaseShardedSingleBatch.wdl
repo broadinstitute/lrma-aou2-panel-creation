@@ -379,8 +379,8 @@ task GLIMPSE2Phase {
                 --output ~{output_prefix}.raw.bcf \
                 --checkpoint-file-out ~{output_prefix}.checkpoint.bin"
 
-        if [ -s "~{output_prefix}.checkpoint.bin" ]; then
-            cmd="$cmd --checkpoint-file-in ~{output_prefix}.checkpoint.bin" 
+        if [ -s "checkpoint.bin" ]; then
+            cmd="$cmd --checkpoint-file-in checkpoint.bin" 
         fi
 
         eval "$cmd"
@@ -419,7 +419,7 @@ task GLIMPSE2Phase {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-        checkpointFile:         "~{output_prefix}.checkpoint.bin"
+        checkpointFile:         "checkpoint.bin"
     }
 }
 
