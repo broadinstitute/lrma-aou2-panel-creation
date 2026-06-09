@@ -377,7 +377,7 @@ task GLIMPSE2Phase {
                 --thread $(nproc) \
                 ~{extra_phase_args} \
                 --output ~{output_prefix}.raw.bcf \
-                --checkpoint-file-out ~{output_prefix}.checkpoint.bin"
+                --checkpoint-file-out checkpoint.bin"
 
         if [ -s "checkpoint.bin" ]; then
             cmd="$cmd --checkpoint-file-in checkpoint.bin" 
