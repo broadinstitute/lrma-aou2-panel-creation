@@ -159,6 +159,7 @@ task FilterAndConcordance {
 
         bcftools view ~{annotated_bcf} \
             -i "$TRH_EXP & $LEN_EXP" \
+            --threads $(nproc) \
             --write-index=csi -Ob -o ~{output_prefix}.bcf
 
         echo "~{region} ~{panel_vcf} ~{panel_vcf} ~{output_prefix}.bcf" > ~{output_prefix}.concordance-input.txt
