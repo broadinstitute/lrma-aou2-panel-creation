@@ -6,7 +6,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     input {
         File input_vcf
         File input_vcf_idx
-        Array[String] sample_names = []     # empty list to select all
+        File? sample_names_file     # omit to select all samples
 
         String chromosome
         File genetic_maps_tsv
@@ -37,6 +37,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     }
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
+    Array[String] sample_names = if(defined(sample_names_file)) then read_lines(select_first([sample_names_file])) else []     # empty list to select all samples
 
     call GLIMPSE2Chunk {
         input:
