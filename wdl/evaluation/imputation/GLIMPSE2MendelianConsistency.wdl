@@ -13,8 +13,8 @@ struct RuntimeAttr {
 
 workflow MendelianConsistency {
     input {
-        File panel_vcf      # split to biallelic
-        File panel_vcf_idx
+        File panel_sites_only_vcf      # split to biallelic
+        File panel_sites_only_vcf_idx
         File imputed_vcf    # split to biallelic, variants in same order as in panel
         File imputed_vcf_idx
         File trh_bed
@@ -24,8 +24,8 @@ workflow MendelianConsistency {
     }
 
     call AnnotateVcf { input:
-        panel_vcf = panel_vcf,
-        panel_vcf_idx = panel_vcf_idx,
+        panel_sites_only_vcf = panel_sites_only_vcf,
+        panel_sites_only_vcf_idx = panel_sites_only_vcf_idx,
         imputed_vcf = imputed_vcf,
         imputed_vcf_idx = imputed_vcf_idx,
         trh_bed = trh_bed,
@@ -52,8 +52,8 @@ workflow MendelianConsistency {
 
 task AnnotateVcf {
     input {
-        File panel_vcf
-        File panel_vcf_idx
+        File panel_sites_only_vcf
+        File panel_sites_only_vcf_idx
         File imputed_vcf
         File imputed_vcf_idx
         File trh_bed
@@ -63,14 +63,14 @@ task AnnotateVcf {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 20 + ceil(size(panel_vcf, "GiB") + size(imputed_vcf, "GiB") * 3)
+    Int disk_gb = 20 + ceil(size(panel_sites_only_vcf, "GiB") + size(imputed_vcf, "GiB") * 3)
 
     command <<<
         set -euxo pipefail
 
         # Symlink indices to ensure they are co-localized
-        ln -s ~{panel_vcf} panel.vcf.gz
-        ln -s ~{panel_vcf_idx} panel.vcf.gz.tbi
+        ln -s ~{panel_sites_only_vcf} panel.vcf.gz
+        ln -s ~{panel_sites_only_vcf_idx} panel.vcf.gz.tbi
         ln -s ~{imputed_vcf} imputed.vcf.gz
         ln -s ~{imputed_vcf_idx} imputed.vcf.gz.tbi
         ln -s ~{trh_bed} trh.bed.gz
