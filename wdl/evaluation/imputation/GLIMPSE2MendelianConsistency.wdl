@@ -13,7 +13,7 @@ struct RuntimeAttr {
 
 workflow MendelianConsistency {
     input {
-        File panel_sites_only_vcf      # split to biallelic
+        File panel_sites_only_vcf       # split to biallelic
         File panel_sites_only_vcf_idx
         File imputed_vcf                # split to biallelic, variants in same order as in panel
         File imputed_vcf_idx
@@ -67,12 +67,12 @@ task AnnotateVcf {
 
         # 1. Annotate Panel VCF with TRH
         echo "Annotating Panel VCF with TRH regions..."
-        bcftools annotate -a ~{trh_bed}##idx##~{trh_bed_idx} -c CHROM,FROM,TO -m +TRH \
+        bcftools annotate -a ~{trh_bed}##idx##~{trh_bed_idx} -c CHROM,FROM,TO -m +TRH --threads $(nproc) \
             ~{panel_sites_only_vcf}##idx##~{panel_sites_only_vcf_idx} -W -Ob -o panel.trh.bcf
 
         # 2. Transfer panel AF and TRH tags to Imputed VCF 
         echo "Transferring panel AF and TRH annotations to Imputed VCF..."
-        bcftools annotate -a panel.trh.bcf -c INFO/AF,INFO/TRH \
+        bcftools annotate -a panel.trh.bcf -c INFO/AF,INFO/TRH --threads $(nproc) \
             ~{imputed_vcf}##idx##~{imputed_vcf_idx} -W -Ob -o ~{output_prefix}.annotated.bcf
     >>>
 
