@@ -2,9 +2,9 @@ version 1.0
 
 workflow GLIMPSE2Concordance {
     input {
-        File panel_vcf
+        File panel_vcf          # split to biallelic
         File panel_vcf_idx
-        File imputed_vcf
+        File imputed_vcf        # split to biallelic
         File imputed_vcf_idx
         File trh_bed
         File trh_bed_idx

@@ -45,6 +45,9 @@ workflows:
 - name: GLIMPSE2Concordance
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/imputation/GLIMPSE2Concordance.wdl
+- name: GLIMPSE2MendelianConsistency
+  subclass: wdl
+  primaryDescriptorPath: /wdl/evaluation/imputation/GLIMPSE2MendelianConsistency.wdl
 - name: HierarchicallyMergeVcfs
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/HierarchicallyMergeVcfs.wdl

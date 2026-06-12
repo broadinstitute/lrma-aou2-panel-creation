@@ -51,9 +51,32 @@ fn main() -> Result<()> {
         }
     };
 
-    let panel_path = args.next().unwrap();
-    let input_path = args.next().unwrap();
+    // --- MINIMAL CHANGE: Silent Custom Index Adapter ---
+    let handle_custom_index = |arg: String| -> Result<String> {
+        if let Some(pos) = arg.find("##idx##") {
+            let vcf_path = &arg[..pos];
+            let idx_path = &arg[pos + 7..];
+            
+            let expected_idx = if idx_path.ends_with(".tbi") {
+                format!("{}.tbi", vcf_path)
+            } else {
+                format!("{}.csi", vcf_path)
+            };
+
+            if !std::path::Path::new(&expected_idx).exists() {
+                std::os::unix::fs::symlink(idx_path, &expected_idx)
+                    .with_context(|| format!("Failed to symlink custom index {} to {}", idx_path, expected_idx))?;
+            }
+            Ok(vcf_path.to_string())
+        } else {
+            Ok(arg)
+        }
+    };
+
+    let panel_path = handle_custom_index(args.next().unwrap())?;
+    let input_path = handle_custom_index(args.next().unwrap())?;
     let out_path = args.next().unwrap();
+    // --------------------------------------------------
 
     let mut region_str: Option<String> = None;
     let mut samples_file: Option<String> = None;
