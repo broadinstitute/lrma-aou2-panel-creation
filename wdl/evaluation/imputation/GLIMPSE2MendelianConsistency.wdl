@@ -15,7 +15,7 @@ workflow MendelianConsistency {
     input {
         File panel_sites_only_vcf      # split to biallelic
         File panel_sites_only_vcf_idx
-        File imputed_vcf    # split to biallelic, variants in same order as in panel
+        File imputed_vcf                # split to biallelic, variants in same order as in panel
         File imputed_vcf_idx
         File trh_bed
         File trh_bed_idx
@@ -65,28 +65,20 @@ task AnnotateVcf {
     command <<<
         set -euxo pipefail
 
-        # Symlink indices to ensure they are co-localized
-        ln -s ~{panel_sites_only_vcf} panel.vcf.gz
-        ln -s ~{panel_sites_only_vcf_idx} panel.vcf.gz.tbi
-        ln -s ~{imputed_vcf} imputed.vcf.gz
-        ln -s ~{imputed_vcf_idx} imputed.vcf.gz.tbi
-        ln -s ~{trh_bed} trh.bed.gz
-        ln -s ~{trh_bed_idx} trh.bed.gz.tbi
-
         # 1. Annotate Panel VCF with TRH
         echo "Annotating Panel VCF with TRH regions..."
-        bcftools annotate -a trh.bed.gz -c CHROM,FROM,TO -m +TRH \
-            panel.vcf.gz -W=tbi -Oz -o panel_trh.vcf.gz
+        bcftools annotate -a ~{trh_bed}##idx##~{trh_bed_idx} -c CHROM,FROM,TO -m +TRH \
+            ~{panel_sites_only_vcf}##idx##~{panel_sites_only_vcf_idx} -W -Ob -o panel_trh.bcf
 
-        # 2. Transfer AF and TRH tags to Imputed VCF 
-        echo "Transferring AF and TRH annotations to Imputed VCF..."
+        # 2. Transfer panel AF and TRH tags to Imputed VCF 
+        echo "Transferring panel AF and TRH annotations to Imputed VCF..."
         bcftools annotate -a panel_trh.vcf.gz -c INFO/AF,INFO/TRH \
-            imputed.vcf.gz -W=tbi -Oz -o ~{output_prefix}_annotated.vcf.gz
+            ~{imputed_vcf}##idx##~{imputed_vcf_idx} -W -Ob -o ~{output_prefix}.annotated.bcf
     >>>
 
     output {
-        File annotated_vcf = "~{output_prefix}_annotated.vcf.gz"
-        File annotated_vcf_idx = "~{output_prefix}_annotated.vcf.gz.tbi"
+        File annotated_vcf = "~{output_prefix}.annotated.bcf"
+        File annotated_vcf_idx = "~{output_prefix}.annotated.bcf.csi"
     }
 
     #########################
@@ -129,10 +121,6 @@ task CalculateMendelianConsistency {
     command <<<
         set -euxo pipefail
 
-        # Symlink to co-localize the VCF and index for cyvcf2
-        ln -s ~{annotated_vcf} annotated.vcf.gz
-        ln -s ~{annotated_vcf_idx} annotated.vcf.gz.tbi
-        
         # Install the dependencies for variant streaming and plotting (if using standard miniconda)
         conda install -y -c bioconda -c conda-forge cyvcf2 pandas numpy matplotlib seaborn
 
