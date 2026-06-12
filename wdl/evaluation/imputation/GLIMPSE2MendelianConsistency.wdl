@@ -371,7 +371,7 @@ task CalculateMendelianConsistency {
             plt.savefig(f'{output_prefix}.locus.{"inTRH" if in_trh else "outTRH"}.png')
         EOF
 
-        python3 mendelian.py "annotated.vcf.gz" "~{pedigree}" "~{output_prefix}" "~{chunk_size}"
+        python3 mendelian.py "~{annotated_vcf}" "~{pedigree}" "~{output_prefix}" "~{chunk_size}"
     >>>
 
     output {
