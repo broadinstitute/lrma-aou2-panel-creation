@@ -68,11 +68,11 @@ task AnnotateVcf {
         # 1. Annotate Panel VCF with TRH
         echo "Annotating Panel VCF with TRH regions..."
         bcftools annotate -a ~{trh_bed}##idx##~{trh_bed_idx} -c CHROM,FROM,TO -m +TRH \
-            ~{panel_sites_only_vcf}##idx##~{panel_sites_only_vcf_idx} -W -Ob -o panel_trh.bcf
+            ~{panel_sites_only_vcf}##idx##~{panel_sites_only_vcf_idx} -W -Ob -o panel.trh.bcf
 
         # 2. Transfer panel AF and TRH tags to Imputed VCF 
         echo "Transferring panel AF and TRH annotations to Imputed VCF..."
-        bcftools annotate -a panel_trh.bcf -c INFO/AF,INFO/TRH \
+        bcftools annotate -a panel.trh.bcf -c INFO/AF,INFO/TRH \
             ~{imputed_vcf}##idx##~{imputed_vcf_idx} -W -Ob -o ~{output_prefix}.annotated.bcf
     >>>
 
