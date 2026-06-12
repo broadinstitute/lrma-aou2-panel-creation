@@ -282,9 +282,9 @@ task PreprocessPLs {
 
     command {
         set -euxo pipefail
-        
-        mkdir -p extract-bubble-PLs/src/bin
-        cp ~{extract_bubble_likelihoods_script} extract-bubble-PLs/src/bin/main.rs
+
+        mkdir -p extract-bubble-PLs/src
+        cp ~{extract_bubble_likelihoods_script} extract-bubble-PLs/src/main.rs
         cp ~{cargo_toml} extract-bubble-PLs
         cd extract-bubble-PLs
         cargo build --release
@@ -295,6 +295,7 @@ task PreprocessPLs {
             ~{input_vcf} \
             ~{output_prefix}.bcf \
             --region ~{output_region} \
+            --samples ~{sample_names_list} \
             ~{extra_args}
         bcftools index ~{output_prefix}.bcf
 
