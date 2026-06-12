@@ -305,7 +305,7 @@ task CalculateMendelianConsistency {
                         mean_num_non_hom_ref = non_hom_ref_vt.sum(axis=0).mean()
                         
                         min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
-                        length_text = g * '\n' + f'$\langle N_{{l}} \rangle={mean_num_non_hom_ref:.2f}$' + ('\n\n\n' + length_bin_label if g == 1 else '')
+                        length_text = g * '\n' + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$' + ('\n\n\n' + length_bin_label if g == 1 else '')
                         
                         plt_df_values.extend([[min_tar_gp_label, length_text, error_rates_per_trio[t]] for t in range(num_complete_trios)])
                 
@@ -351,7 +351,7 @@ task CalculateMendelianConsistency {
                         mean_num_non_hom_ref_trios = valid_loci.sum(axis=1).mean()
                         
                         min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
-                        length_text = g * '\n\n' + f'$\langle N_{{t}} \rangle$={mean_num_non_hom_ref_trios:.2f}' + f'\n$N_{{l}}$={(~all_trios_hom_ref_v).sum()}' + ('\n\n\n\n' + length_bin_label if g == 1 else '')
+                        length_text = g * '\n\n' + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}' + f'\n$N_{{l}}$={(~all_trios_hom_ref_v).sum()}' + ('\n\n\n\n' + length_bin_label if g == 1 else '')
                         
                         plt_df_values.extend([[min_tar_gp_label, length_text, error_rates_per_locus[v]] for v in range(len(error_rates_per_locus))])
 
