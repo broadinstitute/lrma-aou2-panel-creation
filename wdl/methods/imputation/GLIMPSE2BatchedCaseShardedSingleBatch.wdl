@@ -291,8 +291,8 @@ task PreprocessPLs {
         cd ..
 
         ./extract-bubble-PLs/target/release/extract_bubble_PLs joint \
-            ~{panel_bubble_split_sites_only_vcf} \
-            ~{input_vcf} \
+            ~{panel_bubble_split_sites_only_vcf}##idx##~{panel_bubble_split_sites_only_vcf_idx} \
+            ~{input_vcf}##idx##~{input_vcf_idx} \
             ~{output_prefix}.bcf \
             --region ~{output_region} \
             --samples ~{sample_names_list} \
