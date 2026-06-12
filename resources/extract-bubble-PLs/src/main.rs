@@ -408,7 +408,11 @@ fn main() -> Result<()> {
         out_record.set_rid(Some(p_rid as u32));
         out_record.set_pos(p_pos);
         out_record.set_alleles(&[p_alleles[0], p_alleles[1]])?;
-        out_record.set_id(&p_rec.id())?; 
+        if let Ok(Some(info_ids)) = p_rec.info(b"ID").string() {
+            out_record.set_id(info_ids[0])?;
+        } else {
+            out_record.set_id(b".")?;
+        }
         out_record.push_genotypes(&out_gt)?;
         out_record.push_format_integer(b"PL", &out_pl)?;
         out_writer.write(&out_record)?;

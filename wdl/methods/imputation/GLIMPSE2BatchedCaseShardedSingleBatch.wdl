@@ -22,14 +22,14 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
         # inputs for PreprocessPLs
         File extract_bubble_likelihoods_script
-        File cargo_toml
+        File extract_bubble_likelihoods_cargo_toml
         String? extract_bubble_likelihoods_extra_args
 
         # inputs for PopAndMarginalizeCollisions
         File panel_id_split_vcf_gz
         File panel_id_split_vcf_gz_tbi
         File pop_glimpse2_script      # modified version of convert-to-biallelic.py
-        File cargo_toml
+        File pop_glimpse2_cargo_toml
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
     }
@@ -74,8 +74,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                 sample_names = sample_names,
                 output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
                 extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
-                cargo_toml = cargo_toml,
-                extract_bubble_likelihoods_extra_args = extract_bubble_likelihoods_extra_args
+                cargo_toml = extract_bubble_likelihoods_cargo_toml,
+                extra_args = extract_bubble_likelihoods_extra_args
         }
 
         call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
@@ -109,7 +109,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             panel_id_split_vcf_gz = panel_id_split_vcf_gz,
             panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
             pop_glimpse2_script = pop_glimpse2_script,
-            cargo_toml = cargo_toml,
+            cargo_toml = pop_glimpse2_cargo_toml,
             region = output_regions_[k],
             output_prefix = output_prefix + ".glimpse2.popped"
         }
@@ -271,7 +271,7 @@ task PreprocessPLs {
 
         File extract_bubble_likelihoods_script
         File cargo_toml
-        String? extract_bubble_likelihoods_extra_args = "--window 15000 --cap-pl 30 --scale-pl 5.0 --threads $(nproc)"
+        String? extra_args = "--window 15000 --cap-pl 30 --scale-pl 5.0 --threads $(nproc)"
 
         RuntimeAttr? runtime_attr_override
     }
@@ -295,7 +295,7 @@ task PreprocessPLs {
             ~{input_vcf} \
             ~{output_prefix}.bcf \
             --region ~{output_region} \
-            ~{extract_bubble_likelihoods_extra_args}
+            ~{extra_args}
         bcftools index ~{output_prefix}.bcf
 
         echo "Number of bubble alleles extracted..."
@@ -484,7 +484,6 @@ task PopAndMarginalizeCollisions {
         cargo build --release
         cd ..
 
-        # annotate bubble IDs; TODO use a sites-only instead of panel_bubble_split_vcf
         bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_sites_only_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
         ./pop-glimpse2/target/release/pop-glimpse2 ~{panel_id_split_vcf_gz} | \
