@@ -61,6 +61,7 @@ task SummarizeAndPlot {
 
         cat << 'EOF' > summarize.py
         import sys
+        import time
         import numpy as np
         import pandas as pd
         import cyvcf2
@@ -108,7 +109,7 @@ task SummarizeAndPlot {
             }
         }
 
-        def process_chunk(p_gt_arr, c_gt_arr, altlens):
+        def process_chunk(p_gt_types, c_gt_types, altlens):
             global altlen_all, panel_af_all, target_af_all
             
             altlen_all.extend(altlens)
@@ -116,28 +117,25 @@ task SummarizeAndPlot {
             is_sv_ins = l_arr >= 50
             is_sv_del = l_arr <= -50
 
-            for gt_arr, prefix, num_samples in [(p_gt_arr, 'panel', num_p_samples), (c_gt_arr, 'target', num_c_samples)]:
-                # Extract allele calls (ignoring phasing)
-                # Missing is -1, Ref is 0, Alt is 1
-                gt = gt_arr[:, :, :2]
-                
-                is_missing = (gt[:, :, 0] == -1) | (gt[:, :, 1] == -1)
-                is_het = (gt[:, :, 0] != gt[:, :, 1]) & ~is_missing
-                is_hom_ref = (gt[:, :, 0] == 0) & (gt[:, :, 1] == 0) & ~is_missing
-                is_hom_alt = (gt[:, :, 0] > 0) & (gt[:, :, 1] > 0) & (gt[:, :, 0] == gt[:, :, 1]) & ~is_missing
+            for gt, prefix in [(p_gt_types, 'panel'), (c_gt_types, 'target')]:
+                # In cyvcf2 gt_types: 0=HOM_REF, 1=HET, 2=UNKNOWN, 3=HOM_ALT
+                is_hom_ref = (gt == 0)
+                is_het = (gt == 1)
+                is_missing = (gt == 2)
+                is_hom_alt = (gt == 3)
 
                 # Calculate AF (total alt alleles / total valid alleles)
                 valid_alleles = np.sum(~is_missing, axis=1) * 2
-                alt_alleles = np.sum(gt == 1, axis=(1, 2))
+                alt_alleles = np.sum(is_het, axis=1) + 2 * np.sum(is_hom_alt, axis=1)
                 af = np.divide(alt_alleles, valid_alleles, out=np.zeros_like(alt_alleles, dtype=float), where=valid_alleles!=0)
                 
                 if prefix == 'panel':
                     panel_af_all.extend(af)
-                    panel_mean_alt_alleles_all.extend(np.mean((gt == 1).sum(axis=2), axis=1))
+                    panel_mean_alt_alleles_all.extend(np.mean(is_het * 1 + is_hom_alt * 2, axis=1))
                     hw_dict = panel_hwe
                 else:
                     target_af_all.extend(af)
-                    target_mean_alt_alleles_all.extend(np.mean((gt == 1).sum(axis=2), axis=1))
+                    target_mean_alt_alleles_all.extend(np.mean(is_het * 1 + is_hom_alt * 2, axis=1))
                     hw_dict = target_hwe
                     
                 # HWE Counts (per variant)
@@ -153,9 +151,10 @@ task SummarizeAndPlot {
                 sample_stats[prefix]['het_del'] += np.sum(is_het[is_sv_del, :], axis=0)
 
         # 3. Stream Variants Out-of-Core
-        print(f"Streaming variants in chunks of {chunk_size}...")
+        print(f"Streaming variants with chunk size {chunk_size}...", flush=True)
         p_gt_chunk, c_gt_chunk, altlen_chunk = [], [], []
         variants_processed = 0
+        start_time = time.time()
 
         for p_var, c_var in zip(panel_vcf, imputed_vcf):
             if p_var.POS != c_var.POS:
@@ -169,19 +168,22 @@ task SummarizeAndPlot {
             altlen = len(alt) - len(ref)
             altlen_chunk.append(altlen)
             
-            p_gt_chunk.append(p_var.genotypes)
-            c_gt_chunk.append(c_var.genotypes)
+            # Use native C-array gt_types (drastically faster than extracting tuple genotypes)
+            p_gt_chunk.append(p_var.gt_types)
+            c_gt_chunk.append(c_var.gt_types)
             
             if len(p_gt_chunk) >= chunk_size:
                 process_chunk(np.array(p_gt_chunk), np.array(c_gt_chunk), altlen_chunk)
+                variants_processed += len(p_gt_chunk)
+                elapsed = time.time() - start_time
+                print(f"Processed {variants_processed} variants in {elapsed:.2f}s ({variants_processed/elapsed:.2f} var/s)...", flush=True)
                 p_gt_chunk, c_gt_chunk, altlen_chunk = [], [], []
-                variants_processed += chunk_size
-                print(f"Processed {variants_processed} variants...")
 
         if len(p_gt_chunk) > 0:
             process_chunk(np.array(p_gt_chunk), np.array(c_gt_chunk), altlen_chunk)
             variants_processed += len(p_gt_chunk)
-            print(f"Finished processing {variants_processed} total variants.")
+            elapsed = time.time() - start_time
+            print(f"Finished processing {variants_processed} total variants in {elapsed:.2f}s.", flush=True)
 
         # Convert globals to numpy arrays for fast indexing
         panel_af = np.array(panel_af_all)
@@ -191,29 +193,35 @@ task SummarizeAndPlot {
         is_sv_del = altlen <= -50
 
         # 4. Pearson Correlations (TSV Output)
-        print("Calculating Pearson correlations...")
+        print("Calculating Pearson correlations...", flush=True)
         pearson_records = []
         
-        r_all, _ = pearsonr(panel_af, target_af)
+        # Helper to safely calculate pearsonr against edge-case 0-variance bins
+        def safe_pearson(x, y):
+            if len(x) > 1 and np.std(x) > 0 and np.std(y) > 0:
+                return pearsonr(x, y)[0]
+            return np.nan
+        
+        r_all = safe_pearson(panel_af, target_af)
         pearson_records.append({"VARIANT_TYPE": "ALL", "PEARSON_R": r_all})
             
-        if np.any(is_sv_ins):
-            r_ins, _ = pearsonr(panel_af[is_sv_ins], target_af[is_sv_ins])
+        if np.sum(is_sv_ins) > 1:
+            r_ins = safe_pearson(panel_af[is_sv_ins], target_af[is_sv_ins])
             pearson_records.append({"VARIANT_TYPE": "SV_INS", "PEARSON_R": r_ins})
                 
-        if np.any(is_sv_del):
-            r_del, _ = pearsonr(panel_af[is_sv_del], target_af[is_sv_del])
+        if np.sum(is_sv_del) > 1:
+            r_del = safe_pearson(panel_af[is_sv_del], target_af[is_sv_del])
             pearson_records.append({"VARIANT_TYPE": "SV_DEL", "PEARSON_R": r_del})
                 
         is_sv = is_sv_ins | is_sv_del
-        if np.any(is_sv):
-            r_sv, _ = pearsonr(panel_af[is_sv], target_af[is_sv])
+        if np.sum(is_sv) > 1:
+            r_sv = safe_pearson(panel_af[is_sv], target_af[is_sv])
             pearson_records.append({"VARIANT_TYPE": "SV", "PEARSON_R": r_sv})
 
         pd.DataFrame(pearson_records).to_csv(f'{output_prefix}.pearson.tsv', sep='\t', index=False)
 
         # 5. AF Hist2D Plots
-        print("Generating AF Hist2D Plots...")
+        print("Generating AF Hist2D Plots...", flush=True)
         def plot_hist2d(p_af, c_af, title, outfile):
             if len(p_af) == 0: return
             plt.figure()
@@ -233,7 +241,7 @@ task SummarizeAndPlot {
         plot_hist2d(panel_af[is_sv_del], target_af[is_sv_del], 'SV-length deletion bubbles', f'{output_prefix}-AF-SV-del')
 
         # 6. Sample Metrics & Boxplots
-        print("Generating population boxplots...")
+        print("Generating population boxplots...", flush=True)
         population_df = pd.read_csv(population_tsv_path, sep='\t')
 
         pop_color_dict = {
@@ -279,7 +287,7 @@ task SummarizeAndPlot {
         plot_boxplot(target_results_df, 'Heterozygous SV-length deletion bubbles per sample', 'Target', f'{output_prefix}-target-het-SV-del', [0, 500])
 
         # 7. ALT Length Weighted Histogram
-        print("Generating ALT Length Histogram...")
+        print("Generating ALT Length Histogram...", flush=True)
         bins = list(np.linspace(-10000, -100, 397)) + [-75, -50, -25, -1, -0.1, 0.1, 1, 25, 50, 75] + list(np.linspace(100, 10000, 397))
         plt.figure()
         plt.hist(altlen, bins=bins, label='AoU+HPRC2+HGSVC3', log=True, histtype='step', alpha=0.5, weights=panel_mean_alt_alleles_all)
@@ -295,7 +303,7 @@ task SummarizeAndPlot {
         plt.close()
 
         # 8. De Finetti Plots
-        print("Generating De Finetti Plots...")
+        print("Generating De Finetti Plots...", flush=True)
         ternary_to_cartesian = lambda a, b, c: (0.5 * (2 * b + c) / (a + b + c + 1E-10), 0.5 * np.sqrt(3) * c / (a + b + c + 1E-10))
 
         def calc_hwe_ternary(x, m=1, f=1):
@@ -376,10 +384,10 @@ task SummarizeAndPlot {
         plot_de_finetti(c_hwe_del['hom_ref'], c_hwe_del['hom_alt'], c_hwe_del['het'], 
                         'Target\nSV-length deletion bubbles', f'{output_prefix}-target-hwe-SV-del', gridsize=80)
 
-        print("All tasks completed successfully.")
+        print("All tasks completed successfully.", flush=True)
         EOF
 
-        python3 summarize.py "~{panel_vcf}" "~{imputed_vcf}" "~{population_tsv}" "~{output_prefix}" ~{chunk_size}
+        python3 summarize.py "~{panel_vcf}##idx##~{panel_vcf_idx}" "~{imputed_vcf}##idx##~{imputed_vcf_idx}" "~{population_tsv}" "~{output_prefix}" ~{chunk_size}
     >>>
 
     output {

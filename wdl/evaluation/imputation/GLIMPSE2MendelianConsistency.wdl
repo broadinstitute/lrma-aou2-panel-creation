@@ -126,6 +126,7 @@ task CalculateMendelianConsistency {
 
         cat << 'EOF' > mendelian.py
         import sys
+        import time
         import numpy as np
         import pandas as pd
         import cyvcf2
@@ -182,9 +183,9 @@ task CalculateMendelianConsistency {
             return chrom, af_bin, length_bin, bool(trh)
 
         def process_chunk(gt_arr, gp_arr, meta_list):
-            p_gt = gt_arr[:, s_idx, :]
-            f_gt = gt_arr[:, f_idx, :]
-            m_gt = gt_arr[:, m_idx, :]
+            p_gt = gt_arr[:, s_idx]
+            f_gt = gt_arr[:, f_idx]
+            m_gt = gt_arr[:, m_idx]
 
             gp_mask = (gp_arr >= 0.9)
             p_gp_mask = gp_mask[:, s_idx]
@@ -193,40 +194,57 @@ task CalculateMendelianConsistency {
 
             for gp_threshold in [0, 0.9]:
                 if gp_threshold > 0:
-                    p_gt_filt = np.where(p_gp_mask[:, :, None], p_gt, -1)
-                    f_gt_filt = np.where(f_gp_mask[:, :, None], f_gt, -1)
-                    m_gt_filt = np.where(m_gp_mask[:, :, None], m_gt, -1)
+                    p_gt_filt = np.where(p_gp_mask, p_gt, 2)
+                    f_gt_filt = np.where(f_gp_mask, f_gt, 2)
+                    m_gt_filt = np.where(m_gp_mask, m_gt, 2)
                 else:
                     p_gt_filt = p_gt
                     f_gt_filt = f_gt
                     m_gt_filt = m_gt
 
-                miss = np.any(p_gt_filt == -1, axis=2) | np.any(f_gt_filt == -1, axis=2) | np.any(m_gt_filt == -1, axis=2)
+                miss = (p_gt_filt == 2) | (f_gt_filt == 2) | (m_gt_filt == 2)
 
-                p0_in_f = (p_gt_filt[:,:,0] == f_gt_filt[:,:,0]) | (p_gt_filt[:,:,0] == f_gt_filt[:,:,1])
-                p1_in_m = (p_gt_filt[:,:,1] == m_gt_filt[:,:,0]) | (p_gt_filt[:,:,1] == m_gt_filt[:,:,1])
-                p0_in_m = (p_gt_filt[:,:,0] == m_gt_filt[:,:,0]) | (p_gt_filt[:,:,0] == m_gt_filt[:,:,1])
-                p1_in_f = (p_gt_filt[:,:,1] == f_gt_filt[:,:,0]) | (p_gt_filt[:,:,1] == f_gt_filt[:,:,1])
+                err_p0 = (p_gt_filt == 0) & ((f_gt_filt == 3) | (m_gt_filt == 3))
+                err_p3 = (p_gt_filt == 3) & ((f_gt_filt == 0) | (m_gt_filt == 0))
+                err_p1 = (p_gt_filt == 1) & (((f_gt_filt == 0) & (m_gt_filt == 0)) | ((f_gt_filt == 3) & (m_gt_filt == 3)))
 
-                valid_inheritance = (p0_in_f & p1_in_m) | (p0_in_m & p1_in_f)
-                errors = ~valid_inheritance & ~miss
+                errors = (err_p0 | err_p3 | err_p1) & ~miss
 
-                trio_gts = np.stack([p_gt_filt, f_gt_filt, m_gt_filt], axis=2)
-                has_miss = np.any(trio_gts == -1, axis=(2,3))
-                is_hom_ref = np.all(trio_gts == 0, axis=(2,3))
-                non_hom_ref = ~is_hom_ref & ~has_miss
+                is_hom_ref = (p_gt_filt == 0) & (f_gt_filt == 0) & (m_gt_filt == 0)
+                non_hom_ref = ~is_hom_ref & ~miss
 
+                # Memory Efficient Aggregation: Calculate rates for plotting on-the-fly
                 for i, meta in enumerate(meta_list):
                     key = meta
                     if key not in groups:
-                        groups[key] = {0: {'err': [], 'nhr': []}, 0.9: {'err': [], 'nhr': []}, 'count': 0}
+                        groups[key] = {
+                            0: {'trio_err': np.zeros(num_complete_trios), 'trio_nhr': np.zeros(num_complete_trios), 'locus_rates': [], 'locus_nhr': []}, 
+                            0.9: {'trio_err': np.zeros(num_complete_trios), 'trio_nhr': np.zeros(num_complete_trios), 'locus_rates': [], 'locus_nhr': []}, 
+                            'count': 0
+                        }
+
                     if gp_threshold == 0:
                         groups[key]['count'] += 1
-                    groups[key][gp_threshold]['err'].append(errors[i])
-                    groups[key][gp_threshold]['nhr'].append(non_hom_ref[i])
 
-        print(f"Streaming variants with chunk size {chunk_size}...")
+                    err_v = errors[i] & non_hom_ref[i]
+                    nhr_v = non_hom_ref[i]
+
+                    # Accumulate for Per Trio Plot (axis=0 sums)
+                    groups[key][gp_threshold]['trio_err'] += err_v
+                    groups[key][gp_threshold]['trio_nhr'] += nhr_v
+
+                    # Accumulate for Per Locus Plot (axis=1 sums)
+                    locus_nhr_sum = nhr_v.sum()
+                    if locus_nhr_sum > 0:
+                        locus_err_sum = err_v.sum()
+                        groups[key][gp_threshold]['locus_rates'].append(locus_err_sum / locus_nhr_sum)
+                        groups[key][gp_threshold]['locus_nhr'].append(locus_nhr_sum)
+
+        print(f"Streaming variants with chunk size {chunk_size}...", flush=True)
         gt_chunk, gp_chunk, meta_chunk = [], [], []
+        variants_processed = 0
+        start_time = time.time()
+
         for variant in vcf:
             chrom = variant.CHROM
             ref = variant.REF
@@ -240,124 +258,151 @@ task CalculateMendelianConsistency {
             if trh is None: trh = False
 
             meta = get_bins(chrom, ref, alt, af, trh)
-
-            gt_arr = np.array(variant.genotypes)[:, :2]
-            gt_chunk.append(gt_arr)
+            gt_chunk.append(variant.gt_types)
 
             gp = variant.format('GP')
             if gp is not None:
                 gp_max = np.max(gp, axis=1)
                 gp_chunk.append(gp_max)
             else:
-                gp_chunk.append(np.ones(len(samples)))
+                raise ValueError("FORMAT/GP is missing from the annotated VCF! Cannot build step plots.")
 
             meta_chunk.append(meta)
 
             if len(gt_chunk) >= chunk_size:
                 process_chunk(np.array(gt_chunk), np.array(gp_chunk), meta_chunk)
+                variants_processed += len(gt_chunk)
+                elapsed = time.time() - start_time
+                print(f"Processed {variants_processed} variants in {elapsed:.2f}s ({variants_processed/elapsed:.2f} var/s)...", flush=True)
                 gt_chunk, gp_chunk, meta_chunk = [], [], []
 
         if len(gt_chunk) > 0:
             process_chunk(np.array(gt_chunk), np.array(gp_chunk), meta_chunk)
+            variants_processed += len(gt_chunk)
+            elapsed = time.time() - start_time
+            print(f"Finished processing {variants_processed} total variants in {elapsed:.2f}s.", flush=True)
 
-        print("Assembling tables...")
+        print("Assembling tables...", flush=True)
+        mv_df_columns = ['CHROM', 'AF_BIN', 'LENGTH_BIN', 'IN_TRH', 'TRIO_ERR', 'TRIO_NHR', 'LOCUS_RATES', 'LOCUS_NHR', 'NUM_LOCI']
         mv_df_0, mv_df_09 = [], []
         for key, data in groups.items():
             chrom, af_bin, length_bin, in_trh = key
-            
-            err_0 = np.array(data[0]['err'])
-            nhr_0 = np.array(data[0]['nhr'])
-            mv_df_0.append([chrom, af_bin, length_bin, in_trh, err_0, nhr_0, data['count']])
 
-            err_09 = np.array(data[0.9]['err'])
-            nhr_09 = np.array(data[0.9]['nhr'])
-            mv_df_09.append([chrom, af_bin, length_bin, in_trh, err_09, nhr_09, data['count']])
+            err_0 = data[0]['trio_err']
+            nhr_0 = data[0]['trio_nhr']
+            l_rates_0 = np.array(data[0]['locus_rates'])
+            l_nhr_0 = np.array(data[0]['locus_nhr'])
+            mv_df_0.append([chrom, af_bin, length_bin, in_trh, err_0, nhr_0, l_rates_0, l_nhr_0, data['count']])
 
-        cols = ['CHROM', 'AF_BIN', 'LENGTH_BIN', 'IN_TRH', 'ERROR_VT', 'NON_HOM_REF_VT', 'NUM_LOCI']
-        df_0 = pd.DataFrame(mv_df_0, columns=cols)
-        df_09 = pd.DataFrame(mv_df_09, columns=cols)
+            err_09 = data[0.9]['trio_err']
+            nhr_09 = data[0.9]['trio_nhr']
+            l_rates_09 = np.array(data[0.9]['locus_rates'])
+            l_nhr_09 = np.array(data[0.9]['locus_nhr'])
+            mv_df_09.append([chrom, af_bin, length_bin, in_trh, err_09, nhr_09, l_rates_09, l_nhr_09, data['count']])
+
+        df_0 = pd.DataFrame(mv_df_0, columns=mv_df_columns)
+        df_09 = pd.DataFrame(mv_df_09, columns=mv_df_columns)
 
         df_0.to_pickle(f'{output_prefix}-unfiltered.pkl')
-        df_09.to_pickle(f'{output_prefix}-filtered-0.9.pkl')
+        df_09.to_pickle(f'{output_prefix}-filter-0.9.pkl')
 
-        print("Generating plots...")
+        print("Generating plots...", flush=True)
         length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[1, 50)', '[50, inf)']
         af_bin_labels = ['[0, 0.01)', '[0.01, 0.1)', '[0.1, 1]']
-        
+
+        # PER TRIO PLOTTING
         for in_trh in [False, True]:
             fig, ax = plt.subplots(3, 1, figsize=(9, 10))
-            trh_tag = 'non-TR/homopolymer' if not in_trh else 'TR/homopolymer'
+            trh_tag = 'all' if in_trh is None else ('non-TR/homopolymer' if not in_trh else 'TR/homopolymer')
             ax[0].set_title(f'{num_complete_trios} trios, {trh_tag}') 
 
             for i, af_bin_label in enumerate(af_bin_labels):
                 plt_df_values = []
                 for j, length_bin_label in enumerate(length_bin_labels):
                     for g, min_tar_gp in enumerate([0, 0.9]):
-                        df = df_0 if min_tar_gp == 0 else df_09
-                        bin_df = df[(df['IN_TRH'] == in_trh) & (df['AF_BIN'] == af_bin_label) & (df['LENGTH_BIN'] == length_bin_label)]
-                        
-                        if bin_df.empty: continue
-                        
-                        error_vt = np.concatenate(bin_df['ERROR_VT'].values)
-                        non_hom_ref_vt = np.concatenate(bin_df['NON_HOM_REF_VT'].values)
-
-                        error_rates_per_trio = (error_vt * non_hom_ref_vt).sum(axis=0) / np.maximum(non_hom_ref_vt.sum(axis=0), 1)
-                        mean_num_non_hom_ref = non_hom_ref_vt.sum(axis=0).mean()
-                        
                         min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
-                        length_text = g * '\n' + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$' + ('\n\n\n' + length_bin_label if g == 1 else '')
-                        
-                        plt_df_values.extend([[min_tar_gp_label, length_text, error_rates_per_trio[t]] for t in range(num_complete_trios)])
-                
+                        trio_err_values = []
+                        trio_nhr_values = []
+
+                        df = df_0 if min_tar_gp == 0 else df_09
+                        y_trh = (df['IN_TRH'] == in_trh) if in_trh is not None else True
+                        bin_df = df[y_trh & (df['AF_BIN'] == af_bin_label) & (df['LENGTH_BIN'] == length_bin_label)]
+
+                        if not bin_df.empty:
+                            trio_err_values.append(bin_df['TRIO_ERR'].values[0])
+                            trio_nhr_values.append(bin_df['TRIO_NHR'].values[0])
+
+                        if not trio_err_values: continue
+
+                        trio_err = np.sum(trio_err_values, axis=0)
+                        trio_nhr = np.sum(trio_nhr_values, axis=0)
+
+                        error_rates_per_trio = trio_err / trio_nhr
+                        mean_num_non_hom_ref = trio_nhr.mean()
+
+                        plt_df_values.extend(
+                            [[min_tar_gp_label, 
+                              g * '\n' + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$' + ('\n\n\n' + length_bin_label if g == 1 else ''), 
+                              error_rates_per_trio[t]] 
+                             for t in range(num_complete_trios)])
+
                 if not plt_df_values: continue
                 plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
-                sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=i==2)
+                sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=(i==2))
 
                 ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
-                ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n') + f'{af_bin_label}\n\n' + ('Mendelian error rate per trio' if i == 1 else ''))
+                ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n')
+                                 + f'{af_bin_label}\n\n' + ('Mendelian error rate per trio' if i == 1 else ''))
                 ax[i].set_yscale('symlog', linthresh=0.001)
                 ax[i].set_ylim([-1E-4, 1.001])
-                ax[i].set_yticks([k * 0.0001 for k in range(0, 10)] + [k * 0.001 for k in range(0, 10)] + [k * 0.01 for k in range(1, 10)] + [k * 0.1 for k in range(1, 11)])
+                ax[i].set_yticks([k * 0.0001 for k in range(0, 10)] + 
+                                 [k * 0.001 for k in range(0, 10)] + 
+                                 [k * 0.01 for k in range(1, 10)] + 
+                                 [k * 0.1 for k in range(1, 11)])
                 if i == 2:
                     handles, labels = ax[i].get_legend_handles_labels()
                     ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
             plt.tight_layout()
             plt.savefig(f'{output_prefix}.trio.{"inTRH" if in_trh else "outTRH"}.png')
 
+        # PER LOCUS PLOTTING
         for in_trh in [False, True]:
             fig, ax = plt.subplots(3, 1, figsize=(9, 12))
-            trh_tag = 'non-TR/homopolymer' if not in_trh else 'TR/homopolymer'
+            trh_tag = 'all' if in_trh is None else ('non-TR/homopolymer' if not in_trh else 'TR/homopolymer')
             ax[0].set_title(f'{num_complete_trios} trios, {trh_tag}')
-
             for i, af_bin_label in enumerate(af_bin_labels):
                 plt_df_values = []
                 for j, length_bin_label in enumerate(length_bin_labels):
                     for g, min_tar_gp in enumerate([0, 0.9]):
-                        df = df_0 if min_tar_gp == 0 else df_09
-                        bin_df = df[(df['IN_TRH'] == in_trh) & (df['AF_BIN'] == af_bin_label) & (df['LENGTH_BIN'] == length_bin_label)]
-                        
-                        if bin_df.empty: continue
-                        
-                        error_vt = np.concatenate(bin_df['ERROR_VT'].values)
-                        non_hom_ref_vt = np.concatenate(bin_df['NON_HOM_REF_VT'].values)
-
-                        all_trios_hom_ref_v = np.all(non_hom_ref_vt == 0, axis=1)
-                        valid_loci = non_hom_ref_vt[~all_trios_hom_ref_v]
-                        valid_errors = (error_vt * non_hom_ref_vt)[~all_trios_hom_ref_v]
-                        
-                        if len(valid_loci) == 0: continue
-
-                        error_rates_per_locus = valid_errors.sum(axis=1) / np.maximum(valid_loci.sum(axis=1), 1)
-                        mean_num_non_hom_ref_trios = valid_loci.sum(axis=1).mean()
-                        
                         min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
-                        length_text = g * '\n\n' + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}' + f'\n$N_{{l}}$={(~all_trios_hom_ref_v).sum()}' + ('\n\n\n\n' + length_bin_label if g == 1 else '')
-                        
+                        locus_rates_values = []
+                        locus_nhr_values = []
+
+                        df = df_0 if min_tar_gp == 0 else df_09
+                        y_trh = (df['IN_TRH'] == in_trh) if in_trh is not None else True
+                        bin_df = df[y_trh & (df['AF_BIN'] == af_bin_label) & (df['LENGTH_BIN'] == length_bin_label)]
+
+                        if not bin_df.empty:
+                            locus_rates_values.append(bin_df['LOCUS_RATES'].values[0])
+                            locus_nhr_values.append(bin_df['LOCUS_NHR'].values[0])
+
+                        if not locus_rates_values: continue
+
+                        error_rates_per_locus = np.concatenate(locus_rates_values)
+                        valid_loci_nhr = np.concatenate(locus_nhr_values)
+
+                        if len(error_rates_per_locus) == 0: continue
+
+                        mean_num_non_hom_ref_trios = valid_loci_nhr.mean()
+                        N_l = len(error_rates_per_locus)
+
+                        length_text = g * '\n\n' + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}' + f'\n$N_{{l}}$={N_l}' + ('\n\n\n\n' + length_bin_label if g == 1 else '')
+
                         plt_df_values.extend([[min_tar_gp_label, length_text, error_rates_per_locus[v]] for v in range(len(error_rates_per_locus))])
 
                 if not plt_df_values: continue
                 plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
-                sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=i==2)
+                sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=(i==2))
 
                 ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
                 ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n') + f'{af_bin_label}\n\n' + ('Mendelian error rate per locus' if i == 1 else ''))
@@ -371,7 +416,7 @@ task CalculateMendelianConsistency {
             plt.savefig(f'{output_prefix}.locus.{"inTRH" if in_trh else "outTRH"}.png')
         EOF
 
-        python3 mendelian.py "~{annotated_vcf}" "~{pedigree}" "~{output_prefix}" "~{chunk_size}"
+        python3 mendelian.py "~{annotated_vcf}##idx##~{annotated_vcf_idx}" "~{pedigree}" "~{output_prefix}" "~{chunk_size}"
     >>>
 
     output {
