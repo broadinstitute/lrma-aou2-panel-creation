@@ -12,6 +12,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File genetic_maps_tsv
         File panel_bubble_split_vcf          # "split" here means "split to biallelic"; "split" just below means "chunked"
         File panel_bubble_split_vcf_idx
+        File panel_bubble_split_sites_only_vcf
+        File panel_bubble_split_sites_only_vcf_idx
 
         String extra_chunk_args = "--thread $(nproc) --window-mb 5 --buffer-mb 0.5 --sequential"
         String extra_split_args = "--keep-monomorphic-ref-sites"
@@ -19,15 +21,11 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         String output_prefix
 
         # inputs for PreprocessPLs
-        File remap_simple_bubble_likelihoods_python_script
-        File swap_alleles_python_script
-        File? preprocess_regions_bed
-        String? preprocess_view_extra_args
-        String? remap_simple_bubble_likelihoods_extra_args
+        File extract_bubble_likelihoods_script
+        File cargo_toml
+        String? extract_bubble_likelihoods_extra_args
 
         # inputs for PopAndMarginalizeCollisions
-        File panel_bubble_split_sites_only_vcf
-        File panel_bubble_split_sites_only_vcf_idx
         File panel_id_split_vcf_gz
         File panel_id_split_vcf_gz_tbi
         File pop_glimpse2_script      # modified version of convert-to-biallelic.py
@@ -70,16 +68,14 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             input:
                 input_vcf = input_vcf,
                 input_vcf_idx = input_vcf_idx,
-                panel_bubble_split_vcf = panel_bubble_split_vcf,
-                panel_bubble_split_vcf_idx = panel_bubble_split_vcf_idx,
+                panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
+                panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
                 output_region = output_regions_[k],
                 sample_names = sample_names,
                 output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
-                remap_simple_bubble_likelihoods_python_script = remap_simple_bubble_likelihoods_python_script,
-                swap_alleles_python_script = swap_alleles_python_script,
-                preprocess_regions_bed = preprocess_regions_bed,
-                preprocess_view_extra_args = preprocess_view_extra_args,
-                remap_simple_bubble_likelihoods_extra_args = remap_simple_bubble_likelihoods_extra_args
+                extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
+                cargo_toml = cargo_toml,
+                extract_bubble_likelihoods_extra_args = extract_bubble_likelihoods_extra_args
         }
 
         call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
@@ -161,7 +157,7 @@ task GLIMPSE2Chunk {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size(vcf, "GB")) + 10
+    Int disk_size_gb = 10 + 2 * ceil(size(vcf, "GB"))
 
     command <<<
         set -euxo pipefail
@@ -220,7 +216,7 @@ task GLIMPSE2SplitReference {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size(panel_bubble_split_vcf, "GB")) + 10
+    Int disk_size_gb = 10 + 2 * ceil(size(panel_bubble_split_vcf, "GB"))
 
     command <<<
         set -euxo pipefail
@@ -267,59 +263,43 @@ task PreprocessPLs {
     input {
         File input_vcf
         File input_vcf_idx
-        File panel_bubble_split_vcf
-        File panel_bubble_split_vcf_idx
+        File panel_bubble_split_sites_only_vcf
+        File panel_bubble_split_sites_only_vcf_idx
         String output_region
         Array[String] sample_names
         String output_prefix
 
-        File remap_simple_bubble_likelihoods_python_script
-        File swap_alleles_python_script
-        File? preprocess_regions_bed
-        String? preprocess_view_extra_args
-        String? remap_simple_bubble_likelihoods_extra_args
+        File extract_bubble_likelihoods_script
+        File cargo_toml
+        String? extract_bubble_likelihoods_extra_args = "--window 15000 --cap-pl 30 --scale-pl 5.0 --threads $(nproc)"
 
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size([input_vcf, panel_bubble_split_vcf], "GB")) + 10
+    Int disk_size_gb = 10 + 2 * ceil(size([input_vcf, panel_bubble_split_sites_only_vcf], "GB"))
 
     File sample_names_list = write_lines(sample_names)
 
     command {
         set -euxo pipefail
+        
+        mkdir -p extract-bubble-PLs/src/bin
+        cp ~{extract_bubble_likelihoods_script} extract-bubble-PLs/src/bin/main.rs
+        cp ~{cargo_toml} extract-bubble-PLs
+        cd extract-bubble-PLs
+        cargo build --release
+        cd ..
 
-       # TODO add gcloud to Docker
-#        export GCS_OAUTH_TOKEN=$(gcloud auth application-default print-access-token)
+        ./extract-bubble-PLs/target/release/extract_bubble_PLs joint \
+            ~{panel_bubble_split_sites_only_vcf} \
+            ~{input_vcf} \
+            ~{output_prefix}.bcf \
+            --region ~{output_region} \
+            ~{extract_bubble_likelihoods_extra_args}
+        bcftools index ~{output_prefix}.bcf
 
-        # TODO stream; or, once shards are fixed, prepare beforehand?
-        bcftools view --no-version -G ~{panel_bubble_split_vcf}##idx##~{panel_bubble_split_vcf_idx} \
-            --regions-overlap pos -r ~{output_region} -Ou \
-            ~{"-T " + preprocess_regions_bed} \
-            ~{preprocess_view_extra_args} | \
-        bcftools norm -m+any -N \
-            --write-index=tbi -Oz -o panel.subset.sites.vcf.gz
-
-        echo "Number of sites to preprocess..."
-        bcftools index -n panel.subset.sites.vcf.gz
-
-        pypy -m pip install --no-input tqdm
-
-        # TODO stream
-        bcftools view ~{input_vcf}##idx##~{input_vcf_idx} \
-            -r ~{output_region} \
-            --regions-overlap pos \
-            ~{if length(sample_names) > 0 then "-S " + sample_names_list else ""} \
-            --threads 2 | \
-        pypy ~{remap_simple_bubble_likelihoods_python_script} \
-            --bubble panel.subset.sites.vcf.gz \
-            ~{remap_simple_bubble_likelihoods_extra_args} | \
-        bcftools +tag2tag -Ou -- --LPL-to-PL | \
-        bcftools norm -m-any -Ou | \
-        bcftools filter -i 'INFO/BMAP != "."' | \
-        pypy ~{swap_alleles_python_script} | \
-        bcftools annotate -x INFO/BMAP,INFO/BUBBLE,INFO/BPOS,INFO/BREF,INFO/BALT | \
-        bcftools sort --write-index=csi -Ob -o ~{output_prefix}.bcf
+        echo "Number of bubble alleles extracted..."
+        bcftools index -n ~{output_prefix}.bcf
     }
 
     output {
@@ -330,13 +310,13 @@ task PreprocessPLs {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          4,
-        mem_gb:             6,
+        mem_gb:             8,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-pypy:v1"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
