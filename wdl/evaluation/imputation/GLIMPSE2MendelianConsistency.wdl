@@ -41,12 +41,9 @@ workflow MendelianConsistency {
     }
 
     output {
-        File unfiltered_pkl = CalculateMendelianConsistency.unfiltered_pkl
-        File filtered_pkl = CalculateMendelianConsistency.filtered_pkl
-        File trio_plot_inTRH = CalculateMendelianConsistency.trio_plot_inTRH
-        File trio_plot_outTRH = CalculateMendelianConsistency.trio_plot_outTRH
-        File locus_plot_inTRH = CalculateMendelianConsistency.locus_plot_inTRH
-        File locus_plot_outTRH = CalculateMendelianConsistency.locus_plot_outTRH
+        Array[File] mendelian_pkls = [CalculateMendelianConsistency.unfiltered_pkl, CalculateMendelianConsistency.filtered_pkl]
+        Array[File] mendelian_plots = [CalculateMendelianConsistency.trio_plot_inTRH, CalculateMendelianConsistency.trio_plot_outTRH, 
+                                       CalculateMendelianConsistency.locus_plot_inTRH, CalculateMendelianConsistency.locus_plot_outTRH]
     }
 }
 
