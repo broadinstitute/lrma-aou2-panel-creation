@@ -152,7 +152,7 @@ task FilterAndConcordance {
         if [ "~{length_bin}" == "SV_DEL" ]; then LEN_EXP="(STRLEN(ALT)-STRLEN(REF) <= -50)"; fi
         if [ "~{length_bin}" == "DEL" ]; then LEN_EXP="((-50 < STRLEN(ALT)-STRLEN(REF)) && (STRLEN(ALT)-STRLEN(REF) <= -1))"; fi
         if [ "~{length_bin}" == "SNP" ]; then LEN_EXP="((STRLEN(REF) == 1) && (STRLEN(ALT) == 1))"; fi
-        if [ "~{length_bin}" == "INS" ]; then LEN_EXP="((1 <= STRLEN(ALT)-STRLEN(REF)) && (STRLEN(ALT)-STRLEN(REF) < 50))"; fi
+        if [ "~{length_bin}" == "INS" ]; then LEN_EXP="((STRLEN(REF) != 1) && (0 <= STRLEN(ALT)-STRLEN(REF)) && (STRLEN(ALT)-STRLEN(REF) < 50))"; fi
         if [ "~{length_bin}" == "SV_INS" ]; then LEN_EXP="(50 <= STRLEN(ALT)-STRLEN(REF))"; fi
 
         echo "Filtering with: $TRH_EXP & $LEN_EXP"
@@ -319,7 +319,7 @@ task PlotResults {
                     ax[i].set_xlabel(f'panel allele frequency\n\n{length_bin}\nALT length - REF length (bp)', fontsize=12)
                     ax[i].legend(loc='lower right', fontsize=8)
                 else:
-                    length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[1, 50)', 'SV_INS': '[50, inf)'}[length_bin]
+                    length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[0, 50)', 'SV_INS': '[50, inf)'}[length_bin]
                     ax[i].set_xlabel(f'\n\n{length_bin_label}', fontsize=12)
 
             plt.savefig(f'~{output_prefix}.{trh_bin}.r2.png', bbox_inches='tight')
@@ -333,7 +333,7 @@ task PlotResults {
             
             plt_df_values = []
             for length_bin in ['SV_DEL', 'DEL', 'SNP', 'INS', 'SV_INS']:
-                length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[1, 50)', 'SV_INS': '[50, inf)'}[length_bin]
+                length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[0, 50)', 'SV_INS': '[50, inf)'}[length_bin]
                 for min_tar_gp in [0.0, 0.9]:
                     min_tar_gp_label = 'unfiltered' if min_tar_gp == 0.0 else f'GP > {min_tar_gp}'
                     x = (sample_df['TRH_BIN'] == trh_bin) & (sample_df['LENGTH_BIN'] == length_bin) & (sample_df['MIN_TAR_GP'] == min_tar_gp)
