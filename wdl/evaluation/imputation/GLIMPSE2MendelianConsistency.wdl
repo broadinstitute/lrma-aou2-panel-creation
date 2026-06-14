@@ -122,7 +122,7 @@ task CalculateMendelianConsistency {
         set -euxo pipefail
 
         # Install the dependencies for variant streaming and plotting
-        conda install -y -c bioconda -c conda-forge scikit-allel pandas numpy matplotlib seaborn
+        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy matplotlib seaborn
 
         python - --input_path ~{annotated_vcf} \
                  --ped_path ~{pedigree} \
