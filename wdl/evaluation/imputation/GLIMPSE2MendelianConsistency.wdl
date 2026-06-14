@@ -239,7 +239,7 @@ task CalculateMendelianConsistency {
                     len_bins = np.full(len(length), 'UNKNOWN', dtype=object)
                     len_bins[is_snp] = 'SNP'
                     len_bins[(50 <= length)] = '[50, inf)'
-                    len_bins[(0 <= length) & (length < 50) & ~is_snp] = '[0, 50)'   # unlike Phase 1, include non-SNP substitutions
+                    len_bins[(1 <= length) & (length < 50)] = '[1, 50)'
                     len_bins[(-50 < length) & (length <= -1)] = '(-50, -1]'
                     len_bins[(length <= -50)] = '(-inf, -50]'
                     
@@ -358,7 +358,7 @@ task CalculateMendelianConsistency {
         def generate_plots(agg_results, num_trios, output_prefix):
             """Generate plots matching formatting specifications precisely."""
             print("Generating plots...")
-            length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[0, 50)', '[50, inf)']
+            length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[1, 50)', '[50, inf)']
             af_bin_labels = ['[0, 0.01)', '[0.01, 0.1)', '[0.1, 1]']
             
             with warnings.catch_warnings():
