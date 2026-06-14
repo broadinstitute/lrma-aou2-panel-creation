@@ -72,7 +72,7 @@ task AnnotateVcf {
 
         # 2. Transfer panel AF and TRH tags to Imputed VCF 
         echo "Transferring panel AF and TRH annotations to Imputed VCF..."
-        bcftools annotate -a panel.trh.bcf -c CHROM,POS,ALT,REF,INFO/AF,INFO/TRH --threads $(nproc) \
+        bcftools annotate -a panel.trh.bcf -c CHROM,POS,REF,ALT,INFO/AF,INFO/TRH --threads $(nproc) \
             ~{imputed_vcf}##idx##~{imputed_vcf_idx} -W -Ob -o ~{output_prefix}.annotated.bcf
     >>>
 
@@ -121,14 +121,13 @@ task CalculateMendelianConsistency {
     command <<<
         set -euxo pipefail
 
-        # Install the dependencies for variant streaming and plotting (if using standard miniconda)
-        conda install -y -c bioconda -c conda-forge pandas numpy matplotlib seaborn
+        # Install the dependencies for variant streaming and plotting
+        conda install -y -c bioconda -c conda-forge scikit-allel pandas numpy matplotlib seaborn
 
-        python - --input path ~{annotated_vcf} \
+        python - --input_path ~{annotated_vcf} \
                  --ped_path ~{pedigree} \
                  --output_prefix ~{output_prefix} \
-                 --chunk_size 10000
-                 <<-'EOF'
+                 --chunk_size ~{chunk_size} <<-'EOF'
         import argparse
         import numpy as np
         import pandas as pd
@@ -332,6 +331,30 @@ task CalculateMendelianConsistency {
             print(f"\nFinished processing {total_records:,} records in {total_elapsed}.")
             return agg_results
 
+        def save_pickles(agg_results, output_prefix):
+            """Save the accumulated raw data as pandas dataframes to fulfill WDL outputs."""
+            rows_0, rows_09 = [], []
+            for key, res in agg_results.items():
+                af_bin, len_bin, in_trh, min_gp = key
+                row = {
+                    'AF_BIN': af_bin,
+                    'LENGTH_BIN': len_bin,
+                    'IN_TRH': in_trh,
+                    'ERROR_VT': res['errors_per_trio'],
+                    'NON_HOM_REF_VT': res['nhr_per_trio'],
+                    'NUM_LOCI': res['n_loci']
+                }
+                if min_gp == 0.0: rows_0.append(row)
+                elif min_gp == 0.9: rows_09.append(row)
+            
+            # Form dataframes, falling back to empty with proper columns if no variants passed chunks
+            cols = ['AF_BIN', 'LENGTH_BIN', 'IN_TRH', 'ERROR_VT', 'NON_HOM_REF_VT', 'NUM_LOCI']
+            df_0 = pd.DataFrame(rows_0) if rows_0 else pd.DataFrame(columns=cols)
+            df_09 = pd.DataFrame(rows_09) if rows_09 else pd.DataFrame(columns=cols)
+            
+            df_0.to_pickle(f"{output_prefix}-unfiltered.pkl")
+            df_09.to_pickle(f"{output_prefix}-filtered-0.9.pkl")
+
         def generate_plots(agg_results, num_trios, output_prefix):
             """Generate plots matching formatting specifications precisely."""
             print("Generating plots...")
@@ -467,8 +490,9 @@ task CalculateMendelianConsistency {
                 args.input_path, trios, subset_samples, args.chunk_size, num_trios
             )
             
+            save_pickles(agg_results, args.output_prefix)
             generate_plots(agg_results, num_trios, args.output_prefix)
-            print(f"Successfully generated plots with prefix '{args.output_prefix}'.")
+            print(f"Successfully generated plots and pickles with prefix '{args.output_prefix}'.")
 
         if __name__ == "__main__":
             main()
