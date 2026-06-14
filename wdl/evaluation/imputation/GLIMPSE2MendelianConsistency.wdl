@@ -358,7 +358,7 @@ task CalculateMendelianConsistency {
         def generate_plots(agg_results, num_trios, output_prefix):
             """Generate plots matching formatting specifications precisely."""
             print("Generating plots...")
-            length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[1, 50)', '[50, inf)']
+            length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[0, 50)', '[50, inf)']
             af_bin_labels = ['[0, 0.01)', '[0.01, 0.1)', '[0.1, 1]']
             
             with warnings.catch_warnings():
