@@ -234,12 +234,12 @@ task CalculateMendelianConsistency {
                     # Use native altlen for sizes, string len for is_snp (Matches notebook)
                     altlen_arr = chunk['variants/altlen']
                     length = altlen_arr[:, 0] if altlen_arr.ndim > 1 else altlen_arr
-                    is_snp = chunk['variants/is_snp']
+                    is_snp = (ref_len == 1) & (alt_len == 1)
                     
                     len_bins = np.full(len(length), 'UNKNOWN', dtype=object)
                     len_bins[is_snp] = 'SNP'
                     len_bins[(50 <= length)] = '[50, inf)'
-                    len_bins[(1 <= length) & (length < 50)] = '[1, 50)'
+                    len_bins[(1 <= length) & (length < 50) & ~is_snp] = '[1, 50)'
                     len_bins[(-50 < length) & (length <= -1)] = '(-50, -1]'
                     len_bins[(length <= -50)] = '(-inf, -50]'
                     
