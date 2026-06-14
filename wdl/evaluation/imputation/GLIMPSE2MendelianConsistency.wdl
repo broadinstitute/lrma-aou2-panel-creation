@@ -215,18 +215,8 @@ task CalculateMendelianConsistency {
                     print(f"Processed {total_records:,} records... [Elapsed: {elapsed_str}] [Location: {chrom_str}:{pos_val}]", end='\r')
                     
                     # --- 1. Locus Metric Extraction ---
-                    refs_raw = chunk['variants/REF']
-                    alts_raw = chunk['variants/ALT'][:, 0]
-                    
-                    if refs_raw.dtype.kind in ('S', 'a'):
-                        refs = np.char.decode(refs_raw, 'utf-8')
-                        alts = np.char.decode(alts_raw, 'utf-8')
-                    else:
-                        refs = refs_raw.astype(str)
-                        alts = alts_raw.astype(str)
-                        
-                    refs = np.char.rstrip(refs, ' \x00')
-                    alts = np.char.rstrip(alts, ' \x00')
+                    refs = chunk['variants/REF'].astype(str)
+                    alts = chunk['variants/ALT'][:, 0].astype(str)
                     
                     ref_len = np.char.str_len(refs)
                     alt_len = np.char.str_len(alts)
