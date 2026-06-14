@@ -60,7 +60,7 @@ task AnnotateVcf {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 20 + ceil(size(panel_sites_only_vcf, "GiB") + size(imputed_vcf, "GiB") * 3)
+    Int disk_gb = 20 + 3 * ceil(size(panel_sites_only_vcf, "GiB") + size(imputed_vcf, "GiB"))
 
     command <<<
         set -euxo pipefail
@@ -72,7 +72,7 @@ task AnnotateVcf {
 
         # 2. Transfer panel AF and TRH tags to Imputed VCF 
         echo "Transferring panel AF and TRH annotations to Imputed VCF..."
-        bcftools annotate -a panel.trh.bcf -c INFO/AF,INFO/TRH --threads $(nproc) \
+        bcftools annotate -a panel.trh.bcf -c CHROM,POS,ALT,REF,INFO/AF,INFO/TRH --threads $(nproc) \
             ~{imputed_vcf}##idx##~{imputed_vcf_idx} -W -Ob -o ~{output_prefix}.annotated.bcf
     >>>
 
@@ -116,307 +116,363 @@ task CalculateMendelianConsistency {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = ceil(size(annotated_vcf, "GiB")) + 20
+    Int disk_gb = 20 + ceil(size(annotated_vcf, "GiB"))
 
     command <<<
         set -euxo pipefail
 
         # Install the dependencies for variant streaming and plotting (if using standard miniconda)
-        conda install -y -c bioconda -c conda-forge cyvcf2 pandas numpy matplotlib seaborn
+        conda install -y -c bioconda -c conda-forge pandas numpy matplotlib seaborn
 
-        cat << 'EOF' > mendelian.py
-        import sys
-        import time
+        python - --input path ~{annotated_vcf} \
+                 --ped_path ~{pedigree} \
+                 --output_prefix ~{output_prefix} \
+                 --chunk_size 10000
+                 <<-'EOF'
+        import argparse
         import numpy as np
         import pandas as pd
-        import cyvcf2
+        import allel
+        import sys
+        import time
+        import subprocess
+        from datetime import timedelta
         import matplotlib.pyplot as plt
         import seaborn as sns
         import warnings
 
-        # Ignore division by zero warnings in visualization calculations
-        warnings.filterwarnings('ignore', category=RuntimeWarning)
+        def parse_pedigree(ped_path, vcf_samples):
+            """Parse PED file and find complete trios present in the VCF/BCF."""
+            ped_df = pd.read_csv(ped_path, sep='\t', 
+                                 names=['familyID', 'sampleID', 'fatherID', 'motherID', 'sex', 'status'])
+            
+            samples_set = set(vcf_samples)
+            valid_samples_set = set()
+            valid_trios = []
+            
+            for _, row in ped_df.iterrows():
+                if (row['sampleID'] in samples_set and 
+                    row['fatherID'] in samples_set and 
+                    row['motherID'] in samples_set):
+                    valid_trios.append({
+                        'sampleID': row['sampleID'],
+                        'fatherID': row['fatherID'],
+                        'motherID': row['motherID']
+                    })
+                    valid_samples_set.update([row['sampleID'], row['fatherID'], row['motherID']])
+                    
+            if not valid_trios:
+                print("Error: No complete trios found in the input file.")
+                sys.exit(1)
+            
+            # Ensure subset samples keep the original order found inside the VCF stream
+            subset_samples = [s for s in vcf_samples if s in valid_samples_set]
+            return valid_trios, subset_samples
 
-        vcf_path = sys.argv[1]
-        ped_path = sys.argv[2]
-        output_prefix = sys.argv[3]
-        chunk_size = int(sys.argv[4])
+        def process_vcf_in_chunks(input_path, valid_trios, subset_samples, chunk_size, num_trios):
+            """Process VCF/BCF in chunks with matching notebook extraction string logic."""
+            agg_results = {}
+            
+            fields_to_extract = [
+                'calldata/GT', 
+                'calldata/GP', 
+                'variants/CHROM', 
+                'variants/REF', 
+                'variants/ALT', 
+                'variants/AF', 
+                'variants/TRH',
+                'variants/altlen',
+                'variants/is_snp'
+            ]
+            
+            print(f"Iterating over variants in chunks of {chunk_size}...")
+            total_records = 0
+            
+            trio_samples_list = ",".join(subset_samples)
+            bcftools_pipeline = f"bcftools view --threads 4 -Ov -s {trio_samples_list} {input_path}"
+            
+            proc = subprocess.Popen(bcftools_pipeline, shell=True, stdout=subprocess.PIPE)
+            vcf_stream = proc.stdout
+            
+            # Let scikit-allel parse headers natively to allow proper handling of multiallelic GP arrays
+            fields, stream_samples, headers, it = allel.iter_vcf_chunks(
+                vcf_stream, fields=fields_to_extract, chunk_length=chunk_size
+            )
+            
+            stream_sample_to_idx = {s: i for i, s in enumerate(stream_samples)}
+            proband_idx = [stream_sample_to_idx[t['sampleID']] for t in valid_trios]
+            father_idx = [stream_sample_to_idx[t['fatherID']] for t in valid_trios]
+            mother_idx = [stream_sample_to_idx[t['motherID']] for t in valid_trios]
+            
+            start_time = time.time()
+            
+            try:
+                for chunk, actual_chunk_size, chrom_val, pos_val in it:
+                    total_records += actual_chunk_size
+                    elapsed_secs = time.time() - start_time
+                    elapsed_str = str(timedelta(seconds=int(elapsed_secs)))
+                    
+                    chrom_str = chrom_val.decode('utf-8').rstrip('\x00') if hasattr(chrom_val, 'decode') else str(chrom_val).rstrip('\x00')
+                    print(f"Processed {total_records:,} records... [Elapsed: {elapsed_str}] [Location: {chrom_str}:{pos_val}]", end='\r')
+                    
+                    # --- 1. Locus Metric Extraction ---
+                    refs_raw = chunk['variants/REF']
+                    alts_raw = chunk['variants/ALT'][:, 0]
+                    
+                    if refs_raw.dtype.kind in ('S', 'a'):
+                        refs = np.char.decode(refs_raw, 'utf-8')
+                        alts = np.char.decode(alts_raw, 'utf-8')
+                    else:
+                        refs = refs_raw.astype(str)
+                        alts = alts_raw.astype(str)
+                        
+                    refs = np.char.rstrip(refs, ' \x00')
+                    alts = np.char.rstrip(alts, ' \x00')
+                    
+                    ref_len = np.char.str_len(refs)
+                    alt_len = np.char.str_len(alts)
+                    
+                    # Use native altlen for sizes, string len for is_snp (Matches notebook)
+                    altlen_arr = chunk['variants/altlen']
+                    length = altlen_arr[:, 0] if altlen_arr.ndim > 1 else altlen_arr
+                    is_snp = chunk['variants/is_snp']
+                    
+                    len_bins = np.full(len(length), 'UNKNOWN', dtype=object)
+                    len_bins[is_snp] = 'SNP'
+                    len_bins[(50 <= length)] = '[50, inf)'
+                    len_bins[(0 <= length) & (length < 50) & ~is_snp] = '[0, 50)'   # unlike Phase 1, include non-SNP substitutions
+                    len_bins[(-50 < length) & (length <= -1)] = '(-50, -1]'
+                    len_bins[(length <= -50)] = '(-inf, -50]'
+                    
+                    afs = chunk['variants/AF']
+                    afs = afs[:, 0] if afs.ndim > 1 else afs
+                    
+                    af_bins = np.full(len(afs), 'UNKNOWN', dtype=object)
+                    af_bins[(0 <= afs) & (afs < 0.01)] = '[0, 0.01)'
+                    af_bins[(0.01 <= afs) & (afs < 0.1)] = '[0.01, 0.1)'
+                    af_bins[(0.1 <= afs) & (afs <= 1.0)] = '[0.1, 1]'
+                    
+                    trhs = chunk['variants/TRH']
+                    trhs = (trhs[:, 0] if trhs.ndim > 1 else trhs).astype(bool)
 
-        vcf = cyvcf2.VCF(vcf_path)
-        ped_df = pd.read_csv(ped_path, sep='\t', names=['familyID', 'sampleID', 'fatherID', 'motherID', 'sex', 'status'])
-        samples = np.array(vcf.samples)
+                    # --- 2. Genotype & Mendelian Error Extraction ---
+                    GT_base = chunk['calldata/GT']
+                    
+                    if 'calldata/GP' in chunk:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", category=RuntimeWarning)
+                            # np.nanmax correctly ignores the padded NaNs in multiallelic GP arrays
+                            max_gp = np.nanmax(chunk['calldata/GP'], axis=2) 
+                    else:
+                        max_gp = np.zeros(GT_base.shape[:2], dtype=np.float32) 
 
-        is_trio_complete = []
-        valid_trios = []
-        for _, row in ped_df.iterrows():
-            if row['sampleID'] in samples and row['fatherID'] in samples and row['motherID'] in samples:
-                is_trio_complete.append(True)
-                valid_trios.append({
-                    's': np.where(samples == row['sampleID'])[0][0],
-                    'f': np.where(samples == row['fatherID'])[0][0],
-                    'm': np.where(samples == row['motherID'])[0][0]
-                })
+                    # Unroll Genotype axes to explicit 1D arrays to prevent any NumPy broadcasting edge cases
+                    P = GT_base[:, proband_idx, :]
+                    F = GT_base[:, father_idx, :]
+                    M = GT_base[:, mother_idx, :]
+                    
+                    P0, P1 = P[:, :, 0], P[:, :, 1]
+                    F0, F1 = F[:, :, 0], F[:, :, 1]
+                    M0, M1 = M[:, :, 0], M[:, :, 1]
+                    
+                    c1 = ((P0 == F0) | (P0 == F1)) & ((P1 == M0) | (P1 == M1))
+                    c2 = ((P0 == M0) | (P0 == M1)) & ((P1 == F0) | (P1 == F1))
+                    is_error_base = ~(c1 | c2)
+                    
+                    is_hom_ref_base = (P0 == 0) & (P1 == 0) & (F0 == 0) & (F1 == 0) & (M0 == 0) & (M1 == 0)
+                    has_missing_base = (P0 == -1) | (P1 == -1) | (F0 == -1) | (F1 == -1) | (M0 == -1) | (M1 == -1)
+
+                    for min_gp in [0.0, 0.9]:
+                        if min_gp > 0:
+                            # ~np.greater exactly mirrors `bcftools -e 'FORMAT/GP>0.9'` and correctly masks NaNs
+                            p_mask = ~np.greater(max_gp[:, proband_idx], min_gp)
+                            f_mask = ~np.greater(max_gp[:, father_idx], min_gp)
+                            m_mask = ~np.greater(max_gp[:, mother_idx], min_gp)
+                            has_missing = has_missing_base | p_mask | f_mask | m_mask
+                        else:
+                            has_missing = has_missing_base
+                        
+                        # Evaluate final logical masks
+                        non_hom_ref = ~is_hom_ref_base & ~has_missing
+                        errors = is_error_base & non_hom_ref # Enforce mathematical equivalent of (error_vt * non_hom_ref_vt)
+                        
+                        locus_errors = errors.sum(axis=1)
+                        locus_nhr = non_hom_ref.sum(axis=1)
+                        
+                        # --- 3. Aggregate Results into Bins ---
+                        chunk_df = pd.DataFrame({'AF_BIN': af_bins, 'LENGTH_BIN': len_bins, 'IN_TRH': trhs})
+                        groups = chunk_df.groupby(['AF_BIN', 'LENGTH_BIN', 'IN_TRH'])
+                        
+                        for key, indices in groups.groups.items():
+                            if 'UNKNOWN' in key: continue
+                                
+                            full_key = (*key, min_gp)
+                            if full_key not in agg_results:
+                                agg_results[full_key] = {
+                                    'errors_per_trio': np.zeros(num_trios, dtype=int),
+                                    'nhr_per_trio': np.zeros(num_trios, dtype=int),
+                                    'locus_rates': [],
+                                    'n_loci': 0
+                                }
+                                
+                            agg_results[full_key]['errors_per_trio'] += errors[indices].sum(axis=0)
+                            agg_results[full_key]['nhr_per_trio'] += non_hom_ref[indices].sum(axis=0)
+                            
+                            valid_loci = indices[locus_nhr[indices] > 0]
+                            rates = locus_errors[valid_loci] / locus_nhr[valid_loci]
+                            agg_results[full_key]['locus_rates'].extend(rates.tolist())
+                            agg_results[full_key]['n_loci'] += len(indices)
+                            
+            finally:
+                if proc is not None:
+                    proc.stdout.close()
+                    proc.wait()
+
+            total_elapsed = str(timedelta(seconds=int(time.time() - start_time)))
+            print(f"\nFinished processing {total_records:,} records in {total_elapsed}.")
+            return agg_results
+
+        def generate_plots(agg_results, num_trios, output_prefix):
+            """Generate plots matching formatting specifications precisely."""
+            print("Generating plots...")
+            length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[1, 50)', '[50, inf)']
+            af_bin_labels = ['[0, 0.01)', '[0.01, 0.1)', '[0.1, 1]']
+            
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                
+                # 1. Per-Trio Boxplot
+                for in_trh in [False, True]:
+                    fig, ax = plt.subplots(3, 1, figsize=(9, 10))
+                    tr_tag = 'non-TR/homopolymer' if not in_trh else 'TR/homopolymer'
+                    ax[0].set_title(f'{num_trios} trios, {tr_tag}')
+                    
+                    for i, af_bin_label in enumerate(af_bin_labels):
+                        plt_df_values = []
+                        for j, length_bin_label in enumerate(length_bin_labels):
+                            for g, min_tar_gp in enumerate([0.0, 0.9]):
+                                key = (af_bin_label, length_bin_label, in_trh, min_tar_gp)
+                                if key in agg_results:
+                                    res = agg_results[key]
+                                    errs = res['errors_per_trio']
+                                    nhr = res['nhr_per_trio']
+                                    
+                                    # Div by 0 forces NaN output exactly mirroring the notebook, ignored by Seaborn
+                                    error_rates_per_trio = np.divide(errs, nhr, out=np.full(num_trios, np.nan), where=(nhr > 0))
+                                    mean_num_non_hom_ref = nhr.mean()
+                                    
+                                    min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
+                                    len_text = g * '\n' + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$' + ('\n\n\n' + length_bin_label if g == 1 else '')
+                                    
+                                    plt_df_values.extend(
+                                        [[min_tar_gp_label, len_text, error_rates_per_trio[t]]
+                                         for t in range(num_trios) if not np.isnan(error_rates_per_trio[t])]
+                                    )
+                                        
+                        if plt_df_values:
+                            plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
+                            sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=i==2)
+                            
+                            ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
+                            ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n')
+                                             + f'{af_bin_label}\n\n' + ('Mendelian error rate per trio' if i == 1 else ''))
+                            
+                            ax[i].set_yscale('symlog', linthresh=0.001)
+                            ax[i].set_ylim([-1E-4, 1.001])
+                            ax[i].set_yticks([k * 0.0001 for k in range(0, 10)] + 
+                                             [k * 0.001 for k in range(0, 10)] + 
+                                             [k * 0.01 for k in range(1, 10)] + 
+                                             [k * 0.1 for k in range(1, 11)])
+                            
+                            if i == 2:
+                                handles, labels = ax[i].get_legend_handles_labels()
+                                ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
+                    
+                    plt.tight_layout()
+                    plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.png", dpi=300)
+                    plt.close()
+
+                # 2. Per-Locus Boxplot
+                for in_trh in [False, True]:
+                    fig, ax = plt.subplots(3, 1, figsize=(9, 12))
+                    tr_tag = 'non-TR/homopolymer' if not in_trh else 'TR/homopolymer'
+                    ax[0].set_title(f'{num_trios} trios, {tr_tag}')
+                    
+                    for i, af_bin_label in enumerate(af_bin_labels):
+                        plt_df_values = []
+                        for j, length_bin_label in enumerate(length_bin_labels):
+                            for g, min_tar_gp in enumerate([0.0, 0.9]):
+                                key = (af_bin_label, length_bin_label, in_trh, min_tar_gp)
+                                if key in agg_results:
+                                    res = agg_results[key]
+                                    error_rates_per_locus = res['locus_rates']
+                                    num_loci = len(error_rates_per_locus)
+                                    
+                                    mean_num_non_hom_ref_trios = res['nhr_per_trio'].sum() / max(num_loci, 1)
+                                    min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
+                                    len_text = g * '\n\n' + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}' + f'\n$N_{{l}}={num_loci}$' + ('\n\n\n\n' + length_bin_label if g == 1 else '')
+
+                                    plt_df_values.extend(
+                                        [[min_tar_gp_label, len_text, rate] for rate in error_rates_per_locus]
+                                    )
+
+                        if plt_df_values:
+                            plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
+                            sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=i==2)
+                            
+                            ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
+                            ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n')
+                                             + f'{af_bin_label}\n\n' + ('Mendelian error rate per locus' if i == 1 else ''))
+                            
+                            ax[i].set_yscale('symlog', linthresh=0.001)
+                            ax[i].set_ylim([-1E-5, 1])
+                            ax[i].set_yticks([k * 0.0001 for k in range(0, 10)] + 
+                                             [k * 0.001 for k in range(0, 10)] + 
+                                             [k * 0.01 for k in range(1, 10)] + 
+                                             [k * 0.1 for k in range(1, 11)])
+                            
+                            if i == 2:
+                                handles, labels = ax[i].get_legend_handles_labels()
+                                ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
+                    
+                    plt.tight_layout()
+                    plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.png", dpi=300)
+                    plt.close()
+
+        def main(args=None):
+            parser = argparse.ArgumentParser(description="Mendelian Error calculation matching target notebook mappings perfectly.")
+            parser.add_argument("--input_path", required=True, help="Path to input VCF/BCF.")
+            parser.add_argument("--ped_path", required=True, help="Path to pedigree (.ped) file.")
+            parser.add_argument("--output_prefix", required=True, help="Prefix for output plots.")
+            parser.add_argument("--chunk_size", type=int, default=10000, help="VCF chunk size.")
+            args = parser.parse_args(args=args)
+
+            is_bcf = args.input_path.lower().endswith('.bcf')
+            
+            if is_bcf:
+                print("Detected BCF format. Fetching samples using bcftools...")
+                samples_out = subprocess.run(
+                    ['bcftools', 'query', '-l', args.input_path], 
+                    stdout=subprocess.PIPE, text=True, check=True
+                )
+                vcf_samples = [s for s in samples_out.stdout.strip().split('\n') if s]
             else:
-                is_trio_complete.append(False)
+                headers = allel.read_vcf_headers(args.input_path)
+                vcf_samples = headers.samples
+            
+            trios, subset_samples = parse_pedigree(args.ped_path, vcf_samples)
+            num_trios = len(trios)
+            
+            agg_results = process_vcf_in_chunks(
+                args.input_path, trios, subset_samples, args.chunk_size, num_trios
+            )
+            
+            generate_plots(agg_results, num_trios, args.output_prefix)
+            print(f"Successfully generated plots with prefix '{args.output_prefix}'.")
 
-        num_complete_trios = len(valid_trios)
-        s_idx = [t['s'] for t in valid_trios]
-        f_idx = [t['f'] for t in valid_trios]
-        m_idx = [t['m'] for t in valid_trios]
-
-        groups = {}
-
-        def get_bins(chrom, ref, alt, af, trh):
-            if len(ref) == 1 and len(alt) == 1:
-                length_bin = 'SNP'
-            else:
-                l = len(alt) - len(ref)
-                if l <= -50: length_bin = '(-inf, -50]'
-                elif -50 < l <= -1: length_bin = '(-50, -1]'
-                elif 1 <= l < 50: length_bin = '[1, 50)'
-                else: length_bin = '[50, inf)'
-
-            if af < 0.01: af_bin = '[0, 0.01)'
-            elif af < 0.1: af_bin = '[0.01, 0.1)'
-            else: af_bin = '[0.1, 1]'
-
-            return chrom, af_bin, length_bin, bool(trh)
-
-        def process_chunk(gt_arr, gp_arr, meta_list):
-            p_gt = gt_arr[:, s_idx]
-            f_gt = gt_arr[:, f_idx]
-            m_gt = gt_arr[:, m_idx]
-
-            gp_mask = (gp_arr >= 0.9)
-            p_gp_mask = gp_mask[:, s_idx]
-            f_gp_mask = gp_mask[:, f_idx]
-            m_gp_mask = gp_mask[:, m_idx]
-
-            for gp_threshold in [0, 0.9]:
-                if gp_threshold > 0:
-                    p_gt_filt = np.where(p_gp_mask, p_gt, 2)
-                    f_gt_filt = np.where(f_gp_mask, f_gt, 2)
-                    m_gt_filt = np.where(m_gp_mask, m_gt, 2)
-                else:
-                    p_gt_filt = p_gt
-                    f_gt_filt = f_gt
-                    m_gt_filt = m_gt
-
-                miss = (p_gt_filt == 2) | (f_gt_filt == 2) | (m_gt_filt == 2)
-
-                err_p0 = (p_gt_filt == 0) & ((f_gt_filt == 3) | (m_gt_filt == 3))
-                err_p3 = (p_gt_filt == 3) & ((f_gt_filt == 0) | (m_gt_filt == 0))
-                err_p1 = (p_gt_filt == 1) & (((f_gt_filt == 0) & (m_gt_filt == 0)) | ((f_gt_filt == 3) & (m_gt_filt == 3)))
-
-                errors = (err_p0 | err_p3 | err_p1) & ~miss
-
-                is_hom_ref = (p_gt_filt == 0) & (f_gt_filt == 0) & (m_gt_filt == 0)
-                non_hom_ref = ~is_hom_ref & ~miss
-
-                # Memory Efficient Aggregation: Calculate rates for plotting on-the-fly
-                for i, meta in enumerate(meta_list):
-                    key = meta
-                    if key not in groups:
-                        groups[key] = {
-                            0: {'trio_err': np.zeros(num_complete_trios), 'trio_nhr': np.zeros(num_complete_trios), 'locus_rates': [], 'locus_nhr': []}, 
-                            0.9: {'trio_err': np.zeros(num_complete_trios), 'trio_nhr': np.zeros(num_complete_trios), 'locus_rates': [], 'locus_nhr': []}, 
-                            'count': 0
-                        }
-
-                    if gp_threshold == 0:
-                        groups[key]['count'] += 1
-
-                    err_v = errors[i] & non_hom_ref[i]
-                    nhr_v = non_hom_ref[i]
-
-                    # Accumulate for Per Trio Plot (axis=0 sums)
-                    groups[key][gp_threshold]['trio_err'] += err_v
-                    groups[key][gp_threshold]['trio_nhr'] += nhr_v
-
-                    # Accumulate for Per Locus Plot (axis=1 sums)
-                    locus_nhr_sum = nhr_v.sum()
-                    if locus_nhr_sum > 0:
-                        locus_err_sum = err_v.sum()
-                        groups[key][gp_threshold]['locus_rates'].append(locus_err_sum / locus_nhr_sum)
-                        groups[key][gp_threshold]['locus_nhr'].append(locus_nhr_sum)
-
-        print(f"Streaming variants with chunk size {chunk_size}...", flush=True)
-        gt_chunk, gp_chunk, meta_chunk = [], [], []
-        variants_processed = 0
-        start_time = time.time()
-
-        for variant in vcf:
-            chrom = variant.CHROM
-            ref = variant.REF
-            alts = variant.ALT
-            if not alts: continue
-            alt = alts[0]
-
-            af = variant.INFO.get('AF')
-            if af is None: af = 0.0
-            trh = variant.INFO.get('TRH')
-            if trh is None: trh = False
-
-            meta = get_bins(chrom, ref, alt, af, trh)
-            gt_chunk.append(variant.gt_types)
-
-            gp = variant.format('GP')
-            if gp is not None:
-                gp_max = np.max(gp, axis=1)
-                gp_chunk.append(gp_max)
-            else:
-                raise ValueError("FORMAT/GP is missing from the annotated VCF! Cannot build step plots.")
-
-            meta_chunk.append(meta)
-
-            if len(gt_chunk) >= chunk_size:
-                process_chunk(np.array(gt_chunk), np.array(gp_chunk), meta_chunk)
-                variants_processed += len(gt_chunk)
-                elapsed = time.time() - start_time
-                print(f"Processed {variants_processed} variants in {elapsed:.2f}s ({variants_processed/elapsed:.2f} var/s)...", flush=True)
-                gt_chunk, gp_chunk, meta_chunk = [], [], []
-
-        if len(gt_chunk) > 0:
-            process_chunk(np.array(gt_chunk), np.array(gp_chunk), meta_chunk)
-            variants_processed += len(gt_chunk)
-            elapsed = time.time() - start_time
-            print(f"Finished processing {variants_processed} total variants in {elapsed:.2f}s.", flush=True)
-
-        print("Assembling tables...", flush=True)
-        mv_df_columns = ['CHROM', 'AF_BIN', 'LENGTH_BIN', 'IN_TRH', 'TRIO_ERR', 'TRIO_NHR', 'LOCUS_RATES', 'LOCUS_NHR', 'NUM_LOCI']
-        mv_df_0, mv_df_09 = [], []
-        for key, data in groups.items():
-            chrom, af_bin, length_bin, in_trh = key
-
-            err_0 = data[0]['trio_err']
-            nhr_0 = data[0]['trio_nhr']
-            l_rates_0 = np.array(data[0]['locus_rates'])
-            l_nhr_0 = np.array(data[0]['locus_nhr'])
-            mv_df_0.append([chrom, af_bin, length_bin, in_trh, err_0, nhr_0, l_rates_0, l_nhr_0, data['count']])
-
-            err_09 = data[0.9]['trio_err']
-            nhr_09 = data[0.9]['trio_nhr']
-            l_rates_09 = np.array(data[0.9]['locus_rates'])
-            l_nhr_09 = np.array(data[0.9]['locus_nhr'])
-            mv_df_09.append([chrom, af_bin, length_bin, in_trh, err_09, nhr_09, l_rates_09, l_nhr_09, data['count']])
-
-        df_0 = pd.DataFrame(mv_df_0, columns=mv_df_columns)
-        df_09 = pd.DataFrame(mv_df_09, columns=mv_df_columns)
-
-        df_0.to_pickle(f'{output_prefix}-unfiltered.pkl')
-        df_09.to_pickle(f'{output_prefix}-filter-0.9.pkl')
-
-        print("Generating plots...", flush=True)
-        length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[1, 50)', '[50, inf)']
-        af_bin_labels = ['[0, 0.01)', '[0.01, 0.1)', '[0.1, 1]']
-
-        # PER TRIO PLOTTING
-        for in_trh in [False, True]:
-            fig, ax = plt.subplots(3, 1, figsize=(9, 10))
-            trh_tag = 'all' if in_trh is None else ('non-TR/homopolymer' if not in_trh else 'TR/homopolymer')
-            ax[0].set_title(f'{num_complete_trios} trios, {trh_tag}') 
-
-            for i, af_bin_label in enumerate(af_bin_labels):
-                plt_df_values = []
-                for j, length_bin_label in enumerate(length_bin_labels):
-                    for g, min_tar_gp in enumerate([0, 0.9]):
-                        min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
-                        trio_err_values = []
-                        trio_nhr_values = []
-
-                        df = df_0 if min_tar_gp == 0 else df_09
-                        y_trh = (df['IN_TRH'] == in_trh) if in_trh is not None else True
-                        bin_df = df[y_trh & (df['AF_BIN'] == af_bin_label) & (df['LENGTH_BIN'] == length_bin_label)]
-
-                        if not bin_df.empty:
-                            trio_err_values.append(bin_df['TRIO_ERR'].values[0])
-                            trio_nhr_values.append(bin_df['TRIO_NHR'].values[0])
-
-                        if not trio_err_values: continue
-
-                        trio_err = np.sum(trio_err_values, axis=0)
-                        trio_nhr = np.sum(trio_nhr_values, axis=0)
-
-                        error_rates_per_trio = trio_err / trio_nhr
-                        mean_num_non_hom_ref = trio_nhr.mean()
-
-                        plt_df_values.extend(
-                            [[min_tar_gp_label, 
-                              g * '\n' + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$' + ('\n\n\n' + length_bin_label if g == 1 else ''), 
-                              error_rates_per_trio[t]] 
-                             for t in range(num_complete_trios)])
-
-                if not plt_df_values: continue
-                plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
-                sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=(i==2))
-
-                ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
-                ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n')
-                                 + f'{af_bin_label}\n\n' + ('Mendelian error rate per trio' if i == 1 else ''))
-                ax[i].set_yscale('symlog', linthresh=0.001)
-                ax[i].set_ylim([-1E-4, 1.001])
-                ax[i].set_yticks([k * 0.0001 for k in range(0, 10)] + 
-                                 [k * 0.001 for k in range(0, 10)] + 
-                                 [k * 0.01 for k in range(1, 10)] + 
-                                 [k * 0.1 for k in range(1, 11)])
-                if i == 2:
-                    handles, labels = ax[i].get_legend_handles_labels()
-                    ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
-            plt.tight_layout()
-            plt.savefig(f'{output_prefix}.trio.{"inTRH" if in_trh else "outTRH"}.png')
-
-        # PER LOCUS PLOTTING
-        for in_trh in [False, True]:
-            fig, ax = plt.subplots(3, 1, figsize=(9, 12))
-            trh_tag = 'all' if in_trh is None else ('non-TR/homopolymer' if not in_trh else 'TR/homopolymer')
-            ax[0].set_title(f'{num_complete_trios} trios, {trh_tag}')
-            for i, af_bin_label in enumerate(af_bin_labels):
-                plt_df_values = []
-                for j, length_bin_label in enumerate(length_bin_labels):
-                    for g, min_tar_gp in enumerate([0, 0.9]):
-                        min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
-                        locus_rates_values = []
-                        locus_nhr_values = []
-
-                        df = df_0 if min_tar_gp == 0 else df_09
-                        y_trh = (df['IN_TRH'] == in_trh) if in_trh is not None else True
-                        bin_df = df[y_trh & (df['AF_BIN'] == af_bin_label) & (df['LENGTH_BIN'] == length_bin_label)]
-
-                        if not bin_df.empty:
-                            locus_rates_values.append(bin_df['LOCUS_RATES'].values[0])
-                            locus_nhr_values.append(bin_df['LOCUS_NHR'].values[0])
-
-                        if not locus_rates_values: continue
-
-                        error_rates_per_locus = np.concatenate(locus_rates_values)
-                        valid_loci_nhr = np.concatenate(locus_nhr_values)
-
-                        if len(error_rates_per_locus) == 0: continue
-
-                        mean_num_non_hom_ref_trios = valid_loci_nhr.mean()
-                        N_l = len(error_rates_per_locus)
-
-                        length_text = g * '\n\n' + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}' + f'\n$N_{{l}}$={N_l}' + ('\n\n\n\n' + length_bin_label if g == 1 else '')
-
-                        plt_df_values.extend([[min_tar_gp_label, length_text, error_rates_per_locus[v]] for v in range(len(error_rates_per_locus))])
-
-                if not plt_df_values: continue
-                plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
-                sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=(i==2))
-
-                ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
-                ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n') + f'{af_bin_label}\n\n' + ('Mendelian error rate per locus' if i == 1 else ''))
-                ax[i].set_yscale('symlog', linthresh=0.001)
-                ax[i].set_ylim([-1E-5, 1])
-                ax[i].set_yticks([k * 0.0001 for k in range(0, 10)] + [k * 0.001 for k in range(0, 10)] + [k * 0.01 for k in range(1, 10)] + [k * 0.1 for k in range(1, 11)])
-                if i == 2:
-                    handles, labels = ax[i].get_legend_handles_labels()
-                    ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
-            plt.tight_layout()
-            plt.savefig(f'{output_prefix}.locus.{"inTRH" if in_trh else "outTRH"}.png')
+        if __name__ == "__main__":
+            main()
         EOF
-
-        python3 mendelian.py "~{annotated_vcf}##idx##~{annotated_vcf_idx}" "~{pedigree}" "~{output_prefix}" "~{chunk_size}"
     >>>
 
     output {
