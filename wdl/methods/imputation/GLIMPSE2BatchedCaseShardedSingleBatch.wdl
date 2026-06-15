@@ -463,7 +463,7 @@ task PopAndMarginalizeCollisions {
         File posteriors_vcf_idx
         File panel_bubble_split_sites_only_vcf          # for annotation of INFO fields
         File panel_bubble_split_sites_only_vcf_idx
-        File panel_id_split_vcf_gz           # pop script requires vcf.gz
+        File panel_id_split_vcf_gz           # panel popping script currently requires vcf.gz, so we also use that here
         File panel_id_split_vcf_gz_tbi
         File pop_glimpse2_script             # modified version of convert-to-biallelic.py translated to Rust
         File cargo_toml

@@ -62,10 +62,7 @@ fn process_group(
         .collect();
 
     if parsed_lines[0].len() <= 9 {
-        for fields in parsed_lines {
-            writeln!(out_handle, "{}", fields.join("\t")).unwrap();
-        }
-        return;
+        panic!("Error: VCF does not contain sample columns. This script requires sample Genotype (GT) and Probability (GP) columns to project joint distributions.");
     }
 
     let num_samples = parsed_lines[0].len() - 9;
@@ -196,7 +193,21 @@ fn process_group(
     }
 
     let mut sorted_atomic_vars: Vec<_> = all_atomic_ids.into_iter().collect();
-    sorted_atomic_vars.sort_by_key(|id| id_buffer.get(id).map(|v| v.0).unwrap_or(0));
+    
+    // STRICT SORTING FIX: Sort by POS, then REF, then ALT to ensure deterministic output
+    sorted_atomic_vars.sort_by(|a, b| {
+        let data_a = id_buffer.get(a);
+        let data_b = id_buffer.get(b);
+        
+        match (data_a, data_b) {
+            (Some(da), Some(db)) => {
+                da.0.cmp(&db.0)                      // 1. Compare POS (coord)
+                    .then_with(|| da.2.cmp(&db.2))   // 2. Compare REF string
+                    .then_with(|| da.3.cmp(&db.3))   // 3. Compare ALT string
+            }
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
 
     // Step 4: Derive Final VCF Fields
     for assigned_id in sorted_atomic_vars {
@@ -363,6 +374,7 @@ fn main() {
         group.push(line);
     }
 
+    // note that this might not be safe for edge cases (single-variant in the VCF, or last record being a single variant on a new chromosome)
     if !group.is_empty() {
         process_group(&group, &id_buffer, max_alleles, &mut out_handle);
     }
