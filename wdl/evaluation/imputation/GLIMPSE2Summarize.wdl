@@ -32,8 +32,7 @@ workflow GLIMPSE2Summarize {
 
     output {
         File summarize_pearson_tsv = SummarizeAndPlot.summarize_pearson_tsv
-        Array[File] summarize_plots_png = SummarizeAndPlot.summarize_plots_png
-        Array[File] summarize_plots_pdf = SummarizeAndPlot.summarize_plots_pdf
+        Array[File] summarize_plots = SummarizeAndPlot.summarize_plots
     }
 }
 
@@ -59,7 +58,11 @@ task SummarizeAndPlot {
         # Install dependencies for variant streaming, stats, and plotting
         conda install -y -c bioconda -c conda-forge cyvcf2 pandas numpy matplotlib seaborn scipy
 
-        cat << 'EOF' > summarize.py
+        python - ~{panel_vcf} \
+                 ~{imputed_vcf} \
+                 ~{population_tsv} \
+                 ~{output_prefix} \
+                 ~{chunk_size} <<-'EOF'
         import sys
         import time
         import numpy as np
@@ -69,6 +72,7 @@ task SummarizeAndPlot {
         import seaborn as sns
         import matplotlib.colors
         from scipy.stats import pearsonr
+        from datetime import timedelta
         import warnings
 
         warnings.filterwarnings('ignore', category=RuntimeWarning)
@@ -97,93 +101,118 @@ task SummarizeAndPlot {
 
         panel_mean_alt_alleles_all, target_mean_alt_alleles_all = [], []
 
-        # Per-sample counters
-        sample_stats = {
-            'panel': {
-                'het_all': np.zeros(num_p_samples), 'hom_ref_all': np.zeros(num_p_samples), 'hom_alt_all': np.zeros(num_p_samples),
-                'het_ins': np.zeros(num_p_samples), 'het_del': np.zeros(num_p_samples)
-            },
-            'target': {
-                'het_all': np.zeros(num_c_samples), 'hom_ref_all': np.zeros(num_c_samples), 'hom_alt_all': np.zeros(num_c_samples),
-                'het_ins': np.zeros(num_c_samples), 'het_del': np.zeros(num_c_samples)
-            }
-        }
+        # Pre-allocate per-sample accumulators (fast 1D numpy integer arrays)
+        p_het_all = np.zeros(num_p_samples, dtype=int)
+        p_hom_ref_all = np.zeros(num_p_samples, dtype=int)
+        p_hom_alt_all = np.zeros(num_p_samples, dtype=int)
+        p_het_ins = np.zeros(num_p_samples, dtype=int)
+        p_het_del = np.zeros(num_p_samples, dtype=int)
 
-        def process_chunk(p_gt_types, c_gt_types, altlens):
-            global altlen_all, panel_af_all, target_af_all
-            
-            altlen_all.extend(altlens)
-            l_arr = np.array(altlens)
-            is_sv_ins = l_arr >= 50
-            is_sv_del = l_arr <= -50
+        c_het_all = np.zeros(num_c_samples, dtype=int)
+        c_hom_ref_all = np.zeros(num_c_samples, dtype=int)
+        c_hom_alt_all = np.zeros(num_c_samples, dtype=int)
+        c_het_ins = np.zeros(num_c_samples, dtype=int)
+        c_het_del = np.zeros(num_c_samples, dtype=int)
 
-            for gt, prefix in [(p_gt_types, 'panel'), (c_gt_types, 'target')]:
-                # In cyvcf2 gt_types: 0=HOM_REF, 1=HET, 2=UNKNOWN, 3=HOM_ALT
-                is_hom_ref = (gt == 0)
-                is_het = (gt == 1)
-                is_missing = (gt == 2)
-                is_hom_alt = (gt == 3)
+        # Pre-allocated boolean buffers for the loop (avoids millions of memory allocations)
+        p_is_het = np.empty(num_p_samples, dtype=bool)
+        p_is_hom_ref = np.empty(num_p_samples, dtype=bool)
+        p_is_hom_alt = np.empty(num_p_samples, dtype=bool)
 
-                # Calculate AF (total alt alleles / total valid alleles)
-                valid_alleles = np.sum(~is_missing, axis=1) * 2
-                alt_alleles = np.sum(is_het, axis=1) + 2 * np.sum(is_hom_alt, axis=1)
-                af = np.divide(alt_alleles, valid_alleles, out=np.zeros_like(alt_alleles, dtype=float), where=valid_alleles!=0)
-                
-                if prefix == 'panel':
-                    panel_af_all.extend(af)
-                    panel_mean_alt_alleles_all.extend(np.mean(is_het * 1 + is_hom_alt * 2, axis=1))
-                    hw_dict = panel_hwe
-                else:
-                    target_af_all.extend(af)
-                    target_mean_alt_alleles_all.extend(np.mean(is_het * 1 + is_hom_alt * 2, axis=1))
-                    hw_dict = target_hwe
-                    
-                # HWE Counts (per variant)
-                hw_dict['hom_ref'].extend(np.sum(is_hom_ref, axis=1))
-                hw_dict['het'].extend(np.sum(is_het, axis=1))
-                hw_dict['hom_alt'].extend(np.sum(is_hom_alt, axis=1))
+        c_is_het = np.empty(num_c_samples, dtype=bool)
+        c_is_hom_ref = np.empty(num_c_samples, dtype=bool)
+        c_is_hom_alt = np.empty(num_c_samples, dtype=bool)
 
-                # Update Sample Counters (per sample)
-                sample_stats[prefix]['het_all'] += np.sum(is_het, axis=0)
-                sample_stats[prefix]['hom_ref_all'] += np.sum(is_hom_ref, axis=0)
-                sample_stats[prefix]['hom_alt_all'] += np.sum(is_hom_alt, axis=0)
-                sample_stats[prefix]['het_ins'] += np.sum(is_het[is_sv_ins, :], axis=0)
-                sample_stats[prefix]['het_del'] += np.sum(is_het[is_sv_del, :], axis=0)
-
-        # 3. Stream Variants Out-of-Core
-        print(f"Streaming variants with chunk size {chunk_size}...", flush=True)
-        p_gt_chunk, c_gt_chunk, altlen_chunk = [], [], []
+        # 3. Stream Variants with Native C-Extracted Logic
+        print("Streaming variants...", flush=True)
         variants_processed = 0
         start_time = time.time()
 
         for p_var, c_var in zip(panel_vcf, imputed_vcf):
-            if p_var.POS != c_var.POS:
-                raise ValueError(f"VCFs are out of sync at Panel POS: {p_var.POS} vs Target POS: {c_var.POS}")
-            
-            ref = p_var.REF
             alts = p_var.ALT
             if not alts: continue
-            alt = alts[0]
             
-            altlen = len(alt) - len(ref)
-            altlen_chunk.append(altlen)
+            altlen = len(alts[0]) - len(p_var.REF)
+            altlen_all.append(altlen)
             
-            # Use native C-array gt_types (drastically faster than extracting tuple genotypes)
-            p_gt_chunk.append(p_var.gt_types)
-            c_gt_chunk.append(c_var.gt_types)
-            
-            if len(p_gt_chunk) >= chunk_size:
-                process_chunk(np.array(p_gt_chunk), np.array(c_gt_chunk), altlen_chunk)
-                variants_processed += len(p_gt_chunk)
-                elapsed = time.time() - start_time
-                print(f"Processed {variants_processed} variants in {elapsed:.2f}s ({variants_processed/elapsed:.2f} var/s)...", flush=True)
-                p_gt_chunk, c_gt_chunk, altlen_chunk = [], [], []
+            is_ins = altlen >= 50
+            is_del = altlen <= -50
 
-        if len(p_gt_chunk) > 0:
-            process_chunk(np.array(p_gt_chunk), np.array(c_gt_chunk), altlen_chunk)
-            variants_processed += len(p_gt_chunk)
-            elapsed = time.time() - start_time
-            print(f"Finished processing {variants_processed} total variants in {elapsed:.2f}s.", flush=True)
+            # --- Panel Extraction ---
+            p_gt = p_var.gt_types
+            # Write directly into pre-allocated boolean buffers
+            np.equal(p_gt, 1, out=p_is_het)
+            np.equal(p_gt, 0, out=p_is_hom_ref)
+            np.equal(p_gt, 3, out=p_is_hom_alt)
+            
+            # Update sample stats
+            p_het_all += p_is_het
+            p_hom_ref_all += p_is_hom_ref
+            p_hom_alt_all += p_is_hom_alt
+            if is_ins: p_het_ins += p_is_het
+            elif is_del: p_het_del += p_is_het
+            
+            # Use native C-level property extractions to avoid python .sum()
+            p_n_het = p_var.num_het
+            p_n_hom_ref = p_var.num_hom_ref
+            p_n_hom_alt = p_var.num_hom_alt
+            
+            panel_hwe['hom_ref'].append(p_n_hom_ref)
+            panel_hwe['het'].append(p_n_het)
+            panel_hwe['hom_alt'].append(p_n_hom_alt)
+            
+            p_valid = (p_n_hom_ref + p_n_het + p_n_hom_alt) * 2
+            p_alt_count = p_n_het + 2 * p_n_hom_alt
+            panel_af_all.append(p_alt_count / p_valid if p_valid > 0 else 0.0)
+            panel_mean_alt_alleles_all.append(p_alt_count / num_p_samples)
+
+            # --- Target Extraction ---
+            c_gt = c_var.gt_types
+            np.equal(c_gt, 1, out=c_is_het)
+            np.equal(c_gt, 0, out=c_is_hom_ref)
+            np.equal(c_gt, 3, out=c_is_hom_alt)
+            
+            c_het_all += c_is_het
+            c_hom_ref_all += c_is_hom_ref
+            c_hom_alt_all += c_is_hom_alt
+            if is_ins: c_het_ins += c_is_het
+            elif is_del: c_het_del += c_is_het
+            
+            c_n_het = c_var.num_het
+            c_n_hom_ref = c_var.num_hom_ref
+            c_n_hom_alt = c_var.num_hom_alt
+            
+            target_hwe['hom_ref'].append(c_n_hom_ref)
+            target_hwe['het'].append(c_n_het)
+            target_hwe['hom_alt'].append(c_n_hom_alt)
+            
+            c_valid = (c_n_hom_ref + c_n_het + c_n_hom_alt) * 2
+            c_alt_count = c_n_het + 2 * c_n_hom_alt
+            target_af_all.append(c_alt_count / c_valid if c_valid > 0 else 0.0)
+            target_mean_alt_alleles_all.append(c_alt_count / num_c_samples)
+
+            # Progress Tracking
+            variants_processed += 1
+            if variants_processed % 10000 == 0:
+                elapsed_secs = time.time() - start_time
+                elapsed_str = str(timedelta(seconds=int(elapsed_secs)))
+                print(f"Processed {variants_processed:,} records... [Elapsed: {elapsed_str}] [Location: {p_var.CHROM}:{p_var.POS}]", flush=True)
+
+        elapsed_secs = time.time() - start_time
+        elapsed_str = str(timedelta(seconds=int(elapsed_secs)))
+        print(f"\nFinished processing {variants_processed:,} total variants in {elapsed_str}.", flush=True)
+
+        # Assign sample stats back into original dict structure for plotting
+        sample_stats = {
+            'panel': {
+                'het_all': p_het_all, 'hom_ref_all': p_hom_ref_all, 'hom_alt_all': p_hom_alt_all,
+                'het_ins': p_het_ins, 'het_del': p_het_del
+            },
+            'target': {
+                'het_all': c_het_all, 'hom_ref_all': c_hom_ref_all, 'hom_alt_all': c_hom_alt_all,
+                'het_ins': c_het_ins, 'het_del': c_het_del
+            }
+        }
 
         # Convert globals to numpy arrays for fast indexing
         panel_af = np.array(panel_af_all)
@@ -195,24 +224,24 @@ task SummarizeAndPlot {
         # 4. Pearson Correlations (TSV Output)
         print("Calculating Pearson correlations...", flush=True)
         pearson_records = []
-        
+
         # Helper to safely calculate pearsonr against edge-case 0-variance bins
         def safe_pearson(x, y):
             if len(x) > 1 and np.std(x) > 0 and np.std(y) > 0:
                 return pearsonr(x, y)[0]
             return np.nan
-        
+
         r_all = safe_pearson(panel_af, target_af)
         pearson_records.append({"VARIANT_TYPE": "ALL", "PEARSON_R": r_all})
-            
+
         if np.sum(is_sv_ins) > 1:
             r_ins = safe_pearson(panel_af[is_sv_ins], target_af[is_sv_ins])
             pearson_records.append({"VARIANT_TYPE": "SV_INS", "PEARSON_R": r_ins})
-                
+
         if np.sum(is_sv_del) > 1:
             r_del = safe_pearson(panel_af[is_sv_del], target_af[is_sv_del])
             pearson_records.append({"VARIANT_TYPE": "SV_DEL", "PEARSON_R": r_del})
-                
+
         is_sv = is_sv_ins | is_sv_del
         if np.sum(is_sv) > 1:
             r_sv = safe_pearson(panel_af[is_sv], target_af[is_sv])
@@ -225,20 +254,19 @@ task SummarizeAndPlot {
         def plot_hist2d(p_af, c_af, title, outfile):
             if len(p_af) == 0: return
             plt.figure()
-            plt.hist2d(p_af, c_af, bins=50, norm=matplotlib.colors.LogNorm())
+            plt.hist2d(p_af, c_af, bins=np.linspace(0, 1, 50), norm=matplotlib.colors.LogNorm())
             plt.title(title)
             plt.xlabel('AoU+HPRC2+HGSVC3 allele frequency')
             plt.ylabel('Target allele frequency')
             plt.gca().set_aspect('equal')
             cbar = plt.colorbar()
             cbar.set_label('Number of variants', rotation=270, labelpad=10)
-            plt.savefig(f'{outfile}.png', bbox_inches='tight')
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
         plot_hist2d(panel_af, target_af, 'All variants', f'{output_prefix}-AF-all')
-        plot_hist2d(panel_af[is_sv_ins], target_af[is_sv_ins], 'SV-length insertion bubbles', f'{output_prefix}-AF-SV-ins')
-        plot_hist2d(panel_af[is_sv_del], target_af[is_sv_del], 'SV-length deletion bubbles', f'{output_prefix}-AF-SV-del')
+        plot_hist2d(panel_af[is_sv_ins], target_af[is_sv_ins], 'SV-length insertions', f'{output_prefix}-AF-SV-ins')
+        plot_hist2d(panel_af[is_sv_del], target_af[is_sv_del], 'SV-length deletions', f'{output_prefix}-AF-SV-del')
 
         # 6. Sample Metrics & Boxplots
         print("Generating population boxplots...", flush=True)
@@ -259,9 +287,9 @@ task SummarizeAndPlot {
             df['Heterozygous variants per sample'] = stats['het_all']
             df['Homozygous reference variants per sample'] = stats['hom_ref_all']
             df['Homozygous alternate variants per sample'] = stats['hom_alt_all']
-            df['Heterozygous SV-length insertion bubbles per sample'] = stats['het_ins']
-            df['Heterozygous SV-length deletion bubbles per sample'] = stats['het_del']
-            
+            df['Heterozygous SV-length insertions per sample'] = stats['het_ins']
+            df['Heterozygous SV-length deletions per sample'] = stats['het_del']
+
             df = pd.merge(df, population_df[['Sample name', 'Population code']], left_on='Sample', right_on='Sample name')
             return df.rename(columns={'Population code': 'Population'})
 
@@ -275,16 +303,15 @@ task SummarizeAndPlot {
                         palette=pop_color_dict.values())
             plt.title(title)
             plt.xlim(xlim)
-            plt.savefig(f'{outfile}.png', bbox_inches='tight')
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
         plot_boxplot(panel_results_df, 'Heterozygous variants per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-all', [0, 6E4])
         plot_boxplot(target_results_df, 'Heterozygous variants per sample', 'Target', f'{output_prefix}-target-het-all', [0, 6E4])
-        plot_boxplot(panel_results_df, 'Heterozygous SV-length insertion bubbles per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-SV-ins', [0, 500])
-        plot_boxplot(target_results_df, 'Heterozygous SV-length insertion bubbles per sample', 'Target', f'{output_prefix}-target-het-SV-ins', [0, 500])
-        plot_boxplot(panel_results_df, 'Heterozygous SV-length deletion bubbles per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-SV-del', [0, 500])
-        plot_boxplot(target_results_df, 'Heterozygous SV-length deletion bubbles per sample', 'Target', f'{output_prefix}-target-het-SV-del', [0, 500])
+        plot_boxplot(panel_results_df, 'Heterozygous SV-length insertions per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-SV-ins', [0, 500])
+        plot_boxplot(target_results_df, 'Heterozygous SV-length insertions per sample', 'Target', f'{output_prefix}-target-het-SV-ins', [0, 500])
+        plot_boxplot(panel_results_df, 'Heterozygous SV-length deletions per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-SV-del', [0, 500])
+        plot_boxplot(target_results_df, 'Heterozygous SV-length deletions per sample', 'Target', f'{output_prefix}-target-het-SV-del', [0, 500])
 
         # 7. ALT Length Weighted Histogram
         print("Generating ALT Length Histogram...", flush=True)
@@ -298,7 +325,6 @@ task SummarizeAndPlot {
         plt.ylabel('Number of ALT alleles per sample')
         plt.xlabel('ALT length - REF length (bp)')
         plt.legend()
-        plt.savefig(f'{output_prefix}-alt-alleles-per-sample-hist.png', bbox_inches='tight')
         plt.savefig(f'{output_prefix}-alt-alleles-per-sample-hist.pdf', bbox_inches='tight')
         plt.close()
 
@@ -327,16 +353,16 @@ task SummarizeAndPlot {
         def plot_de_finetti(hom_ref_arr, hom_alt_arr, het_arr, title, outfile, gridsize=70):
             if len(hom_ref_arr) == 0: return
             fig, ax = make_de_finetti_ax()
-            
+
             # 1. Combine arrays into a 2D matrix
             counts_arr = np.column_stack((hom_ref_arr, hom_alt_arr, het_arr))
-            
+
             # 2. Pre-aggregate identical variant counts
             unique_counts, point_weights = np.unique(counts_arr, axis=0, return_counts=True)
-            
+
             # 3. Calculate X/Y coordinates ONLY for unique combinations
             x_ternary_v, y_ternary_v = ternary_to_cartesian(unique_counts[:,0], unique_counts[:,1], unique_counts[:,2])
-            
+
             # 4. Pass the point_weights directly to hexbin using 'C'
             hb = ax.hexbin(
                 x_ternary_v, 
@@ -347,16 +373,15 @@ task SummarizeAndPlot {
                 extent=[0, 1, 0, np.sqrt(3) / 2], 
                 norm=matplotlib.colors.LogNorm()
             )
-            
+
             cbar = plt.colorbar(hb, ax=ax, shrink=0.5)
             cbar.set_label('Number of variants', rotation=270, labelpad=10)
-            
+
             x_values = np.linspace(0, 1, 50)
             cart_values = np.array([ternary_to_cartesian(*calc_hwe_ternary(x)) for x in x_values])
             ax.plot(cart_values[:, 0], cart_values[:, 1], c='C1', ls='solid', lw=3)
-            
+
             ax.text(0.5, -0.3, title, fontsize=18, ha='center')
-            plt.savefig(f'{outfile}.png', bbox_inches='tight')
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
@@ -373,27 +398,24 @@ task SummarizeAndPlot {
         plot_de_finetti(panel_hwe['hom_ref'], panel_hwe['hom_alt'], panel_hwe['het'], 
                         'AoU+HPRC2+HGSVC3\nAll variants', f'{output_prefix}-panel-hwe-all')
         plot_de_finetti(p_hwe_ins['hom_ref'], p_hwe_ins['hom_alt'], p_hwe_ins['het'], 
-                        'AoU+HPRC2+HGSVC3\nSV-length insertion bubbles', f'{output_prefix}-panel-hwe-SV-ins')
+                        'AoU+HPRC2+HGSVC3\nSV-length insertions', f'{output_prefix}-panel-hwe-SV-ins')
         plot_de_finetti(p_hwe_del['hom_ref'], p_hwe_del['hom_alt'], p_hwe_del['het'], 
-                        'AoU+HPRC2+HGSVC3\nSV-length deletion bubbles', f'{output_prefix}-panel-hwe-SV-del')
+                        'AoU+HPRC2+HGSVC3\nSV-length deletions', f'{output_prefix}-panel-hwe-SV-del')
 
         plot_de_finetti(target_hwe['hom_ref'], target_hwe['hom_alt'], target_hwe['het'], 
                         'Target\nAll variants', f'{output_prefix}-target-hwe-all', gridsize=80)
         plot_de_finetti(c_hwe_ins['hom_ref'], c_hwe_ins['hom_alt'], c_hwe_ins['het'], 
-                        'Target\nSV-length insertion bubbles', f'{output_prefix}-target-hwe-SV-ins', gridsize=80)
+                        'Target\nSV-length insertions', f'{output_prefix}-target-hwe-SV-ins', gridsize=80)
         plot_de_finetti(c_hwe_del['hom_ref'], c_hwe_del['hom_alt'], c_hwe_del['het'], 
-                        'Target\nSV-length deletion bubbles', f'{output_prefix}-target-hwe-SV-del', gridsize=80)
+                        'Target\nSV-length deletions', f'{output_prefix}-target-hwe-SV-del', gridsize=80)
 
         print("All tasks completed successfully.", flush=True)
         EOF
-
-        python3 summarize.py "~{panel_vcf}##idx##~{panel_vcf_idx}" "~{imputed_vcf}##idx##~{imputed_vcf_idx}" "~{population_tsv}" "~{output_prefix}" ~{chunk_size}
     >>>
 
     output {
         File summarize_pearson_tsv = "~{output_prefix}.pearson.tsv"
-        Array[File] summarize_plots_png = glob("*.png")
-        Array[File] summarize_plots_pdf = glob("*.pdf")
+        Array[File] summarize_plots = glob("*.pdf")
     }
 
     #########################

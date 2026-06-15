@@ -212,15 +212,9 @@ task CalculateMendelianConsistency {
                     elapsed_str = str(timedelta(seconds=int(elapsed_secs)))
                     
                     chrom_str = chrom_val.decode('utf-8').rstrip('\x00') if hasattr(chrom_val, 'decode') else str(chrom_val).rstrip('\x00')
-                    print(f"Processed {total_records:,} records... [Elapsed: {elapsed_str}] [Location: {chrom_str}:{pos_val}]", end='\r')
+                    print(f"Processed {total_records:,} records... [Elapsed: {elapsed_str}] [Location: {chrom_str}:{pos_val}]", flush=True)
                     
                     # --- 1. Locus Metric Extraction ---
-                    refs = chunk['variants/REF'].astype(str)
-                    alts = chunk['variants/ALT'][:, 0].astype(str)
-                    
-                    ref_len = np.char.str_len(refs)
-                    alt_len = np.char.str_len(alts)
-                    
                     # Use native altlen for sizes, string len for is_snp (Matches notebook)
                     altlen_arr = chunk['variants/altlen']
                     length = altlen_arr[:, 0] if altlen_arr.ndim > 1 else altlen_arr
@@ -402,7 +396,7 @@ task CalculateMendelianConsistency {
                                 ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                     
                     plt.tight_layout()
-                    plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.png", dpi=300)
+                    plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.pdf")
                     plt.close()
 
                 # 2. Per-Locus Boxplot
@@ -449,7 +443,7 @@ task CalculateMendelianConsistency {
                                 ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                     
                     plt.tight_layout()
-                    plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.png", dpi=300)
+                    plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.pdf")
                     plt.close()
 
         def main(args=None):
@@ -492,10 +486,10 @@ task CalculateMendelianConsistency {
     output {
         File unfiltered_pkl = "~{output_prefix}-unfiltered.pkl"
         File filtered_pkl = "~{output_prefix}-filtered-0.9.pkl"
-        File trio_plot_inTRH = "~{output_prefix}.trio.inTRH.png"
-        File trio_plot_outTRH = "~{output_prefix}.trio.outTRH.png"
-        File locus_plot_inTRH = "~{output_prefix}.locus.inTRH.png"
-        File locus_plot_outTRH = "~{output_prefix}.locus.outTRH.png"
+        File trio_plot_inTRH = "~{output_prefix}.trio.inTRH.pdf"
+        File trio_plot_outTRH = "~{output_prefix}.trio.outTRH.pdf"
+        File locus_plot_inTRH = "~{output_prefix}.locus.inTRH.pdf"
+        File locus_plot_outTRH = "~{output_prefix}.locus.outTRH.pdf"
     }
 
     #########################
