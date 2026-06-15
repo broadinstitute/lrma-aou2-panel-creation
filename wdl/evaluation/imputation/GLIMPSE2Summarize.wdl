@@ -278,7 +278,7 @@ task SummarizeAndPlot {
             'PUR': '#cc3300', 'CDX': '#339900', 'CHB': '#adcd00', 'CHS': '#01ff00', 'JPT': '#008b00',
             'KHV': '#00cc33', 'CEU': '#0000ff', 'GBR': '#00c5cd', 'FIN': '#00ebff', 'IBS': '#6495ed',
             'TSI': '#00008b', 'BEB': '#8b008b', 'GIH': '#9400d3', 'ITU': '#b03060', 'PJL': '#e11289',
-            'STU': '#ff00ff', 'UNK': 'grey'
+            'STU': '#ff00ff'
         }
 
         def make_results_df(samples, stats):
