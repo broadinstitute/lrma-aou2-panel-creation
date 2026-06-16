@@ -15,7 +15,7 @@ workflow HierarchicallyMergeVcfs {
         String output_prefix
         
         String cargo_toml
-        String paste_bcfs_script
+        String paste_vcfs_script
         String extra_merge_args = "--threads $(nproc) --info ID,RAF --format GT,DS,GP"
         
         String extra_concat_args = "--threads $(nproc) --naive"
@@ -50,7 +50,7 @@ workflow HierarchicallyMergeVcfs {
                     region = region,
                     output_prefix = region_prefix + ".L0-" + i,
                     cargo_toml = cargo_toml,
-                    paste_bcfs_script = paste_bcfs_script,
+                    paste_vcfs_script = paste_vcfs_script,
                     extra_args = "-r " + region + " " + extra_merge_args
             }
         }
@@ -80,7 +80,7 @@ workflow HierarchicallyMergeVcfs {
                         region = region,
                         output_prefix = region_prefix + ".L1-" + i,
                         cargo_toml = cargo_toml,
-                        paste_bcfs_script = paste_bcfs_script,
+                        paste_vcfs_script = paste_vcfs_script,
                         extra_args = "-r " + region + " " + extra_merge_args
                 }
             }
@@ -111,7 +111,7 @@ workflow HierarchicallyMergeVcfs {
                         region = region,
                         output_prefix = region_prefix + ".L2-" + i,
                         cargo_toml = cargo_toml,
-                        paste_bcfs_script = paste_bcfs_script,
+                        paste_vcfs_script = paste_vcfs_script,
                         extra_args = "-r " + region + " " + extra_merge_args
                 }
             }
@@ -134,7 +134,7 @@ workflow HierarchicallyMergeVcfs {
                     output_prefix = region_prefix + ".final",
                     
                     cargo_toml = cargo_toml,
-                    paste_bcfs_script = paste_bcfs_script,
+                    paste_vcfs_script = paste_vcfs_script,
                     extra_args = "-r " + region + " " + extra_merge_args
             }
         }
@@ -228,7 +228,7 @@ task MergeVcfs {
         String? extra_args
         
         String cargo_toml
-        String paste_bcfs_script
+        String paste_vcfs_script
 
         RuntimeAttr? runtime_attr_override
     }
@@ -306,8 +306,12 @@ task MergeVcfs {
             EXPECTED_RECORDS=""
             
             while IFS= read -r file; do
-                # Extract the total record count strictly from the index metadata (instantaneous)
-                RECORDS=$(bcftools index -n "$file")
+                # Dynamically extract record counts from either a CSI or a Tabix index mapping safely
+                if [[ "$file" == *.vcf.gz ]]; then
+                    RECORDS=$(bcftools index -n "$file" 2>/dev/null || tabix -l "$file" | wc -l)
+                else
+                    RECORDS=$(bcftools index -n "$file")
+                fi
                 
                 if [ -z "$EXPECTED_RECORDS" ]; then
                     EXPECTED_RECORDS=$RECORDS
@@ -338,10 +342,10 @@ task MergeVcfs {
         # ==========================================
         # ON-THE-FLY RUST COMPILATION
         # ==========================================
-        mkdir -p paste-bcfs/src
-        mv ~{cargo_toml} paste-bcfs/Cargo.toml
-        mv ~{paste_bcfs_script} paste-bcfs/src/main.rs
-        cd paste-bcfs
+        mkdir -p paste-vcfs/src
+        mv ~{cargo_toml} paste-vcfs/Cargo.toml
+        mv ~{paste_vcfs_script} paste-vcfs/src/main.rs
+        cd paste-vcfs
         cargo build --release
         cd ..
 
@@ -349,7 +353,7 @@ task MergeVcfs {
         # EXECUTE CUSTOM MERGE
         # ==========================================
         # Execute the statically compiled tool, pasting positional inputs straight from our list
-        ./paste-bcfs/target/release/paste-bcfs \
+        ./paste-vcfs/target/release/paste-vcfs \
             ~{extra_args} \
             -o ~{output_prefix}.bcf \
             $(cat merge_list.txt)

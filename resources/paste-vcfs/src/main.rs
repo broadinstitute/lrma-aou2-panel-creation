@@ -3,7 +3,7 @@ use rust_htslib::bcf::{self, header::{Header, TagType}, Read};
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Strictly pastes BCF formats across identical variants with strict POS subsetting")]
+#[command(author, version, about = "Strictly pastes BCF or VCF.GZ formats across identical variants")]
 struct Args {
     /// Region to subset (e.g., chr1:10000-20000). Behaves like --regions-overlap pos
     #[arg(short, long)]
@@ -25,7 +25,7 @@ struct Args {
     #[arg(short, long)]
     output: String,
 
-    /// Input BCF files
+    /// Input BCF or VCF.GZ files
     #[arg(required = true)]
     inputs: Vec<String>,
 }
@@ -39,9 +39,9 @@ enum FormatData {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // 1. Initialize readers
+    // 1. Initialize readers natively using htslib's polymorphic BCF parser
     let mut readers: Vec<bcf::IndexedReader> = args.inputs.iter()
-        .map(|path| bcf::IndexedReader::from_path(path).expect("Failed to open BCF"))
+        .map(|path| bcf::IndexedReader::from_path(path).expect("Failed to open input file (BCF or VCF.GZ)"))
         .collect();
 
     let num_files = readers.len();
@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 3. Initialize Output Writer and apply threads
+    // 3. Initialize Output Writer and apply threads (outputs binary BCF for maximum execution speed)
     let mut writer = bcf::Writer::from_path(&args.output, &merged_header, true, bcf::Format::Bcf)?;
     if args.threads > 1 {
         writer.set_threads(args.threads).expect("Failed to set writer threads");
@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (i, reader) in readers.iter_mut().skip(1).enumerate() {
             match reader.read(&mut side_records[i]) {
                 Some(Ok(_)) => {},
-                _ => panic!("FATAL: Side file {} ran out of records prematurely!", args.inputs[i + 1]),
+                _ => panic!("FATAL: Side file ran out of records prematurely! Check that your samples are squared-off."),
             }
         }
 
@@ -128,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // --- PROGRESS METER ---
         record_count += 1;
         if record_count % 10_000 == 0 {
-            let chrom_bytes = readers[0].header().rid2name(rid).unwrap_or(b"unknown");
+            let chrom_bytes = readers[0].header().rid2name(rid).unwrap_or(b"unknown".as_slice());
             let chrom_str = String::from_utf8_lossy(chrom_bytes);
             eprintln!(
                 "[Progress] Pasted {} records in {:.2?} | Current: {}:{}",
@@ -152,8 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 8. THE PERFORMANCE HIT: Object Reconstruction
-        // We spin up a completely blank record and manually copy the core data 
+        // 8. Object Reconstruction
         let mut new_record = writer.empty_record();
         new_record.set_rid(base_record.rid());
         new_record.set_pos(pos);
@@ -162,7 +161,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         new_record.set_qual(base_record.qual());
 
         // 9. Strict INFO Checks & Selective Copying
-        // Only the tags specified in `--info` are ported over to the new record
         for info_tag_str in &args.info {
             let tag = info_tag_str.as_bytes();
             let (tag_type, _) = readers[0].header().info_type(tag)
@@ -269,7 +267,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 11. Push concatenated formats to the newly spawned record
+        // 11. Push concatenated formats
         for (tag, data) in extracted_formats {
             match data {
                 FormatData::Integer(vals) => { new_record.push_format_integer(tag, &vals)?; },
@@ -281,7 +279,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 12. Write the finalized clean record
+        // 12. Write finalized record
         writer.write(&new_record)?;
     }
 
