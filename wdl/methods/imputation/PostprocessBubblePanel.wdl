@@ -16,8 +16,8 @@ workflow PostprocessBubblePanel {
 
         File pop_python_script
 
-        Int reduce_length_threshold = 20
-        Float reduce_af_threshold = 0.001
+        Int? reduce_length_threshold
+        Float? reduce_af_threshold
     }
 
     call ConvertToVcfGz as ConvertToVcfGzIdSplit { input:
