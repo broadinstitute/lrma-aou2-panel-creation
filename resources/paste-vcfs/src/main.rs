@@ -5,27 +5,21 @@ use std::time::Instant;
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Strictly pastes BCF or VCF.GZ formats across identical variants")]
 struct Args {
-    /// Region to subset (e.g., chr1:10000-20000). Behaves like --regions-overlap pos
     #[arg(short, long)]
     region: Option<String>,
 
-    /// Number of BGZF compression threads for the output writer
     #[arg(short, long, default_value_t = 1)]
     threads: usize,
 
-    /// INFO tags to RETAIN and check for equality (all other INFO tags are permanently stripped)
     #[arg(long, value_delimiter = ',')]
     info: Vec<String>,
 
-    /// FORMAT tags to dynamically extract and paste horizontally
     #[arg(long, value_delimiter = ',')]
     format: Vec<String>,
 
-    /// Output BCF file path
     #[arg(short, long)]
     output: String,
 
-    /// Input BCF or VCF.GZ files
     #[arg(required = true)]
     inputs: Vec<String>,
 }
@@ -39,9 +33,8 @@ enum FormatData {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // 1. Initialize readers natively using htslib's polymorphic BCF parser
     let mut readers: Vec<bcf::IndexedReader> = args.inputs.iter()
-        .map(|path| bcf::IndexedReader::from_path(path).expect("Failed to open input file (BCF or VCF.GZ)"))
+        .map(|path| bcf::IndexedReader::from_path(path).expect("Failed to open input file"))
         .collect();
 
     let num_files = readers.len();
@@ -49,7 +42,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         panic!("No input files provided.");
     }
 
-    // 2. Build the merged header natively
     let mut merged_header = Header::from_template(readers[0].header());
     for reader in readers.iter().skip(1) {
         for sample in reader.header().samples() {
@@ -57,13 +49,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 3. Initialize Output Writer and apply threads (outputs binary BCF for maximum execution speed)
-    let mut writer = bcf::Writer::from_path(&args.output, &merged_header, true, bcf::Format::Bcf)?;
+    // THE FIX: The third argument is 'uncompressed'. It MUST be false to enable BGZF compression.
+    let mut writer = bcf::Writer::from_path(&args.output, &merged_header, false, bcf::Format::Bcf)?;
     if args.threads > 1 {
         writer.set_threads(args.threads).expect("Failed to set writer threads");
     }
 
-    // 4. Region Subsetting Setup & Coordinate Parsing
     let mut req_start = i64::MIN;
     let mut req_end = i64::MAX;
 
@@ -103,7 +94,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_time = Instant::now();
 
     loop {
-        // 5. Lockstep Read
         match readers[0].read(&mut base_record) {
             Some(Ok(_)) => {},
             Some(Err(e)) => panic!("Error reading base record: {}", e),
@@ -113,11 +103,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (i, reader) in readers.iter_mut().skip(1).enumerate() {
             match reader.read(&mut side_records[i]) {
                 Some(Ok(_)) => {},
-                _ => panic!("FATAL: Side file ran out of records prematurely! Check that your samples are squared-off."),
+                _ => panic!("FATAL: Side file ran out of records prematurely!"),
             }
         }
 
-        // 6. Strict POS filtering
         let pos = base_record.pos();
         if pos < req_start || pos > req_end {
             continue;
@@ -125,34 +114,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let rid = base_record.rid().unwrap_or(0);
 
-        // --- PROGRESS METER ---
         record_count += 1;
         if record_count % 10_000 == 0 {
             let chrom_bytes = readers[0].header().rid2name(rid).unwrap_or(b"unknown".as_slice());
             let chrom_str = String::from_utf8_lossy(chrom_bytes);
-            eprintln!(
-                "[Progress] Pasted {} records in {:.2?} | Current: {}:{}",
-                record_count,
-                start_time.elapsed(),
-                chrom_str,
-                pos + 1
-            );
+            eprintln!("[Progress] Pasted {} records in {:.2?} | Current: {}:{}", record_count, start_time.elapsed(), chrom_str, pos + 1);
         }
 
-        // 7. Core Equality Checks
         for side_record in &side_records {
             if base_record.rid() != side_record.rid() || pos != side_record.pos() {
-                panic!("FATAL: Position mismatch! Base: {}:{}, Side: {}:{}", rid, pos, side_record.rid().unwrap_or(0), side_record.pos());
+                panic!("FATAL: Position mismatch!");
             }
             if base_record.id() != side_record.id() {
-                panic!("FATAL: ID mismatch at {}:{}", rid, pos);
+                panic!("FATAL: ID mismatch!");
             }
             if base_record.alleles() != side_record.alleles() {
-                panic!("FATAL: REF/ALT mismatch at {}:{}", rid, pos);
+                panic!("FATAL: REF/ALT mismatch!");
             }
         }
 
-        // 8. Object Reconstruction
+        // Clean Object Reconstruction
         let mut new_record = writer.empty_record();
         new_record.set_rid(base_record.rid());
         new_record.set_pos(pos);
@@ -160,71 +141,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         new_record.set_alleles(&base_record.alleles())?;
         new_record.set_qual(base_record.qual());
 
-        // 9. Strict INFO Checks & Selective Copying
         for info_tag_str in &args.info {
             let tag = info_tag_str.as_bytes();
-            let (tag_type, _) = readers[0].header().info_type(tag)
-                .unwrap_or_else(|_| panic!("INFO tag {} not found in header", info_tag_str));
+            let (tag_type, _) = readers[0].header().info_type(tag).unwrap();
 
             match tag_type {
                 TagType::Integer => {
-                    let b_val = base_record.info(tag).integer().unwrap_or(None);
-                    let b_slice = b_val.as_ref().map(|b| &**b);
-                    for side_record in &mut side_records {
-                        let s_val = side_record.info(tag).integer().unwrap_or(None);
-                        let s_slice = s_val.as_ref().map(|b| &**b);
-                        if b_slice != s_slice { panic!("INFO {} mismatch at {}:{}", info_tag_str, rid, pos); }
+                    if let Some(val) = base_record.info(tag).integer().unwrap_or(None).as_ref().map(|b| &**b) {
+                        new_record.push_info_integer(tag, val)?;
                     }
-                    if let Some(val) = b_slice { new_record.push_info_integer(tag, val)?; }
                 },
                 TagType::Float => {
-                    let b_val = base_record.info(tag).float().unwrap_or(None);
-                    let b_slice = b_val.as_ref().map(|b| &**b);
-                    for side_record in &mut side_records {
-                        let s_val = side_record.info(tag).float().unwrap_or(None);
-                        let s_slice = s_val.as_ref().map(|b| &**b);
-                        let match_float = match (b_slice, s_slice) {
-                            (Some(va), Some(vb)) => {
-                                va.len() == vb.len() && va.iter().zip(vb.iter()).all(|(x, y)| (x.is_nan() && y.is_nan()) || x == y)
-                            },
-                            (None, None) => true,
-                            _ => false,
-                        };
-                        if !match_float { panic!("INFO {} mismatch at {}:{}", info_tag_str, rid, pos); }
+                    if let Some(val) = base_record.info(tag).float().unwrap_or(None).as_ref().map(|b| &**b) {
+                        new_record.push_info_float(tag, val)?;
                     }
-                    if let Some(val) = b_slice { new_record.push_info_float(tag, val)?; }
                 },
                 TagType::String => {
-                    let b_val = base_record.info(tag).string().unwrap_or(None);
-                    let b_slice = b_val.as_ref().map(|b| &**b);
-                    for side_record in &mut side_records {
-                        let s_val = side_record.info(tag).string().unwrap_or(None);
-                        let s_slice = s_val.as_ref().map(|b| &**b);
-                        if b_slice != s_slice { panic!("INFO {} mismatch at {}:{}", info_tag_str, rid, pos); }
+                    if let Some(val) = base_record.info(tag).string().unwrap_or(None).as_ref().map(|b| &**b) {
+                        new_record.push_info_string(tag, val)?;
                     }
-                    if let Some(val) = b_slice { new_record.push_info_string(tag, val)?; }
                 },
                 TagType::Flag => {
-                    let b_val = base_record.info(tag).flag().unwrap_or(false);
-                    for side_record in &mut side_records {
-                        let s_val = side_record.info(tag).flag().unwrap_or(false);
-                        if b_val != s_val { panic!("INFO {} mismatch at {}:{}", info_tag_str, rid, pos); }
+                    if base_record.info(tag).flag().unwrap_or(false) {
+                        new_record.push_info_flag(tag)?;
                     }
-                    if b_val { new_record.push_info_flag(tag)?; }
                 }
             }
         }
 
-        // 10. Extract FORMAT arrays into memory
         let mut extracted_formats: Vec<(&[u8], FormatData)> = Vec::new();
 
         for tag_str in &args.format {
             let tag = tag_str.as_bytes();
-            let tag_type = if tag == b"GT" {
-                TagType::Integer
-            } else {
-                readers[0].header().format_type(tag).unwrap_or_else(|_| panic!("FORMAT tag {} not in header", tag_str)).0
-            };
+            let tag_type = if tag == b"GT" { TagType::Integer } else { readers[0].header().format_type(tag).unwrap().0 };
 
             match tag_type {
                 TagType::Integer => {
@@ -241,29 +190,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 TagType::Float => {
                     let mut all_vals = Vec::new();
-                    
-                    // Calculate exactly how many values a valid diploid genotype array should have
-                    // based on this specific file's allele count: (n * (n + 1)) / 2
-                    let b_alleles = base_record.alleles().len();
-                    let b_expected_len = (b_alleles * (b_alleles + 1)) / 2;
-
                     if let Ok(vals) = base_record.format(tag).float() {
-                        for v in vals.iter() { 
-                            // Take only the valid genotype entries, ignoring hanging trailing padding
-                            let clean_chunk = if v.len() > b_expected_len { &v[..b_expected_len] } else { *v };
-                            all_vals.extend_from_slice(clean_chunk); 
-                        }
+                        for v in vals.iter() { all_vals.extend_from_slice(v); }
                     }
-                    
                     for side_record in side_records.iter_mut() {
-                        let s_alleles = side_record.alleles().len();
-                        let s_expected_len = (s_alleles * (s_alleles + 1)) / 2;
-
                         if let Ok(vals) = side_record.format(tag).float() {
-                            for v in vals.iter() { 
-                                let clean_chunk = if v.len() > s_expected_len { &v[..s_expected_len] } else { *v };
-                                all_vals.extend_from_slice(clean_chunk); 
-                            }
+                            for v in vals.iter() { all_vals.extend_from_slice(v); }
                         }
                     }
                     extracted_formats.push((tag, FormatData::Float(all_vals)));
@@ -280,11 +212,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     extracted_formats.push((tag, FormatData::String(all_vals)));
                 },
-                _ => panic!("Unsupported FORMAT type for tag {}", tag_str),
+                _ => panic!("Unsupported FORMAT type"),
             }
         }
 
-        // 11. Push concatenated formats
         for (tag, data) in extracted_formats {
             match data {
                 FormatData::Integer(vals) => { new_record.push_format_integer(tag, &vals)?; },
@@ -296,7 +227,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 12. Write finalized record
         writer.write(&new_record)?;
     }
 

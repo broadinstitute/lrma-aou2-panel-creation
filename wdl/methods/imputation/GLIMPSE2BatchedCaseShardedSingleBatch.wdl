@@ -488,7 +488,7 @@ task PopAndMarginalizeCollisions {
         bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_sites_only_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
         ./pop-glimpse2/target/release/pop-glimpse2 ~{panel_id_split_vcf_gz} | \
-        bcftools sort -W -O -o ~{output_prefix}.bcf
+        bcftools sort -W -Ob -o ~{output_prefix}.bcf
     >>>
 
     output {
