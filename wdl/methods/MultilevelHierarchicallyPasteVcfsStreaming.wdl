@@ -14,8 +14,8 @@ workflow HierarchicallyMergeVcfs {
         Array[Int] timeouts_min  # Timeouts in minutes per level. Set to 0 to disable. e.g., [720, 720]
         String output_prefix
         
-        String cargo_toml
-        String paste_vcfs_script
+        File cargo_toml
+        File paste_vcfs_script
         String extra_merge_args = "--threads $(nproc) --info ID,RAF --format GT,DS,GP"
         
         String extra_concat_args = "--threads $(nproc) --naive"
@@ -227,8 +227,8 @@ task MergeVcfs {
         String output_prefix
         String? extra_args
         
-        String cargo_toml
-        String paste_vcfs_script
+        File cargo_toml
+        File paste_vcfs_script
 
         RuntimeAttr? runtime_attr_override
     }
