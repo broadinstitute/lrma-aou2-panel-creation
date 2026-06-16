@@ -439,7 +439,7 @@ task ReduceBubblePanel {
         EOF
 
         # Stream uncompressed VCF (-Ov) to the script, then sort and index as BCF
-        bcftools view -Ov ~{panel_bubble_vcf} | \
+        bcftools view --threads $(nproc) -Ov ~{panel_bubble_vcf} | \
             pypy reduce_panel.py ~{panel_id_split_sv_vcf_gz} ~{length_threshold} ~{af_threshold} | \
             bcftools view -W=csi -Ob -o ~{output_prefix}.bcf
     >>>
@@ -451,8 +451,8 @@ task ReduceBubblePanel {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          2,
-        mem_gb:             6,
+        cpu_cores:          4,
+        mem_gb:             16,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
