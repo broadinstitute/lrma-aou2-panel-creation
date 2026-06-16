@@ -15,7 +15,7 @@ workflow MendelianConsistency {
     input {
         File panel_sites_only_vcf       # split to biallelic
         File panel_sites_only_vcf_idx
-        File imputed_vcf                # split to biallelic, variants in same order as in panel
+        File imputed_vcf                # split to biallelic
         File imputed_vcf_idx
         File trh_bed
         File trh_bed_idx
@@ -47,6 +47,7 @@ workflow MendelianConsistency {
     }
 }
 
+# NOTE: imputed_vcf may be merged across samples with bcftools merge, which can apply a silent normalization; however, bcftools annotate will match equivalent representations
 task AnnotateVcf {
     input {
         File panel_sites_only_vcf
