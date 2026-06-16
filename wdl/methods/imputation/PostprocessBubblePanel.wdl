@@ -383,7 +383,7 @@ task ReduceBubblePanel {
         with opener(sv_vcf_path, 'rt') as f:
             for line in f:
                 if line.startswith('#'): continue
-                info_col = line.split('\t')[7]
+                info_col = line.strip().split('\t')[7]
                 for item in info_col.split(';'):
                     if item.startswith('ID='):
                         ids = item[3:].split(',')
@@ -420,7 +420,8 @@ task ReduceBubblePanel {
                         keep = True
                         
             if not keep:
-                # Check Multiallelic Bubble Criteria
+                # Check SV Criteria
+                # Retains isolated SVs AND multiallelic bubbles if *any* constituent ID is an SV.
                 bubble_ids_str = ""
                 for item in info_col.split(';'):
                     if item.startswith('ID='):
@@ -428,13 +429,11 @@ task ReduceBubblePanel {
                         break
                         
                 if bubble_ids_str:
-                    bubble_alleles = bubble_ids_str.split(',')
-                    for b_allele in bubble_alleles:
-                        constituent_ids = b_allele.split(':')
-                        if any(cid in sv_ids for cid in constituent_ids):
-                            keep = True
-                            break
-                            
+                    # Flatten all alleles and constituents into a single list by replacing ',' with ':'
+                    all_constituent_ids = bubble_ids_str.replace(',', ':').split(':')
+                    if any(cid in sv_ids for cid in all_constituent_ids):
+                        keep = True
+                        
             if keep:
                 sys.stdout.write(line)
         EOF
