@@ -439,9 +439,9 @@ task ReduceBubblePanel {
         EOF
 
         # Stream uncompressed VCF (-Ov) to the script, then sort and index as BCF
-        bcftools view --threads $(nproc) -Ov ~{panel_bubble_vcf} | \
+        bcftools view -Ov ~{panel_bubble_vcf} | \
             pypy reduce_panel.py ~{panel_id_split_sv_vcf_gz} ~{length_threshold} ~{af_threshold} | \
-            bcftools view -W=csi -Ob -o ~{output_prefix}.bcf
+            bcftools view --threads $(nproc) -W=csi -Ob -o ~{output_prefix}.bcf
     >>>
 
     output {
