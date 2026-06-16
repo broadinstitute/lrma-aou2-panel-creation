@@ -142,27 +142,29 @@ task SummarizeAndPlot {
                 if p_var.REF == c_var.REF and p_alt_str == c_alt_str:
                     is_sync = True
                     
-                # 3. Check equivalent right-trimmed sequence 
+                # 3. Check equivalent right-trimmed sequence
                 # NOTE: right-trimming can be silently applied by e.g., bcftools merge on the target
-                else:
-                    diff = len(p_var.REF) - len(c_var.REF)
-                    
-                    # Target must be strictly shorter, and the length difference 
-                    # must be identical for both the REF and the ALT strings.
-                    if diff > 0 and (len(p_alt_str) - len(c_alt_str) == diff):
-                        
-                        # The removed suffix must be identical in the panel's REF and ALT
-                        if p_var.REF[-diff:] == p_alt_str[-diff:]:
-                            
-                            # The remaining prefixes must match the target's exact REF and ALT
-                            if p_var.REF[:-diff] == c_var.REF and p_alt_str[:-diff] == c_alt_str:
-                                is_sync = True
+                # NOTE: we remove this check since we implemented paste-vcfs
+#                else:
+#                    diff = len(p_var.REF) - len(c_var.REF)
+#                    
+#                    # Target must be strictly shorter, and the length difference 
+#                    # must be identical for both the REF and the ALT strings.
+#                    if diff > 0 and (len(p_alt_str) - len(c_alt_str) == diff):
+#                        
+#                        # The removed suffix must be identical in the panel's REF and ALT
+#                        if p_var.REF[-diff:] == p_alt_str[-diff:]:
+#                            
+#                            # The remaining prefixes must match the target's exact REF and ALT
+#                            if p_var.REF[:-diff] == c_var.REF and p_alt_str[:-diff] == c_alt_str:
+#                                is_sync = True
 
             if not is_sync:
                 raise ValueError(
                     f"VCFs are out of sync!\n"
                     f"Panel : {p_var.CHROM}:{p_var.POS} {p_var.REF}>{p_alt_str}\n"
                     f"Target: {c_var.CHROM}:{c_var.POS} {c_var.REF}>{c_alt_str}"
+                )
 
             alts = p_var.ALT
             if not alts: continue
