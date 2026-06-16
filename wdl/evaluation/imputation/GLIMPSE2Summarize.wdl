@@ -45,8 +45,6 @@ task SummarizeAndPlot {
         File population_tsv
         String output_prefix
         
-        Int chunk_size = 10000
-
         RuntimeAttr? runtime_attr_override
     }
 
@@ -61,8 +59,7 @@ task SummarizeAndPlot {
         python - ~{panel_vcf} \
                  ~{imputed_vcf} \
                  ~{population_tsv} \
-                 ~{output_prefix} \
-                 ~{chunk_size} <<-'EOF'
+                 ~{output_prefix} <<-'EOF'
         import sys
         import time
         import numpy as np
@@ -81,7 +78,6 @@ task SummarizeAndPlot {
         imputed_vcf_path = sys.argv[2]
         population_tsv_path = sys.argv[3]
         output_prefix = sys.argv[4]
-        chunk_size = int(sys.argv[5])
 
         # 1. Initialize VCF readers
         panel_vcf = cyvcf2.VCF(panel_vcf_path)
@@ -129,37 +125,10 @@ task SummarizeAndPlot {
         start_time = time.time()
 
         for p_var, c_var in zip(panel_vcf, imputed_vcf):
-            # Extract string representations for the biallelic check
-            p_alt_str = p_var.ALT[0]
-            c_alt_str = c_var.ALT[0]
-            
-            is_sync = False
-            
-            # 1. Check strict positional sync
-            if p_var.CHROM == c_var.CHROM and p_var.POS == c_var.POS:
-                
-                # 2. Check strict sequence equality
-                if p_var.REF == c_var.REF and p_alt_str == c_alt_str:
-                    is_sync = True
-                    
-                # 3. Check equivalent right-trimmed sequence
-                # NOTE: right-trimming can be silently applied by e.g., bcftools merge on the target
-                # NOTE: we remove this check since we implemented paste-vcfs
-#                else:
-#                    diff = len(p_var.REF) - len(c_var.REF)
-#                    
-#                    # Target must be strictly shorter, and the length difference 
-#                    # must be identical for both the REF and the ALT strings.
-#                    if diff > 0 and (len(p_alt_str) - len(c_alt_str) == diff):
-#                        
-#                        # The removed suffix must be identical in the panel's REF and ALT
-#                        if p_var.REF[-diff:] == p_alt_str[-diff:]:
-#                            
-#                            # The remaining prefixes must match the target's exact REF and ALT
-#                            if p_var.REF[:-diff] == c_var.REF and p_alt_str[:-diff] == c_alt_str:
-#                                is_sync = True
-
-            if not is_sync:
+            # Strict safety check to ensure perfect sync
+            if p_var.CHROM != c_var.CHROM or p_var.POS != c_var.POS or p_var.REF != c_var.REF or p_var.ALT != c_var.ALT:
+                p_alt_str = p_var.ALT[0] if p_var.ALT else "."
+                c_alt_str = c_var.ALT[0] if c_var.ALT else "."
                 raise ValueError(
                     f"VCFs are out of sync!\n"
                     f"Panel : {p_var.CHROM}:{p_var.POS} {p_var.REF}>{p_alt_str}\n"
@@ -228,7 +197,6 @@ task SummarizeAndPlot {
             target_af_all.append(c_alt_count / c_valid if c_valid > 0 else 0.0)
             target_mean_alt_alleles_all.append(c_alt_count / num_c_samples)
 
-            # Progress Tracking
             variants_processed += 1
             if variants_processed % 10000 == 0:
                 elapsed_secs = time.time() - start_time
