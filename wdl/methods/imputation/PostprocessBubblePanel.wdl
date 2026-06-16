@@ -29,7 +29,7 @@ workflow PostprocessBubblePanel {
     if (defined(reduce_length_threshold) && defined(reduce_af_threshold)) {
         call ExtractSVIds { input:
             panel_id_split_vcf = panel_id_split_vcf,
-            output_prefix = output_prefix
+            output_prefix = output_prefix + ".id.split.sv"
         }
 
         call ReduceBubblePanel { input:
@@ -37,12 +37,13 @@ workflow PostprocessBubblePanel {
             panel_id_split_sv_vcf_gz = ExtractSVIds.panel_id_split_sv_vcf_gz,
             length_threshold = select_first([reduce_length_threshold]),
             af_threshold = select_first([reduce_af_threshold]),
-            output_prefix = output_prefix + ".reduced"
+            output_prefix = output_prefix + ".reduced.bubble"
         }
     }
 
     File panel_bubble_vcf_ = select_first([ReduceBubblePanel.reduced_vcf, panel_bubble_vcf])
     File panel_bubble_vcf_idx_ = select_first([ReduceBubblePanel.reduced_vcf_idx, panel_bubble_vcf_idx])
+    String output_prefix_ = if defined(ReduceBubblePanel.reduced_vcf) then output_prefix + ".reduced" else output_prefix
 
     scatter (i in range(length(regions))) {
         call PopBubblesPanel { input:
@@ -52,7 +53,7 @@ workflow PostprocessBubblePanel {
             panel_id_split_vcf_gz_tbi = ConvertToVcfGzIdSplit.vcf_gz_tbi,
             pop_python_script = pop_python_script,
             region = regions[i],
-            output_prefix = output_prefix + ".region-" + i
+            output_prefix = output_prefix_ + ".popped.region-" + i
         }
 
         call SplitBubblesPanel { input:
@@ -60,7 +61,7 @@ workflow PostprocessBubblePanel {
             panel_bubble_vcf_idx = panel_bubble_vcf_idx_,
             reference_fasta_fai = reference_fasta_fai,
             region = regions[i],
-            output_prefix = output_prefix + ".bubble.split.region-" + i,
+            output_prefix = output_prefix_ + ".bubble.split.region-" + i,
             leave_out_samples = []
         }
     }
@@ -68,25 +69,25 @@ workflow PostprocessBubblePanel {
     call ConcatVcfs.ConcatVcfs as ConcatPopped { input:
         vcfs = PopBubblesPanel.popped_vcf,
         vcf_idxs = PopBubblesPanel.popped_vcf_idx,
-        output_prefix = output_prefix + ".popped"
+        output_prefix = output_prefix_ + ".popped"
     }
 
     call ConcatVcfs.ConcatVcfs as ConcatPoppedSitesOnly { input:
         vcfs = PopBubblesPanel.popped_sites_only_vcf,
         vcf_idxs = PopBubblesPanel.popped_sites_only_vcf_idx,
-        output_prefix = output_prefix + ".popped.sites"
+        output_prefix = output_prefix_ + ".popped.sites"
     }
 
     call ConcatVcfs.ConcatVcfs as ConcatBubbleSplit { input:
         vcfs = SplitBubblesPanel.split_bubbles_vcf,
         vcf_idxs = SplitBubblesPanel.split_bubbles_vcf_idx,
-        output_prefix = output_prefix + ".bubble.split"
+        output_prefix = output_prefix_ + ".bubble.split"
     }
 
     call ConcatVcfs.ConcatVcfs as ConcatBubbleSplitSitesOnly { input:
         vcfs = SplitBubblesPanel.split_bubbles_sites_only_vcf,
         vcf_idxs = SplitBubblesPanel.split_bubbles_sites_only_vcf_idx,
-        output_prefix = output_prefix + ".bubble.split.sites"
+        output_prefix = output_prefix_ + ".bubble.split.sites"
     }
 
     if (defined(leave_out_samples)) {
@@ -96,7 +97,7 @@ workflow PostprocessBubblePanel {
                 panel_bubble_vcf_idx = panel_bubble_vcf_idx_,
                 reference_fasta_fai = reference_fasta_fai,
                 region = regions[i],
-                output_prefix = output_prefix + ".bubble.split.leaveout.region-" + i,
+                output_prefix = output_prefix_ + ".bubble.split.leaveout.region-" + i,
                 leave_out_samples = leave_out_samples
             }
         }
@@ -104,19 +105,22 @@ workflow PostprocessBubblePanel {
         call ConcatVcfs.ConcatVcfs as ConcatBubbleSplitLeaveOut { input:
             vcfs = SplitBubblesPanelLeaveOut.split_bubbles_vcf,
             vcf_idxs = SplitBubblesPanelLeaveOut.split_bubbles_vcf_idx,
-            output_prefix = output_prefix + ".bubble.split.leaveout"
+            output_prefix = output_prefix_ + ".bubble.split.leaveout"
         }
         
         call ConcatVcfs.ConcatVcfs as ConcatBubbleSplitSitesOnlyLeaveOut { input:
             vcfs = SplitBubblesPanelLeaveOut.split_bubbles_sites_only_vcf,
             vcf_idxs = SplitBubblesPanelLeaveOut.split_bubbles_sites_only_vcf_idx,
-            output_prefix = output_prefix + ".bubble.split.sites.leaveout"
+            output_prefix = output_prefix_ + ".bubble.split.sites.leaveout"
         }
     }
 
     output {
         File panel_id_split_vcf_gz = ConvertToVcfGzIdSplit.vcf_gz
         File panel_id_split_vcf_gz_tbi = ConvertToVcfGzIdSplit.vcf_gz_tbi
+        File? panel_id_split_sv_vcf_gz = ExtractSVIds.panel_id_split_sv_vcf_gz
+        File? panel_id_split_sv_vcf_gz_tbi = ExtractSVIds.panel_id_split_sv_vcf_gz_tbi
+
 
         File panel_popped_vcf = ConcatPopped.concatenated_vcf
         File panel_popped_vcf_idx = ConcatPopped.concatenated_vcf_idx
@@ -212,15 +216,15 @@ task PopBubblesPanel {
         bcftools view -r ~{region} --regions-overlap 0 ~{panel_bubble_vcf} | \
             pypy ~{pop_python_script} ~{panel_id_split_vcf_gz} | \
             bcftools +fill-tags -Ou -- -t AC,AN,AF | \
-            bcftools sort -W=csi -Ob -o ~{output_prefix}.popped.bcf
-        bcftools view ~{output_prefix}.popped.bcf -G -W=tbi -Ob -o ~{output_prefix}.popped.sites.bcf
+            bcftools sort -W=csi -Ob -o ~{output_prefix}.bcf
+        bcftools view ~{output_prefix}.bcf -G -W=tbi -Ob -o ~{output_prefix}.sites.bcf
     >>>
 
     output {
-        File popped_vcf = "~{output_prefix}.popped.bcf"
-        File popped_vcf_idx = "~{output_prefix}.popped.bcf.csi"
-        File popped_sites_only_vcf = "~{output_prefix}.popped.sites.bcf"
-        File popped_sites_only_vcf_idx = "~{output_prefix}.popped.sites.bcf.csi"
+        File popped_vcf = "~{output_prefix}.bcf"
+        File popped_vcf_idx = "~{output_prefix}.bcf.csi"
+        File popped_sites_only_vcf = "~{output_prefix}.sites.bcf"
+        File popped_sites_only_vcf_idx = "~{output_prefix}.sites.bcf.csi"
     }
 
     #########################
