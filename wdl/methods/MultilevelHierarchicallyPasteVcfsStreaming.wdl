@@ -346,7 +346,7 @@ task MergeVcfs {
         mv ~{cargo_toml} paste-vcfs/Cargo.toml
         mv ~{paste_vcfs_script} paste-vcfs/src/main.rs
         cd paste-vcfs
-        cargo build --release
+        CARGO_BUILD_JOBS=$(nproc) cargo build --release
         cd ..
 
         # ==========================================

@@ -241,12 +241,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 TagType::Float => {
                     let mut all_vals = Vec::new();
+                    
+                    // Calculate exactly how many values a valid diploid genotype array should have
+                    // based on this specific file's allele count: (n * (n + 1)) / 2
+                    let b_alleles = base_record.alleles().len();
+                    let b_expected_len = (b_alleles * (b_alleles + 1)) / 2;
+
                     if let Ok(vals) = base_record.format(tag).float() {
-                        for v in vals.iter() { all_vals.extend_from_slice(v); }
+                        for v in vals.iter() { 
+                            // Take only the valid genotype entries, ignoring hanging trailing padding
+                            let clean_chunk = if v.len() > b_expected_len { &v[..b_expected_len] } else { *v };
+                            all_vals.extend_from_slice(clean_chunk); 
+                        }
                     }
+                    
                     for side_record in side_records.iter_mut() {
+                        let s_alleles = side_record.alleles().len();
+                        let s_expected_len = (s_alleles * (s_alleles + 1)) / 2;
+
                         if let Ok(vals) = side_record.format(tag).float() {
-                            for v in vals.iter() { all_vals.extend_from_slice(v); }
+                            for v in vals.iter() { 
+                                let clean_chunk = if v.len() > s_expected_len { &v[..s_expected_len] } else { *v };
+                                all_vals.extend_from_slice(clean_chunk); 
+                            }
                         }
                     }
                     extracted_formats.push((tag, FormatData::Float(all_vals)));
