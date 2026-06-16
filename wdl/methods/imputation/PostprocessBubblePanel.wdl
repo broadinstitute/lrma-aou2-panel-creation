@@ -34,7 +34,7 @@ workflow PostprocessBubblePanel {
 
         call ReduceBubblePanel { input:
             panel_bubble_vcf = panel_bubble_vcf,
-            panel_id_split_sv_vcf = ExtractSVIds.panel_id_split_sv_vcf,
+            panel_id_split_sv_vcf_gz = ExtractSVIds.panel_id_split_sv_vcf_gz,
             length_threshold = select_first([reduce_length_threshold]),
             af_threshold = select_first([reduce_af_threshold]),
             output_prefix = output_prefix + ".reduced"
@@ -325,8 +325,8 @@ task ExtractSVIds {
     >>>
 
     output {
-        File panel_id_split_sv_vcf = "~{output_prefix}.vcf.gz"
-        File panel_id_split_sv_vcf_idx = "~{output_prefix}.vcf.gz.tbi"
+        File panel_id_split_sv_vcf_gz = "~{output_prefix}.vcf.gz"
+        File panel_id_split_sv_vcf_gz_tbi = "~{output_prefix}.vcf.gz.tbi"
     }
 
     #########################
@@ -355,7 +355,7 @@ task ExtractSVIds {
 task ReduceBubblePanel {
     input {
         File panel_bubble_vcf
-        File panel_id_split_sv_vcf
+        File panel_id_split_sv_vcf_gz
         Int length_threshold = 20
         Float af_threshold = 0.001
         String output_prefix
@@ -363,7 +363,7 @@ task ReduceBubblePanel {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_gb = 10 + 2 * ceil(size([panel_bubble_vcf, panel_id_split_sv_vcf], "GB"))
+    Int disk_gb = 10 + 2 * ceil(size([panel_bubble_vcf, panel_id_split_sv_vcf_gz], "GB"))
 
     command <<<
         set -euox pipefail
@@ -441,7 +441,7 @@ task ReduceBubblePanel {
 
         # Stream uncompressed VCF (-Ov) to the script, then sort and index as BCF
         bcftools view -Ov ~{panel_bubble_vcf} | \
-            pypy reduce_panel.py ~{panel_id_split_sv_vcf} ~{length_threshold} ~{af_threshold} | \
+            pypy reduce_panel.py ~{panel_id_split_sv_vcf_gz} ~{length_threshold} ~{af_threshold} | \
             bcftools sort -W=csi -Ob -o ~{output_prefix}.bcf
     >>>
 
