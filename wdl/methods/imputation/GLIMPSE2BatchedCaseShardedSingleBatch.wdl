@@ -13,6 +13,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File? input_gvcf_idxs_fofn
         File? paste_vcfs_cargo_toml     # TODO Dockerize
         File? paste_vcfs_script
+        RuntimeAttr? paste_l0_merge_runtime_attr_override
+        RuntimeAttr? paste_l1_merge_runtime_attr_override
         # TODO expose batch_sizes
 
         File sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
@@ -142,7 +144,9 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                 cargo_toml = select_first([paste_vcfs_cargo_toml]),
                 paste_vcfs_script = select_first([paste_vcfs_script]),
                 extra_merge_args = "--threads $(nproc) --format GT,PL",
-                extra_concat_args = "--threads $(nproc) --naive"
+                extra_concat_args = "--threads $(nproc) --naive",
+                l0_merge_runtime_attr_override = paste_l0_merge_runtime_attr_override,
+                l1_merge_runtime_attr_override = paste_l1_merge_runtime_attr_override
         }
 
         scatter (k in range(length(output_regions_))) {

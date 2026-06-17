@@ -17,7 +17,11 @@ workflow HierarchicallyMergeVcfs {
         File cargo_toml
         File paste_vcfs_script
         String extra_merge_args = "--threads $(nproc) --info ID,RAF --format GT,DS,GP"
-        
+
+        RuntimeAttr? l0_merge_runtime_attr_override
+        RuntimeAttr? l1_merge_runtime_attr_override
+        RuntimeAttr? l2_merge_runtime_attr_override
+
         String extra_concat_args = "--threads $(nproc) --naive"
     }
 
@@ -51,7 +55,8 @@ workflow HierarchicallyMergeVcfs {
                     output_prefix = region_prefix + ".L0-" + i,
                     cargo_toml = cargo_toml,
                     paste_vcfs_script = paste_vcfs_script,
-                    extra_args = "-r " + region + " " + extra_merge_args
+                    extra_args = "-r " + region + " " + extra_merge_args,
+                    runtime_attr_override = l0_merge_runtime_attr_override
             }
         }
 
@@ -81,7 +86,8 @@ workflow HierarchicallyMergeVcfs {
                         output_prefix = region_prefix + ".L1-" + i,
                         cargo_toml = cargo_toml,
                         paste_vcfs_script = paste_vcfs_script,
-                        extra_args = "-r " + region + " " + extra_merge_args
+                        extra_args = "-r " + region + " " + extra_merge_args,
+                        runtime_attr_override = l1_merge_runtime_attr_override
                 }
             }
         }
@@ -112,7 +118,8 @@ workflow HierarchicallyMergeVcfs {
                         output_prefix = region_prefix + ".L2-" + i,
                         cargo_toml = cargo_toml,
                         paste_vcfs_script = paste_vcfs_script,
-                        extra_args = "-r " + region + " " + extra_merge_args
+                        extra_args = "-r " + region + " " + extra_merge_args,
+                        runtime_attr_override = l2_merge_runtime_attr_override
                 }
             }
         }
