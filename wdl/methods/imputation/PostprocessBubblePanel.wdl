@@ -35,7 +35,9 @@ workflow PostprocessBubblePanel {
         scatter (i in range(length(regions))) {
             call ReduceBubblePanel { input:
                 panel_bubble_vcf = panel_bubble_vcf,
+                panel_bubble_vcf_idx = panel_bubble_vcf_idx,
                 panel_id_split_sv_vcf_gz = ExtractSVIds.panel_id_split_sv_vcf_gz,
+                panel_id_split_sv_vcf_gz_tbi = ExtractSVIds.panel_id_split_sv_vcf_gz_tbi,
                 length_threshold = select_first([reduce_length_threshold]),
                 af_threshold = select_first([reduce_af_threshold]),
                 region = regions[i],
@@ -370,7 +372,9 @@ task ExtractSVIds {
 task ReduceBubblePanel {
     input {
         File panel_bubble_vcf
+        File panel_bubble_vcf_idx
         File panel_id_split_sv_vcf_gz
+        File panel_id_split_sv_vcf_gz_tbi
         Int length_threshold = 20
         Float af_threshold = 0.001
         String region
