@@ -333,7 +333,7 @@ task SplitBubblesPanel {
             bcftools +fill-AN-AC -Ou | \
             bcftools reheader -f ~{reference_fasta_fai} | \
             ~{if length(leave_out_samples_array) > 0 then "bcftools view -S ^" + leave_out_samples_list + " --force-samples -Ou |" else ""} \
-            bcftools sort --max-mem ~{sort_mem_gb} -W=csi -Ob -o ~{output_prefix}.bcf
+            bcftools sort --max-mem ~{sort_mem_gb}G -W=csi -Ob -o ~{output_prefix}.bcf
 
         bcftools view -G ~{output_prefix}.bcf -W=csi -Ob -o ~{output_prefix}.sites.bcf
     >>>
