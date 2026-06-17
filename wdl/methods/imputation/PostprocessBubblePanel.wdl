@@ -319,6 +319,7 @@ task SplitBubblesPanel {
     }
 
     Int disk_gb = 10 + 2 * ceil(size(panel_bubble_vcf, "GB"))
+    Int sort_mem_gb = 4
 
     Array[String] leave_out_samples_array = select_first([leave_out_samples, []])
     File leave_out_samples_list = write_lines(leave_out_samples_array)
@@ -332,7 +333,7 @@ task SplitBubblesPanel {
             bcftools +fill-AN-AC -Ou | \
             bcftools reheader -f ~{reference_fasta_fai} | \
             ~{if length(leave_out_samples_array) > 0 then "bcftools view -S ^" + leave_out_samples_list + " --force-samples -Ou |" else ""} \
-            bcftools sort -W=csi -Ob -o ~{output_prefix}.bcf
+            bcftools sort --max-mem ~{sort_mem_gb} -W=csi -Ob -o ~{output_prefix}.bcf
 
         bcftools view -G ~{output_prefix}.bcf -W=csi -Ob -o ~{output_prefix}.sites.bcf
     >>>
@@ -347,7 +348,7 @@ task SplitBubblesPanel {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
-        mem_gb:             6,
+        mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
