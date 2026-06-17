@@ -132,7 +132,12 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         vcfs = PopAndMarginalizeCollisions.popped_vcf,
         vcf_idxs = PopAndMarginalizeCollisions.popped_vcf_idx,
         output_prefix = output_prefix + ".glimpse2.popped",
-        do_bcf = true
+        do_bcf = true,
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive",
+        regions = [],
+        do_sort_shard = false,
+        extra_args_shard = ""
     }
 
     output {

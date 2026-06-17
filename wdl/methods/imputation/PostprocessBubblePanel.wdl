@@ -48,7 +48,13 @@ workflow PostprocessBubblePanel {
         call ConcatVcfs.ConcatVcfs as ConcatReducedBubble { input:
             vcfs = ReduceBubblePanel.reduced_vcf,
             vcf_idxs = ReduceBubblePanel.reduced_vcf_idx,
-            output_prefix = output_prefix + ".reduced.bubble"
+            output_prefix = output_prefix + ".reduced.bubble",
+            do_bcf = true,
+            do_sort = false,
+            extra_args = "--threads $(nproc) --naive",
+            regions = [],
+            do_sort_shard = false,
+            extra_args_shard = ""
         }
     }
 
@@ -80,25 +86,49 @@ workflow PostprocessBubblePanel {
     call ConcatVcfs.ConcatVcfs as ConcatPopped { input:
         vcfs = PopBubblesPanel.popped_vcf,
         vcf_idxs = PopBubblesPanel.popped_vcf_idx,
-        output_prefix = output_prefix_ + ".popped"
+        output_prefix = output_prefix_ + ".popped",
+        do_bcf = true,
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive",
+        regions = [],
+        do_sort_shard = false,
+        extra_args_shard = ""
     }
 
     call ConcatVcfs.ConcatVcfs as ConcatPoppedSitesOnly { input:
         vcfs = PopBubblesPanel.popped_sites_only_vcf,
         vcf_idxs = PopBubblesPanel.popped_sites_only_vcf_idx,
-        output_prefix = output_prefix_ + ".popped.sites"
+        output_prefix = output_prefix_ + ".popped.sites",
+        do_bcf = true,
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive",
+        regions = [],
+        do_sort_shard = false,
+        extra_args_shard = ""
     }
 
     call ConcatVcfs.ConcatVcfs as ConcatBubbleSplit { input:
         vcfs = SplitBubblesPanel.split_bubbles_vcf,
         vcf_idxs = SplitBubblesPanel.split_bubbles_vcf_idx,
-        output_prefix = output_prefix_ + ".bubble.split"
+        output_prefix = output_prefix_ + ".bubble.split",
+        do_bcf = true,
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive",
+        regions = [],
+        do_sort_shard = false,
+        extra_args_shard = ""
     }
 
     call ConcatVcfs.ConcatVcfs as ConcatBubbleSplitSitesOnly { input:
         vcfs = SplitBubblesPanel.split_bubbles_sites_only_vcf,
         vcf_idxs = SplitBubblesPanel.split_bubbles_sites_only_vcf_idx,
-        output_prefix = output_prefix_ + ".bubble.split.sites"
+        output_prefix = output_prefix_ + ".bubble.split.sites",
+        do_bcf = true,
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive",
+        regions = [],
+        do_sort_shard = false,
+        extra_args_shard = ""
     }
 
     if (defined(leave_out_samples)) {
@@ -116,13 +146,25 @@ workflow PostprocessBubblePanel {
         call ConcatVcfs.ConcatVcfs as ConcatBubbleSplitLeaveOut { input:
             vcfs = SplitBubblesPanelLeaveOut.split_bubbles_vcf,
             vcf_idxs = SplitBubblesPanelLeaveOut.split_bubbles_vcf_idx,
-            output_prefix = output_prefix_ + ".bubble.split.leaveout"
+            output_prefix = output_prefix_ + ".bubble.split.leaveout",
+            do_bcf = true,
+            do_sort = false,
+            extra_args = "--threads $(nproc) --naive",
+            regions = [],
+            do_sort_shard = false,
+            extra_args_shard = ""
         }
         
         call ConcatVcfs.ConcatVcfs as ConcatBubbleSplitSitesOnlyLeaveOut { input:
             vcfs = SplitBubblesPanelLeaveOut.split_bubbles_sites_only_vcf,
             vcf_idxs = SplitBubblesPanelLeaveOut.split_bubbles_sites_only_vcf_idx,
-            output_prefix = output_prefix_ + ".bubble.split.sites.leaveout"
+            output_prefix = output_prefix_ + ".bubble.split.sites.leaveout",
+            do_bcf = true,
+            do_sort = false,
+            extra_args = "--threads $(nproc) --naive",
+            regions = [],
+            do_sort_shard = false,
+            extra_args_shard = ""
         }
     }
 

@@ -9,12 +9,12 @@ workflow ConcatVcfs {
         Boolean do_sort = false
         String extra_args = "--threads $(nproc) --naive"
 
-        Array[String]? regions      # if provided, concat within shards and then concat across shards; useful for concat of HiPhase short + SV
+        Array[String] regions = []      # if provided, concat within shards and then concat across shards; useful for concat of HiPhase short + SV
         Boolean do_sort_shard = true
         String extra_args_shard = "--threads $(nproc)"
     }
 
-    if (defined(regions)) {
+    if (length(regions) > 0) {
         scatter (region in select_first([regions])) {
             call ConcatVcfs as ShardConcatVcfs {
                 input:
