@@ -13,6 +13,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         Array[File]? input_gvcf_idxs
         File? paste_vcfs_cargo_toml     # TODO Dockerize
         File? paste_vcfs_script
+        # TODO expose batch_sizes
 
         File sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
 
@@ -125,15 +126,13 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             }
         }
 
-        # two-level hierarchical merge, using GLIMPSE2 shards
-        # localize at all levels; in first level, localize entire chromosome genotyped VCF but merge only shard (i.e., some redundant localization)
-        
+        # two-level localized hierarchical merge over entire chromosome
         call MultilevelHierarchicallyPasteVcfsStreaming.HierarchicallyMergeVcfs as PastePreprocessPLsGVCFs {
             input:
                 vcfs_array = PreprocessPLsGVCF.preprocessed_pls_vcf,
                 vcf_idxs_array = PreprocessPLsGVCF.preprocessed_pls_vcf_idx,
-                regions = output_regions_,
-                batch_sizes = [100, 10],
+                regions = [chromosome],
+                batch_sizes = [50, 50],
                 do_localization = [true, true],
                 timeouts_min = [0, 0],
                 output_prefix = output_prefix + ".preprocessedPLs",
