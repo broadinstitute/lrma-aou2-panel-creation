@@ -369,6 +369,7 @@ task ExtractSVIds {
     }
 }
 
+# TODO this script could be optimized, some of the string splits, etc. are extraneous and cause memory churn
 task ReduceBubblePanel {
     input {
         File panel_bubble_vcf

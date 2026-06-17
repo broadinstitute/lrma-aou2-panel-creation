@@ -20,6 +20,11 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites"
         String output_prefix
 
+        # bypass for panel resources
+        Array[String]? input_regions_bypass
+        Array[String]? output_regions_bypass
+        Array[File]? panel_split_chunk_bins_bypass
+
         # inputs for PreprocessPLs
         File extract_bubble_likelihoods_script
         File extract_bubble_likelihoods_cargo_toml
@@ -37,33 +42,41 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
     Array[String] sample_names = if(defined(sample_names_file)) then read_lines(select_first([sample_names_file])) else []     # empty list to select all samples
 
-    call GLIMPSE2Chunk {
-        input:
-            vcf = panel_bubble_split_vcf,
-            vcf_idx = panel_bubble_split_vcf_idx,
-            region = chromosome,
-            genetic_map = genetic_maps_dict[chromosome],
-            output_prefix = output_prefix,
-            extra_chunk_args = extra_chunk_args,
-            docker = glimpse2_docker
-    }
-
-    Array[String] input_regions_ = read_lines(GLIMPSE2Chunk.input_regions)
-    Array[String] output_regions_ = read_lines(GLIMPSE2Chunk.output_regions)
-
-    scatter (k in range(length(output_regions_))) {
-        call GLIMPSE2SplitReference as ChunkedGLIMPSE2SplitReference {
+    if (!defined(input_regions_bypass) && !defined(output_regions_bypass) && !defined(panel_split_chunk_bins_bypass)) {
+        call GLIMPSE2Chunk {
             input:
-                panel_bubble_split_vcf = panel_bubble_split_vcf,
-                panel_bubble_split_vcf_idx = panel_bubble_split_vcf_idx,
-                input_region = input_regions_[k],
-                output_region = output_regions_[k],
+                vcf = panel_bubble_split_vcf,
+                vcf_idx = panel_bubble_split_vcf_idx,
+                region = chromosome,
                 genetic_map = genetic_maps_dict[chromosome],
-                output_prefix = output_prefix + ".shard-" + k + ".split",
-                extra_split_args = extra_split_args,
+                output_prefix = output_prefix,
+                extra_chunk_args = extra_chunk_args,
                 docker = glimpse2_docker
         }
 
+        Array[String] input_regions_generated = read_lines(GLIMPSE2Chunk.input_regions)
+        Array[String] output_regions_generated = read_lines(GLIMPSE2Chunk.output_regions)
+
+        scatter (k in range(length(output_regions_generated))) {
+            call GLIMPSE2SplitReference as ChunkedGLIMPSE2SplitReference {
+                input:
+                    panel_bubble_split_vcf = panel_bubble_split_vcf,
+                    panel_bubble_split_vcf_idx = panel_bubble_split_vcf_idx,
+                    input_region = input_regions_generated[k],
+                    output_region = output_regions_generated[k],
+                    genetic_map = genetic_maps_dict[chromosome],
+                    output_prefix = output_prefix + ".shard-" + k + ".split",
+                    extra_split_args = extra_split_args,
+                    docker = glimpse2_docker
+            }
+        }
+    }
+
+    Array[String] input_regions_ = select_first([input_regions_bypass, input_regions_generated])
+    Array[String] output_regions_ = select_first([output_regions_bypass, output_regions_generated])
+    Array[File] panel_split_chunk_bins_ = select_first([panel_split_chunk_bins_bypass, ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin])
+
+    scatter (k in range(length(output_regions_))) {
         call PreprocessPLs as ChunkedPreprocessPLs {
             input:
                 input_vcf = input_vcf,
@@ -82,7 +95,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             input:
                 input_vcf = ChunkedPreprocessPLs.preprocessed_pls_bcf,
                 input_vcf_idx = ChunkedPreprocessPLs.preprocessed_pls_bcf_csi,
-                panel_split_chunk_bin = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,
+                panel_split_chunk_bin = panel_split_chunk_bins_[k],
                 input_region = input_regions_[k],
                 output_region = output_regions_[k],
                 genetic_map = genetic_maps_dict[chromosome],
@@ -125,7 +138,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     output {
         Array[String] input_regions = input_regions_
         Array[String] output_regions = output_regions_
-        Array[File] panel_split_chunk_bins = ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin
+        Array[File] panel_split_chunk_bins = panel_split_chunk_bins_
         File glimpse2_bubble_posteriors_vcf = GLIMPSE2Ligate.ligated_vcf
         File glimpse2_bubble_posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx
         File glimpse2_popped_posteriors_vcf = ConcatPopAndMarginalizeCollisions.concatenated_vcf
