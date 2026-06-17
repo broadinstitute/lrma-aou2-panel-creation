@@ -9,8 +9,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File? input_joint_vcf
         File? input_joint_vcf_idx
 
-        Array[File]? input_gvcfs
-        Array[File]? input_gvcf_idxs
+        File? input_gvcfs_fofn
+        File? input_gvcf_idxs_fofn
         File? paste_vcfs_cargo_toml     # TODO Dockerize
         File? paste_vcfs_script
         # TODO expose batch_sizes
@@ -86,7 +86,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     Array[File] panel_split_chunk_bins_ = select_first([panel_split_chunk_bins_bypass, ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin])
 
     # joint ###################################################################
-    if (defined(input_joint_vcf) && defined(input_joint_vcf_idx) && !defined(input_gvcfs) && !defined(input_gvcf_idxs)) {
+    if (defined(input_joint_vcf) && defined(input_joint_vcf_idx) && !defined(input_gvcfs_fofn) && !defined(input_gvcf_idxs_fofn)) {
         scatter (k in range(length(output_regions_))) {
             call PreprocessPLs as ChunkedPreprocessPLsJoint {
                 input:
@@ -107,13 +107,16 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     ###########################################################################
 
     # gVCF ####################################################################
-    if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && defined(input_gvcfs) && defined(input_gvcf_idxs)) {
+    if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && defined(input_gvcfs_fofn) && defined(input_gvcf_idxs_fofn)) {
+        Array[File] input_gvcfs = read_lines(select_first([input_gvcfs_fofn]))
+        Array[File] input_gvcf_idxs = read_lines(select_first([input_gvcf_idxs_fofn]))
+    
         # for each input, localize entire genome gVCF but genotype only requested chromosome (i.e., some redundant localization)
         scatter (j in range(length(select_first([input_gvcfs])))) {
             call PreprocessPLs as PreprocessPLsGVCF {
                 input:
-                    input_vcf = select_first([input_gvcfs])[j],
-                    input_vcf_idx = select_first([input_gvcf_idxs])[j],
+                    input_vcf = input_gvcfs[j],
+                    input_vcf_idx = input_gvcf_idxs[j],
                     mode = "gvcf",
                     panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
                     panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
