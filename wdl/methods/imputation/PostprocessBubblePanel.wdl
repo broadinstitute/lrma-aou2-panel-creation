@@ -305,6 +305,7 @@ task PopBubblesPanel {
     }
 }
 
+# TODO this task is prone to OOM even though it's not doing much, perhaps too many pipes?
 task SplitBubblesPanel {
     input {
         File panel_bubble_vcf

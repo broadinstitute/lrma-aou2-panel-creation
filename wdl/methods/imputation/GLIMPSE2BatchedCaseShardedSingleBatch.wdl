@@ -1,12 +1,20 @@
 version 1.0
 
 import "../ConcatVcfs.wdl" as ConcatVcfs
+import "../MultilevelHierarchicallyPasteVcfsStreaming.wdl" as MultilevelHierarchicallyPasteVcfsStreaming
 
 workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     input {
-        File input_vcf
-        File input_vcf_idx
-        File? sample_names_file     # omit to select all samples
+        # joint VCF and single-sample gVCF inputs are mutually exclusive
+        File? input_joint_vcf
+        File? input_joint_vcf_idx
+
+        Array[File]? input_gvcfs
+        Array[File]? input_gvcf_idxs
+        File? paste_vcfs_cargo_toml     # TODO Dockerize
+        File? paste_vcfs_script
+
+        File sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
 
         String chromosome
         File genetic_maps_tsv
@@ -40,7 +48,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     }
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
-    Array[String] sample_names = if(defined(sample_names_file)) then read_lines(select_first([sample_names_file])) else []     # empty list to select all samples
+    Array[String] sample_names = read_lines(select_first([sample_names_file]))
 
     if (!defined(input_regions_bypass) && !defined(output_regions_bypass) && !defined(panel_split_chunk_bins_bypass)) {
         call GLIMPSE2Chunk {
@@ -76,25 +84,84 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     Array[String] output_regions_ = select_first([output_regions_bypass, output_regions_generated])
     Array[File] panel_split_chunk_bins_ = select_first([panel_split_chunk_bins_bypass, ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin])
 
-    scatter (k in range(length(output_regions_))) {
-        call PreprocessPLs as ChunkedPreprocessPLs {
-            input:
-                input_vcf = input_vcf,
-                input_vcf_idx = input_vcf_idx,
-                panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
-                panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
-                output_region = output_regions_[k],
-                sample_names = sample_names,
-                output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
-                extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
-                cargo_toml = extract_bubble_likelihoods_cargo_toml,
-                extra_args = extract_bubble_likelihoods_extra_args
+    # joint ###################################################################
+    if (defined(input_joint_vcf) && defined(input_joint_vcf_idx) && !defined(input_gvcfs) && !defined(input_gvcf_idxs)) {
+        scatter (k in range(length(output_regions_))) {
+            call PreprocessPLs as ChunkedPreprocessPLsJoint {
+                input:
+                    input_vcf = select_first([input_joint_vcf]),
+                    input_vcf_idx = select_first([input_joint_vcf_idx]),
+                    mode = "joint",
+                    panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
+                    panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
+                    output_region = output_regions_[k],
+                    sample_names = sample_names,
+                    output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
+                    extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
+                    cargo_toml = extract_bubble_likelihoods_cargo_toml,
+                    extra_args = extract_bubble_likelihoods_extra_args
+            }
+        }
+    }
+    ###########################################################################
+
+    # gVCF ####################################################################
+    if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && defined(input_gvcfs) && defined(input_gvcf_idxs)) {
+        # for each input, localize entire genome gVCF but genotype only requested chromosome (i.e., some redundant localization)
+        scatter (j in range(length(select_first([input_gvcfs])))) {
+            call PreprocessPLs as PreprocessPLsGVCF {
+                input:
+                    input_vcf = select_first([input_gvcfs])[j],
+                    input_vcf_idx = select_first([input_gvcf_idxs])[j],
+                    mode = "gvcf",
+                    panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
+                    panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
+                    output_region = chromosome,
+                    sample_names = [sample_names[j]],
+                    output_prefix = output_prefix + ".sample-" + j + "." + sample_names[j] + ".preprocessedPLs",
+                    extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
+                    cargo_toml = extract_bubble_likelihoods_cargo_toml,
+                    extra_args = extract_bubble_likelihoods_extra_args
+            }
         }
 
+        # two-level hierarchical merge, using GLIMPSE2 shards
+        # localize at all levels; in first level, localize entire chromosome genotyped VCF but merge only shard (i.e., some redundant localization)
+        
+        call MultilevelHierarchicallyPasteVcfsStreaming.HierarchicallyMergeVcfs as PastePreprocessPLsGVCFs {
+            input:
+                vcfs_array = PreprocessPLsGVCF.preprocessed_pls_vcf,
+                vcf_idxs_array = PreprocessPLsGVCF.preprocessed_pls_vcf_idx,
+                regions = output_regions_,
+                batch_sizes = [100, 10],
+                do_localization = [true, true],
+                timeouts_min = [0, 0],
+                output_prefix = output_prefix + ".preprocessedPLs",
+                cargo_toml = select_first([paste_vcfs_cargo_toml]),
+                paste_vcfs_script = select_first([paste_vcfs_script]),
+                extra_merge_args = "--threads $(nproc) --format GT,PL",
+                extra_concat_args = "--threads $(nproc) --naive"
+        }
+
+        scatter (k in range(length(output_regions_))) {
+            File preprocessed_pls_vcf = PastePreprocessPLsGVCFs.merged_vcf
+            File preprocessed_pls_vcf_idx = PastePreprocessPLsGVCFs.merged_vcf_idx
+        }
+
+        Array[File] gvcf_preprocessed_pls_vcfs = preprocessed_pls_vcf
+        Array[File] gvcf_preprocessed_pls_vcf_idxs = preprocessed_pls_vcf_idx
+    }
+    ###########################################################################
+
+    # in joint mode the preprocessed VCFs are chunked, but in gVCF mode we redundantly pass the same chromosome preprocessed VCF to all chunks
+    Array[File] preprocessed_pls_vcfs = select_first([ChunkedPreprocessPLsJoint.preprocessed_pls_vcf, gvcf_preprocessed_pls_vcfs])
+    Array[File] preprocessed_pls_vcf_idxs = select_first([ChunkedPreprocessPLsJoint.preprocessed_pls_vcf_idx, gvcf_preprocessed_pls_vcf_idxs])
+
+    scatter (k in range(length(output_regions_))) {
         call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
             input:
-                input_vcf = ChunkedPreprocessPLs.preprocessed_pls_bcf,
-                input_vcf_idx = ChunkedPreprocessPLs.preprocessed_pls_bcf_csi,
+                input_vcf = preprocessed_pls_vcfs[k],
+                input_vcf_idx = preprocessed_pls_vcf_idxs[k],
                 panel_split_chunk_bin = panel_split_chunk_bins_[k],
                 input_region = input_regions_[k],
                 output_region = output_regions_[k],
@@ -107,8 +174,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     call GLIMPSE2Ligate {
         input:
-            phased_bcfs = ChunkedGLIMPSE2Phase.phased_bcf,
-            phased_bcf_csis = ChunkedGLIMPSE2Phase.phased_bcf_csi,
+            phased_vcfs = ChunkedGLIMPSE2Phase.phased_vcf,
+            phased_vcf_idxs = ChunkedGLIMPSE2Phase.phased_vcf_idx,
             output_prefix = output_prefix + ".glimpse2.bubble",
             docker = glimpse2_docker
     }
@@ -281,6 +348,7 @@ task PreprocessPLs {
     input {
         File input_vcf
         File input_vcf_idx
+        String mode     # joint or gvcf
         File panel_bubble_split_sites_only_vcf
         File panel_bubble_split_sites_only_vcf_idx
         String output_region
@@ -308,7 +376,7 @@ task PreprocessPLs {
         cargo build --release
         cd ..
 
-        ./extract-bubble-PLs/target/release/extract_bubble_PLs joint \
+        ./extract-bubble-PLs/target/release/extract_bubble_PLs ~{mode} \
             ~{panel_bubble_split_sites_only_vcf}##idx##~{panel_bubble_split_sites_only_vcf_idx} \
             ~{input_vcf}##idx##~{input_vcf_idx} \
             ~{output_prefix}.bcf \
@@ -322,8 +390,8 @@ task PreprocessPLs {
     }
 
     output {
-        File preprocessed_pls_bcf = "~{output_prefix}.bcf"
-        File preprocessed_pls_bcf_csi = "~{output_prefix}.bcf.csi"
+        File preprocessed_pls_vcf = "~{output_prefix}.bcf"
+        File preprocessed_pls_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
@@ -395,8 +463,8 @@ task GLIMPSE2Phase {
     }
 
     output {
-        File phased_bcf = "~{output_prefix}.bcf"
-        File phased_bcf_csi = "~{output_prefix}.bcf.csi"
+        File phased_vcf = "~{output_prefix}.bcf"
+        File phased_vcf_idx = "~{output_prefix}.bcf.csi"
     }
 
     #########################
@@ -425,8 +493,8 @@ task GLIMPSE2Phase {
 
 task GLIMPSE2Ligate {
     input {
-        Array[File] phased_bcfs
-        Array[File] phased_bcf_csis
+        Array[File] phased_vcfs
+        Array[File] phased_vcf_idxs
         String output_prefix
 
         String docker
@@ -434,12 +502,12 @@ task GLIMPSE2Ligate {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 2 * ceil(size(phased_bcfs, "GB")) + 10
+    Int disk_size_gb = 2 * ceil(size(phased_vcfs, "GB")) + 10
 
     command <<<
         set -euox pipefail
 
-        /bin/GLIMPSE2_ligate --input ~{write_lines(phased_bcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
+        /bin/GLIMPSE2_ligate --input ~{write_lines(phased_vcfs)} --output ~{output_prefix}.bcf --thread $(nproc)
 
         # the index generated by ligate appears to be corrupt for both bcf and vcf.gz output (possibly due to https://github.com/samtools/htslib/issues/1740), so we regenerate with bcftools
         bcftools index -f ~{output_prefix}.bcf
