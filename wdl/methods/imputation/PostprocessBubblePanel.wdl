@@ -32,18 +32,27 @@ workflow PostprocessBubblePanel {
             output_prefix = output_prefix + ".id.split.sv"
         }
 
-        call ReduceBubblePanel { input:
-            panel_bubble_vcf = panel_bubble_vcf,
-            panel_id_split_sv_vcf_gz = ExtractSVIds.panel_id_split_sv_vcf_gz,
-            length_threshold = select_first([reduce_length_threshold]),
-            af_threshold = select_first([reduce_af_threshold]),
+        scatter (i in range(length(regions))) {
+            call ReduceBubblePanel { input:
+                panel_bubble_vcf = panel_bubble_vcf,
+                panel_id_split_sv_vcf_gz = ExtractSVIds.panel_id_split_sv_vcf_gz,
+                length_threshold = select_first([reduce_length_threshold]),
+                af_threshold = select_first([reduce_af_threshold]),
+                region = regions[i],
+                output_prefix = output_prefix + ".reduced.bubble.region-" + i
+            }
+        }
+
+        call ConcatVcfs.ConcatVcfs as ConcatReducedBubble { input:
+            vcfs = ReduceBubblePanel.reduced_vcf,
+            vcf_idxs = ReduceBubblePanel.reduced_vcf_idx,
             output_prefix = output_prefix + ".reduced.bubble"
         }
     }
 
-    File panel_bubble_vcf_ = select_first([ReduceBubblePanel.reduced_vcf, panel_bubble_vcf])
-    File panel_bubble_vcf_idx_ = select_first([ReduceBubblePanel.reduced_vcf_idx, panel_bubble_vcf_idx])
-    String output_prefix_ = if defined(ReduceBubblePanel.reduced_vcf) then output_prefix + ".reduced" else output_prefix
+    File panel_bubble_vcf_ = select_first([ConcatReducedBubble.concatenated_vcf, panel_bubble_vcf])
+    File panel_bubble_vcf_idx_ = select_first([ConcatReducedBubble.concatenated_vcf_idx, panel_bubble_vcf_idx])
+    String output_prefix_ = if defined(ConcatReducedBubble.concatenated_vcf_idx) then output_prefix + ".reduced" else output_prefix
 
     scatter (i in range(length(regions))) {
         call PopBubblesPanel { input:
@@ -118,9 +127,11 @@ workflow PostprocessBubblePanel {
     output {
         File panel_id_split_vcf_gz = ConvertToVcfGzIdSplit.vcf_gz
         File panel_id_split_vcf_gz_tbi = ConvertToVcfGzIdSplit.vcf_gz_tbi
+
         File? panel_id_split_sv_vcf_gz = ExtractSVIds.panel_id_split_sv_vcf_gz
         File? panel_id_split_sv_vcf_gz_tbi = ExtractSVIds.panel_id_split_sv_vcf_gz_tbi
-
+        File? reduced_panel_bubble_vcf = ConcatReducedBubble.concatenated_vcf
+        File? reduced_panel_bubble_vcf_idx = ConcatReducedBubble.concatenated_vcf_idx
 
         File panel_popped_vcf = ConcatPopped.concatenated_vcf
         File panel_popped_vcf_idx = ConcatPopped.concatenated_vcf_idx
@@ -362,6 +373,7 @@ task ReduceBubblePanel {
         File panel_id_split_sv_vcf_gz
         Int length_threshold = 20
         Float af_threshold = 0.001
+        String region
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
@@ -443,7 +455,7 @@ task ReduceBubblePanel {
         EOF
 
         # Stream uncompressed VCF (-Ov) to the script, then sort and index as BCF
-        bcftools view -Ov ~{panel_bubble_vcf} | \
+        bcftools +fill-tags -r ~{region} --regions-overlap 0 -Ov ~{panel_bubble_vcf} -- -t AC,AN,AF | \
             pypy reduce_panel.py ~{panel_id_split_sv_vcf_gz} ~{length_threshold} ~{af_threshold} | \
             bcftools view --threads $(nproc) -W=csi -Ob -o ~{output_prefix}.bcf
     >>>
@@ -456,7 +468,7 @@ task ReduceBubblePanel {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          4,
-        mem_gb:             16,
+        mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
