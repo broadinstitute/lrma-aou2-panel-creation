@@ -24,17 +24,18 @@ struct Args {
     inputs: Vec<String>,
 }
 
-enum FormatData {
-    Integer(Vec<i32>),
-    Float(Vec<f32>),
-    String(Vec<Vec<u8>>),
+// Optimization 1: Cache the header dictionary lookups
+struct TagSpec {
+    bytes: Vec<u8>,
+    ty: TagType,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    let mut readers: Vec<bcf::IndexedReader> = args.inputs.iter()
-        .map(|path| bcf::IndexedReader::from_path(path).expect("Failed to open input file"))
+    // Streaming Sequential Reader (No CSI index needed)
+    let mut readers: Vec<bcf::Reader> = args.inputs.iter()
+        .map(|path| bcf::Reader::from_path(path).expect("Failed to open input file"))
         .collect();
 
     let num_files = readers.len();
@@ -49,12 +50,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // THE FIX: The third argument is 'uncompressed'. It MUST be false to enable BGZF compression.
     let mut writer = bcf::Writer::from_path(&args.output, &merged_header, false, bcf::Format::Bcf)?;
     if args.threads > 1 {
         writer.set_threads(args.threads).expect("Failed to set writer threads");
     }
 
+    // Resolve Tag Types ONCE outside the loop
+    let info_specs: Vec<TagSpec> = args.info.iter().map(|s| {
+        let bytes = s.as_bytes().to_vec();
+        let ty = readers[0].header().info_type(&bytes).unwrap().0;
+        TagSpec { bytes, ty }
+    }).collect();
+
+    let format_specs: Vec<TagSpec> = args.format.iter().map(|s| {
+        let bytes = s.as_bytes().to_vec();
+        let ty = if bytes == b"GT" {
+            TagType::Integer
+        } else {
+            readers[0].header().format_type(&bytes).unwrap().0
+        };
+        TagSpec { bytes, ty }
+    }).collect();
+
+    let mut req_rid: Option<u32> = None;
     let mut req_start = i64::MIN;
     let mut req_end = i64::MAX;
 
@@ -62,9 +80,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (chrom, coords) = r.split_once(':').unwrap_or((r, ""));
         let rid = readers[0].header().name2rid(chrom.as_bytes())
             .unwrap_or_else(|_| panic!("Chromosome {} not found in header", chrom));
+        
+        req_rid = Some(rid);
 
         let mut start: u64 = 0;
-        let mut end: Option<u64> = None;
 
         if !coords.is_empty() {
             let parts: Vec<&str> = coords.split('-').collect();
@@ -75,20 +94,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if parts.len() > 1 && !parts[1].is_empty() {
                 let e = parts[1].replace(",", "").parse::<u64>().unwrap_or(u64::MAX);
-                end = Some(e);
                 req_end = e.saturating_sub(1) as i64;
             } else if parts.len() == 1 {
                 req_end = start as i64; 
             }
         }
-
-        for reader in readers.iter_mut() {
-            reader.fetch(rid, start, end).unwrap_or_else(|_| panic!("Failed to fetch region {}", r));
-        }
     }
 
     let mut base_record = writer.empty_record();
     let mut side_records: Vec<bcf::Record> = (1..num_files).map(|_| writer.empty_record()).collect();
+    
+    // Optimization 3: Hoist the record and scratch buffers out of the loop
+    let mut new_record = writer.empty_record();
+    let mut int_buffer: Vec<i32> = Vec::new();
+    let mut float_buffer: Vec<f32> = Vec::new();
+    let mut string_storage: Vec<Vec<u8>> = Vec::new();
 
     let mut record_count: usize = 0;
     let start_time = Instant::now();
@@ -107,12 +127,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        let pos = base_record.pos();
-        if pos < req_start || pos > req_end {
-            continue;
-        }
-
         let rid = base_record.rid().unwrap_or(0);
+        let pos = base_record.pos();
+
+        // Streaming Region Check
+        if let Some(target_rid) = req_rid {
+            if rid < target_rid { continue; }
+            if rid > target_rid || pos > req_end { break; }
+            if pos < req_start { continue; }
+        }
 
         record_count += 1;
         if record_count % 10_000 == 0 {
@@ -121,31 +144,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("[Progress] Pasted {} records in {:.2?} | Current: {}:{}", record_count, start_time.elapsed(), chrom_str, pos + 1);
         }
 
+        // Optimization 4: Cache the base ID and Alleles to avoid rebuilding strings
+        let base_id = base_record.id();
+        let base_alleles = base_record.alleles();
+        
         for side_record in &side_records {
             if base_record.rid() != side_record.rid() || pos != side_record.pos() {
                 panic!("FATAL: Position mismatch!");
             }
-            if base_record.id() != side_record.id() {
+            if base_id != side_record.id() {
                 panic!("FATAL: ID mismatch!");
             }
-            if base_record.alleles() != side_record.alleles() {
+            if base_alleles != side_record.alleles() {
                 panic!("FATAL: REF/ALT mismatch!");
             }
         }
 
-        // Clean Object Reconstruction
-        let mut new_record = writer.empty_record();
-        new_record.set_rid(base_record.rid());
+        // Reuse the record structure
+        new_record.clear();
+        new_record.set_rid(Some(rid));
         new_record.set_pos(pos);
-        new_record.set_id(&base_record.id())?;
-        new_record.set_alleles(&base_record.alleles())?;
+        new_record.set_id(&base_id)?;
+        new_record.set_alleles(&base_alleles)?;
         new_record.set_qual(base_record.qual());
 
-        for info_tag_str in &args.info {
-            let tag = info_tag_str.as_bytes();
-            let (tag_type, _) = readers[0].header().info_type(tag).unwrap();
-
-            match tag_type {
+        // Process INFO tags using cached types
+        for spec in &info_specs {
+            let tag = spec.bytes.as_slice();
+            match spec.ty {
                 TagType::Integer => {
                     if let Some(val) = base_record.info(tag).integer().unwrap_or(None).as_ref().map(|b| &**b) {
                         new_record.push_info_integer(tag, val)?;
@@ -169,61 +195,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        let mut extracted_formats: Vec<(&[u8], FormatData)> = Vec::new();
-
-        for tag_str in &args.format {
-            let tag = tag_str.as_bytes();
-            let tag_type = if tag == b"GT" { TagType::Integer } else { readers[0].header().format_type(tag).unwrap().0 };
-
-            match tag_type {
+        // Optimization 2: Push formats directly, using hoisted buffers
+        for spec in &format_specs {
+            let tag = spec.bytes.as_slice();
+            match spec.ty {
                 TagType::Integer => {
-                    let mut all_vals = Vec::new();
+                    int_buffer.clear();
                     if let Ok(vals) = base_record.format(tag).integer() {
-                        for v in vals.iter() { all_vals.extend_from_slice(v); }
+                        for v in vals.iter() { int_buffer.extend_from_slice(v); }
                     }
                     for side_record in side_records.iter_mut() {
                         if let Ok(vals) = side_record.format(tag).integer() {
-                            for v in vals.iter() { all_vals.extend_from_slice(v); }
+                            for v in vals.iter() { int_buffer.extend_from_slice(v); }
                         }
                     }
-                    extracted_formats.push((tag, FormatData::Integer(all_vals)));
+                    new_record.push_format_integer(tag, &int_buffer)?;
                 },
                 TagType::Float => {
-                    let mut all_vals = Vec::new();
+                    float_buffer.clear();
                     if let Ok(vals) = base_record.format(tag).float() {
-                        for v in vals.iter() { all_vals.extend_from_slice(v); }
+                        for v in vals.iter() { float_buffer.extend_from_slice(v); }
                     }
                     for side_record in side_records.iter_mut() {
                         if let Ok(vals) = side_record.format(tag).float() {
-                            for v in vals.iter() { all_vals.extend_from_slice(v); }
+                            for v in vals.iter() { float_buffer.extend_from_slice(v); }
                         }
                     }
-                    extracted_formats.push((tag, FormatData::Float(all_vals)));
+                    new_record.push_format_float(tag, &float_buffer)?;
                 },
                 TagType::String => {
-                    let mut all_vals = Vec::new();
+                    let mut n = 0usize;
                     if let Ok(vals) = base_record.format(tag).string() {
-                        for v in vals.iter() { all_vals.push(v.to_vec()); }
+                        for v in vals.iter() {
+                            if n == string_storage.len() { string_storage.push(Vec::new()); }
+                            string_storage[n].clear();
+                            string_storage[n].extend_from_slice(v);
+                            n += 1;
+                        }
                     }
                     for side_record in side_records.iter_mut() {
                         if let Ok(vals) = side_record.format(tag).string() {
-                            for v in vals.iter() { all_vals.push(v.to_vec()); }
+                            for v in vals.iter() {
+                                if n == string_storage.len() { string_storage.push(Vec::new()); }
+                                string_storage[n].clear();
+                                string_storage[n].extend_from_slice(v);
+                                n += 1;
+                            }
                         }
                     }
-                    extracted_formats.push((tag, FormatData::String(all_vals)));
+                    let slices: Vec<&[u8]> = string_storage[..n].iter().map(|v| v.as_slice()).collect();
+                    new_record.push_format_string(tag, &slices)?;
                 },
                 _ => panic!("Unsupported FORMAT type"),
-            }
-        }
-
-        for (tag, data) in extracted_formats {
-            match data {
-                FormatData::Integer(vals) => { new_record.push_format_integer(tag, &vals)?; },
-                FormatData::Float(vals) => { new_record.push_format_float(tag, &vals)?; },
-                FormatData::String(vals) => {
-                    let slices: Vec<&[u8]> = vals.iter().map(|v| v.as_slice()).collect();
-                    new_record.push_format_string(tag, &slices)?;
-                }
             }
         }
 
