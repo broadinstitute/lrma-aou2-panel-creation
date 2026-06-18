@@ -16,6 +16,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         # TODO expose batch_sizes
 
         File sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
+        File? remap_sample_names_file   # TSV with old_name new_name mappings
 
         String chromosome
         File genetic_maps_tsv
@@ -209,14 +210,34 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         extra_args_shard = ""
     }
 
+    # Conditionally trigger remapping tasks
+    if (defined(remap_sample_names_file)) {
+        call RemapSampleNames as RemapBubblePosteriors {
+            input:
+                vcf = GLIMPSE2Ligate.ligated_vcf,
+                vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx,
+                remap_file = select_first([remap_sample_names_file]),
+                output_prefix = output_prefix + ".glimpse2.bubble"
+        }
+
+        call RemapSampleNames as RemapPoppedPosteriors {
+            input:
+                vcf = ConcatPopAndMarginalizeCollisions.concatenated_vcf,
+                vcf_idx = ConcatPopAndMarginalizeCollisions.concatenated_vcf_idx,
+                remap_file = select_first([remap_sample_names_file]),
+                output_prefix = output_prefix + ".glimpse2.popped"
+        }
+    }
+
     output {
         Array[String] input_regions = input_regions_
         Array[String] output_regions = output_regions_
         Array[File] panel_split_chunk_bins = panel_split_chunk_bins_
-        File glimpse2_bubble_posteriors_vcf = GLIMPSE2Ligate.ligated_vcf
-        File glimpse2_bubble_posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx
-        File glimpse2_popped_posteriors_vcf = ConcatPopAndMarginalizeCollisions.concatenated_vcf
-        File glimpse2_popped_posteriors_vcf_idx = ConcatPopAndMarginalizeCollisions.concatenated_vcf_idx
+        
+        File glimpse2_bubble_posteriors_vcf = select_first([RemapBubblePosteriors.output_vcf, GLIMPSE2Ligate.ligated_vcf])
+        File glimpse2_bubble_posteriors_vcf_idx = select_first([RemapBubblePosteriors.output_vcf_idx, GLIMPSE2Ligate.ligated_vcf_idx])
+        File glimpse2_popped_posteriors_vcf = select_first([RemapPoppedPosteriors.output_vcf, ConcatPopAndMarginalizeCollisions.concatenated_vcf])
+        File glimpse2_popped_posteriors_vcf_idx = select_first([RemapPoppedPosteriors.output_vcf_idx, ConcatPopAndMarginalizeCollisions.concatenated_vcf_idx])
     }
 }
 
@@ -594,6 +615,52 @@ task PopAndMarginalizeCollisions {
         preemptible_tries:  2,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+    }
+}
+
+task RemapSampleNames {
+    input {
+        File vcf
+        File vcf_idx
+        File remap_file
+        String output_prefix
+
+        RuntimeAttr? runtime_attr_override
+    }
+
+    Int disk_size_gb = 10 + 2 * ceil(size(vcf, "GB"))
+
+    command <<<
+        set -euxo pipefail
+
+        bcftools reheader --samples ~{remap_file} ~{vcf} -o ~{output_prefix}.bcf
+        bcftools index ~{output_prefix}.bcf
+    >>>
+
+    output {
+        File output_vcf = "~{output_prefix}.bcf"
+        File output_vcf_idx = "~{output_prefix}.bcf.csi"
+    }
+
+    RuntimeAttr default_attr = object {
+        cpu_cores:          2,
+        mem_gb:             4,
+        disk_gb:            disk_size_gb,
+        boot_disk_gb:       10,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
