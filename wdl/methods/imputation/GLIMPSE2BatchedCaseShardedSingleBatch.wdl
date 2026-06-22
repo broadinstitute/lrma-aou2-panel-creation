@@ -36,6 +36,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         Array[File]? panel_split_chunk_bins_bypass
 
         # inputs for PreprocessPLs
+        File preprocess_panel_bubble_split_sites_only_vcf       # can be subset of panel, e.g., simple bubble alleles only
+        File preprocess_panel_bubble_split_sites_only_vcf_idx
         File extract_bubble_likelihoods_script
         File extract_bubble_likelihoods_cargo_toml
         String? extract_bubble_likelihoods_extra_args
@@ -94,8 +96,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     input_vcf = select_first([input_joint_vcf]),
                     input_vcf_idx = select_first([input_joint_vcf_idx]),
                     mode = "joint",
-                    panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
-                    panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
+                    panel_bubble_split_sites_only_vcf = preprocess_panel_bubble_split_sites_only_vcf,
+                    panel_bubble_split_sites_only_vcf_idx = preprocess_panel_bubble_split_sites_only_vcf_idx,
                     output_region = output_regions_[k],
                     sample_names = sample_names,
                     output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
@@ -119,8 +121,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     input_vcf = input_gvcfs[j],
                     input_vcf_idx = input_gvcf_idxs[j],
                     mode = "gvcf",
-                    panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
-                    panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
+                    panel_bubble_split_sites_only_vcf = preprocess_panel_bubble_split_sites_only_vcf,
+                    panel_bubble_split_sites_only_vcf_idx = preprocess_panel_bubble_split_sites_only_vcf_idx,
                     output_region = chromosome,
                     sample_names = [sample_names[j]],
                     output_prefix = output_prefix + ".sample-" + j + "." + sample_names[j] + ".preprocessedPLs",

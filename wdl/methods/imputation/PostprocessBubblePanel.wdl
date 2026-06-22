@@ -306,6 +306,8 @@ task PopBubblesPanel {
 }
 
 # TODO this task is prone to OOM even though it's not doing much, perhaps too many pipes?
+# TODO reheader also does not fix the contig order, the chromosomes present will appear first; perhaps converting to vcf.gz and back could fix this?
+# TODO also add --no-version to commands to prevent dictionary lines being polluted
 task SplitBubblesPanel {
     input {
         File panel_bubble_vcf
