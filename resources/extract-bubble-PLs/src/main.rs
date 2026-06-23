@@ -373,7 +373,7 @@ fn main() -> Result<()> {
             if g.rank != current_p_rank || g.is_ref_block { continue; }
             
             for (k_idx, min_g) in g.min_reps.iter().enumerate() {
-                if min_g.1.is_empty() { continue; } 
+                if min_g.1.is_empty() && min_g.2.is_empty() { continue; } // skip only the <NON_REF> placeholder, not real insertions
                 let k = k_idx + 1; 
 
                 if min_g.0 == min_p.0 && min_g.1 == min_p.1 && min_g.2 == min_p.2 {

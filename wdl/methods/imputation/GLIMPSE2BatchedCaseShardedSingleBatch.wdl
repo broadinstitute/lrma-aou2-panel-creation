@@ -38,15 +38,17 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         # inputs for PreprocessPLs
         File preprocess_panel_bubble_split_sites_only_vcf       # can be subset of panel, e.g., simple bubble alleles only
         File preprocess_panel_bubble_split_sites_only_vcf_idx
-        File extract_bubble_likelihoods_script
-        File extract_bubble_likelihoods_cargo_toml
+        File? extract_bubble_likelihoods_script
+        File? extract_bubble_likelihoods_cargo_toml
+        File? extract_bubble_likelihoods_binary
         String? extract_bubble_likelihoods_extra_args
 
         # inputs for PopAndMarginalizeCollisions
         File panel_id_split_vcf_gz
         File panel_id_split_vcf_gz_tbi
-        File pop_glimpse2_script      # modified version of convert-to-biallelic.py
-        File pop_glimpse2_cargo_toml
+        File? pop_glimpse2_script      # modified version of convert-to-biallelic.py
+        File? pop_glimpse2_cargo_toml
+        File? pop_glimpse2_binary
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
     }
@@ -103,6 +105,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
                     extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
                     cargo_toml = extract_bubble_likelihoods_cargo_toml,
+                    extract_bubble_likelihoods_binary = extract_bubble_likelihoods_binary,
                     extra_args = extract_bubble_likelihoods_extra_args
             }
         }
@@ -128,6 +131,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     output_prefix = output_prefix + ".sample-" + j + "." + sample_names[j] + ".preprocessedPLs",
                     extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
                     cargo_toml = extract_bubble_likelihoods_cargo_toml,
+                    extract_bubble_likelihoods_binary = extract_bubble_likelihoods_binary,
                     extra_args = extract_bubble_likelihoods_extra_args
             }
         }
@@ -195,6 +199,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
             pop_glimpse2_script = pop_glimpse2_script,
             cargo_toml = pop_glimpse2_cargo_toml,
+            pop_glimpse2_binary = pop_glimpse2_binary,
             region = output_regions_[k],
             output_prefix = output_prefix + ".glimpse2.popped"
         }
@@ -380,8 +385,9 @@ task PreprocessPLs {
         Array[String] sample_names
         String output_prefix
 
-        File extract_bubble_likelihoods_script
-        File cargo_toml
+        File? extract_bubble_likelihoods_script
+        File? cargo_toml
+        File? extract_bubble_likelihoods_binary
         String? extra_args = "--window 15000 --cap-pl 30 --scale-pl 5.0 --threads $(nproc)"
 
         RuntimeAttr? runtime_attr_override
@@ -391,28 +397,35 @@ task PreprocessPLs {
 
     File sample_names_list = write_lines(sample_names)
 
-    command {
+    command <<<
         set -euxo pipefail
 
-        mkdir -p extract-bubble-PLs/src
-        cp ~{extract_bubble_likelihoods_script} extract-bubble-PLs/src/main.rs
-        cp ~{cargo_toml} extract-bubble-PLs
-        cd extract-bubble-PLs
-        cargo build --release
-        cd ..
+        if [ -n "~{extract_bubble_likelihoods_binary}" ]; then
+            EXTRACT_BIN="~{extract_bubble_likelihoods_binary}"
+            chmod +x $EXTRACT_BIN
+        else
+            mkdir -p extract-bubble-PLs/src
+            cp ~{extract_bubble_likelihoods_script} extract-bubble-PLs/src/main.rs
+            cp ~{cargo_toml} extract-bubble-PLs
+            cd extract-bubble-PLs
+            cargo build --release
+            cd ..
+            EXTRACT_BIN="./extract-bubble-PLs/target/release/extract-bubble-PLs"
+        fi
 
-        ./extract-bubble-PLs/target/release/extract_bubble_PLs ~{mode} \
+        $EXTRACT_BIN ~{mode} \
             ~{panel_bubble_split_sites_only_vcf}##idx##~{panel_bubble_split_sites_only_vcf_idx} \
             ~{input_vcf}##idx##~{input_vcf_idx} \
             ~{output_prefix}.bcf \
             --region ~{output_region} \
             --samples ~{sample_names_list} \
             ~{extra_args}
+            
         bcftools index ~{output_prefix}.bcf
 
         echo "Number of bubble alleles extracted..."
         bcftools index -n ~{output_prefix}.bcf
-    }
+    >>>
 
     output {
         File preprocessed_pls_vcf = "~{output_prefix}.bcf"
@@ -421,8 +434,8 @@ task PreprocessPLs {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          4,
-        mem_gb:             8,
+        cpu_cores:          1,
+        mem_gb:             4,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -576,8 +589,11 @@ task PopAndMarginalizeCollisions {
         File panel_bubble_split_sites_only_vcf_idx
         File panel_id_split_vcf_gz           # panel popping script currently requires vcf.gz, so we also use that here
         File panel_id_split_vcf_gz_tbi
-        File pop_glimpse2_script             # modified version of convert-to-biallelic.py translated to Rust
-        File cargo_toml
+        
+        File? pop_glimpse2_script             # modified version of convert-to-biallelic.py translated to Rust
+        File? cargo_toml
+        File? pop_glimpse2_binary
+        
         String region
         String output_prefix
 
@@ -589,16 +605,22 @@ task PopAndMarginalizeCollisions {
     command <<<
         set -euox pipefail
 
-        mkdir -p pop-glimpse2/src/bin
-        cp ~{pop_glimpse2_script} pop-glimpse2/src/bin/pop-glimpse2.rs
-        cp ~{cargo_toml} pop-glimpse2
-        cd pop-glimpse2
-        cargo build --release
-        cd ..
+        if [ -n "~{pop_glimpse2_binary}" ]; then
+            POP_BIN="~{pop_glimpse2_binary}"
+            chmod +x $POP_BIN
+        else
+            mkdir -p pop-glimpse2/src/bin
+            cp ~{pop_glimpse2_script} pop-glimpse2/src/bin/pop-glimpse2.rs
+            cp ~{cargo_toml} pop-glimpse2
+            cd pop-glimpse2
+            cargo build --release
+            cd ..
+            POP_BIN="./pop-glimpse2/target/release/pop-glimpse2"
+        fi
 
         bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_sites_only_vcf} ~{posteriors_vcf} \
             -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
-        ./pop-glimpse2/target/release/pop-glimpse2 ~{panel_id_split_vcf_gz} | \
+        $POP_BIN ~{panel_id_split_vcf_gz} | \
         bcftools sort -W -Ob -o ~{output_prefix}.bcf
     >>>
 
