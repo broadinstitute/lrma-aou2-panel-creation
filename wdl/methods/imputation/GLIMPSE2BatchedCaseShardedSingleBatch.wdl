@@ -13,6 +13,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File? input_gvcf_idxs_fofn
         File? paste_vcfs_cargo_toml     # TODO Dockerize
         File? paste_vcfs_script
+        File? paste_vcfs_binary
         # TODO expose batch_sizes
 
         File sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
@@ -148,6 +149,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                 output_prefix = output_prefix + ".preprocessedPLs",
                 cargo_toml = select_first([paste_vcfs_cargo_toml]),
                 paste_vcfs_script = select_first([paste_vcfs_script]),
+                paste_vcfs_binary = select_first([paste_vcfs_binary])
                 extra_merge_args = "--threads $(nproc) --format GT,PL",
                 extra_concat_args = "--threads $(nproc) --naive"
         }
