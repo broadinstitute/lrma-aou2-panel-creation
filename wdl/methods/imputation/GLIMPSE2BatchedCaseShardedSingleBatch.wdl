@@ -147,9 +147,9 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                 do_localization = [true, true],
                 timeouts_min = [0, 0],
                 output_prefix = output_prefix + ".preprocessedPLs",
-                cargo_toml = select_first([paste_vcfs_cargo_toml]),
-                paste_vcfs_script = select_first([paste_vcfs_script]),
-                paste_vcfs_binary = select_first([paste_vcfs_binary]),
+                cargo_toml = paste_vcfs_cargo_toml,
+                paste_vcfs_script = paste_vcfs_script,
+                paste_vcfs_binary = paste_vcfs_binary,
                 extra_merge_args = "--threads $(nproc) --format GT,PL",
                 extra_concat_args = "--threads $(nproc) --naive"
         }
