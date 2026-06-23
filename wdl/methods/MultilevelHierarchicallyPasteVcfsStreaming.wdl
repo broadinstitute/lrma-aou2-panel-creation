@@ -13,10 +13,8 @@ workflow HierarchicallyMergeVcfs {
         Array[Boolean] do_localization # Whether to localize at each corresponding level
         Array[Int] timeouts_min  # Timeouts in minutes per level. Set to 0 to disable. e.g., [720, 720]
         String output_prefix
-        
-        File? cargo_toml
-        File? paste_vcfs_script
-        File? paste_vcfs_binary
+
+        File paste_vcfs_binary
         String extra_merge_args = "--threads $(nproc) --info ID,RAF --format GT,DS,GP"
 
         RuntimeAttr? l0_merge_runtime_attr_override
@@ -54,8 +52,6 @@ workflow HierarchicallyMergeVcfs {
                     timeout_min = timeouts_min[0],
                     region = region,
                     output_prefix = region_prefix + ".L0-" + i,
-                    cargo_toml = cargo_toml,
-                    paste_vcfs_script = paste_vcfs_script,
                     paste_vcfs_binary = paste_vcfs_binary,
                     extra_args = "-r " + region + " " + extra_merge_args,
                     runtime_attr_override = l0_merge_runtime_attr_override
@@ -86,8 +82,6 @@ workflow HierarchicallyMergeVcfs {
                         timeout_min = timeouts_min[1],
                         region = region,
                         output_prefix = region_prefix + ".L1-" + i,
-                        cargo_toml = cargo_toml,
-                        paste_vcfs_script = paste_vcfs_script,
                         paste_vcfs_binary = paste_vcfs_binary,
                         extra_args = "-r " + region + " " + extra_merge_args,
                         runtime_attr_override = l1_merge_runtime_attr_override
@@ -119,8 +113,6 @@ workflow HierarchicallyMergeVcfs {
                         timeout_min = timeouts_min[2],
                         region = region,
                         output_prefix = region_prefix + ".L2-" + i,
-                        cargo_toml = cargo_toml,
-                        paste_vcfs_script = paste_vcfs_script,
                         paste_vcfs_binary = paste_vcfs_binary,
                         extra_args = "-r " + region + " " + extra_merge_args,
                         runtime_attr_override = l2_merge_runtime_attr_override
@@ -143,8 +135,6 @@ workflow HierarchicallyMergeVcfs {
                     timeout_min = 0,
                     region = region,
                     output_prefix = region_prefix + ".final",
-                    cargo_toml = cargo_toml,
-                    paste_vcfs_script = paste_vcfs_script,
                     paste_vcfs_binary = paste_vcfs_binary,
                     extra_args = "-r " + region + " " + extra_merge_args
             }
