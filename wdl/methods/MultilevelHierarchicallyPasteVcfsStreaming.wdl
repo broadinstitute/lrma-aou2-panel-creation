@@ -14,8 +14,9 @@ workflow HierarchicallyMergeVcfs {
         Array[Int] timeouts_min  # Timeouts in minutes per level. Set to 0 to disable. e.g., [720, 720]
         String output_prefix
         
-        File cargo_toml
-        File paste_vcfs_script
+        File? cargo_toml
+        File? paste_vcfs_script
+        File? paste_vcfs_binary
         String extra_merge_args = "--threads $(nproc) --info ID,RAF --format GT,DS,GP"
 
         RuntimeAttr? l0_merge_runtime_attr_override
@@ -55,6 +56,7 @@ workflow HierarchicallyMergeVcfs {
                     output_prefix = region_prefix + ".L0-" + i,
                     cargo_toml = cargo_toml,
                     paste_vcfs_script = paste_vcfs_script,
+                    paste_vcfs_binary = paste_vcfs_binary,
                     extra_args = "-r " + region + " " + extra_merge_args,
                     runtime_attr_override = l0_merge_runtime_attr_override
             }
@@ -86,6 +88,7 @@ workflow HierarchicallyMergeVcfs {
                         output_prefix = region_prefix + ".L1-" + i,
                         cargo_toml = cargo_toml,
                         paste_vcfs_script = paste_vcfs_script,
+                        paste_vcfs_binary = paste_vcfs_binary,
                         extra_args = "-r " + region + " " + extra_merge_args,
                         runtime_attr_override = l1_merge_runtime_attr_override
                 }
@@ -118,6 +121,7 @@ workflow HierarchicallyMergeVcfs {
                         output_prefix = region_prefix + ".L2-" + i,
                         cargo_toml = cargo_toml,
                         paste_vcfs_script = paste_vcfs_script,
+                        paste_vcfs_binary = paste_vcfs_binary,
                         extra_args = "-r " + region + " " + extra_merge_args,
                         runtime_attr_override = l2_merge_runtime_attr_override
                 }
@@ -139,9 +143,9 @@ workflow HierarchicallyMergeVcfs {
                     timeout_min = 0,
                     region = region,
                     output_prefix = region_prefix + ".final",
-                    
                     cargo_toml = cargo_toml,
                     paste_vcfs_script = paste_vcfs_script,
+                    paste_vcfs_binary = paste_vcfs_binary,
                     extra_args = "-r " + region + " " + extra_merge_args
             }
         }
@@ -234,8 +238,9 @@ task MergeVcfs {
         String output_prefix
         String? extra_args
         
-        File cargo_toml
-        File paste_vcfs_script
+        File? cargo_toml
+        File? paste_vcfs_script
+        File? paste_vcfs_binary
 
         RuntimeAttr? runtime_attr_override
     }
@@ -345,22 +350,28 @@ task MergeVcfs {
             done
         ) &
         HEARTBEAT_PID=$!
-        
-        # ==========================================
-        # ON-THE-FLY RUST COMPILATION
-        # ==========================================
-        mkdir -p paste-vcfs/src
-        mv ~{cargo_toml} paste-vcfs/Cargo.toml
-        mv ~{paste_vcfs_script} paste-vcfs/src/main.rs
-        cd paste-vcfs
-        CARGO_BUILD_JOBS=$(nproc) cargo build --release
-        cd ..
+
+        if [ -n "~{paste_vcfs_binary}" ]; then
+            PASTE_BIN="~{paste_vcfs_binary}"
+            chmod +x $PASTE_BIN
+        else
+            # ==========================================
+            # ON-THE-FLY RUST COMPILATION
+            # ==========================================
+            mkdir -p paste-vcfs/src
+            mv ~{cargo_toml} paste-vcfs/Cargo.toml
+            mv ~{paste_vcfs_script} paste-vcfs/src/main.rs
+            cd paste-vcfs
+            CARGO_BUILD_JOBS=$(nproc) cargo build --release
+            cd ..
+            PASTE_BIN="./paste-vcfs/target/release/paste-vcfs"
+        fi
 
         # ==========================================
         # EXECUTE CUSTOM MERGE
         # ==========================================
-        # Execute the statically compiled tool, pasting positional inputs straight from our list
-        ./paste-vcfs/target/release/paste-vcfs \
+        # Execute the compiled tool, pasting positional inputs straight from our list
+        $PASTE_BIN \
             ~{extra_args} \
             -o ~{output_prefix}.bcf \
             $(cat merge_list.txt)
