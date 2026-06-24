@@ -160,69 +160,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         TagSpec { bytes, ty }
     }).collect();
 
-    // Parse region into iterator bounds + in-memory guard bounds.
-    let mut req_rid: Option<u32> = None;
-    let mut req_start = i64::MIN;
-    let mut req_end = i64::MAX;
-    let mut region_parts: Option<(String, i64, i64)> = None; // (chrom, iter_beg, iter_end)
+    // Extract the regions to process (split by comma)
+    let regions_to_process: Vec<Option<String>> = match &args.region {
+        Some(r_str) => r_str.split(',').map(|s| Some(s.to_string())).collect(),
+        None => vec![None],
+    };
 
-    if let Some(r) = &args.region {
-        let (chrom, coords) = r.split_once(':').unwrap_or((r, ""));
-        let rid = setup_readers[0].header().name2rid(chrom.as_bytes())
-            .unwrap_or_else(|_| panic!("Chromosome {} not found in header", chrom));
-        req_rid = Some(rid);
-
-        let mut start: u64 = 0;
-        if !coords.is_empty() {
-            let parts: Vec<&str> = coords.split('-').collect();
-            if !parts.is_empty() && !parts[0].is_empty() {
-                let s = parts[0].replace(",", "").parse::<u64>().unwrap_or(1);
-                start = s.saturating_sub(1);
-                req_start = start as i64;
-            }
-            if parts.len() > 1 && !parts[1].is_empty() {
-                let e = parts[1].replace(",", "").parse::<u64>().unwrap_or(u64::MAX);
-                req_end = e.saturating_sub(1) as i64;
-            } else if parts.len() == 1 {
-                req_end = start as i64;
-            }
-        }
-
-        let iter_beg = if req_start == i64::MIN { 0 } else { req_start };
-        let iter_end = if req_end == i64::MAX { i64::MAX } else { req_end + 1 }; // half-open
-        region_parts = Some((chrom.to_string(), iter_beg, iter_end));
-    }
-
-// 1. Create records tied to their TRUE original headers, NOT the writer.
+    // 1. Create records tied to their TRUE original headers, NOT the writer.
     // We do this BEFORE we consume setup_readers.
     let mut base_record = setup_readers[0].empty_record();
     let mut side_records: Vec<bcf::Record> = setup_readers.iter().skip(1).map(|r| r.empty_record()).collect();
     
     // new_record correctly belongs to the writer's merged header.
     let mut new_record = writer.empty_record();
-
-    // 2. Build the read sources.
-    let mut sources: Vec<Source> = Vec::with_capacity(num_files);
-    
-    // In Region mode, we must keep the original setup readers alive so their 
-    // C-headers don't drop and cause dangling pointer segfaults in the loop.
-    let mut _keep_alive_readers = None; 
-
-    // Note the `ref _chrom` here, which prevents the String from being moved!
-    if let Some((ref _chrom, beg, end)) = region_parts {
-        let tid = req_rid.expect("region implies a resolved rid") as i32;
-        for p in &args.inputs {
-            sources.push(Source::Region(RegionReader::new(p, tid, beg, end)));
-        }
-        
-        // Move ownership to the outer scope instead of dropping them
-        _keep_alive_readers = Some(setup_readers); 
-    } else {
-        // In Whole mode, Source::Whole takes ownership of the readers.
-        for r in setup_readers {
-            sources.push(Source::Whole(r));
-        }
-    }
 
     let mut int_buffer: Vec<i32> = Vec::new();
     let mut float_buffer: Vec<f32> = Vec::new();
@@ -231,199 +181,256 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut record_count: usize = 0;
     let start_time = Instant::now();
 
-    loop {
-        match sources[0].read_into(&mut base_record) {
-            Some(()) => {}
-            None => break,
+    // Wrap setup_readers in an Option so we can safely give ownership to Source::Whole later 
+    // or keep the readers alive indefinitely for Region loop
+    let mut opt_setup_readers = Some(setup_readers);
+
+    for reg_opt in &regions_to_process {
+        // Parse region into iterator bounds + in-memory guard bounds.
+        let mut req_rid: Option<u32> = None;
+        let mut req_start = i64::MIN;
+        let mut req_end = i64::MAX;
+        let mut region_parts: Option<(String, i64, i64)> = None; // (chrom, iter_beg, iter_end)
+
+        if let Some(r) = reg_opt {
+            // Borrow the setup readers safely to query the header
+            let readers_ref = opt_setup_readers.as_ref().expect("Readers consumed prematurely");
+            let (chrom, coords) = r.split_once(':').unwrap_or((r, ""));
+            let rid = readers_ref[0].header().name2rid(chrom.as_bytes())
+                .unwrap_or_else(|_| panic!("Chromosome {} not found in header", chrom));
+            req_rid = Some(rid);
+
+            let mut start: u64 = 0;
+            if !coords.is_empty() {
+                let parts: Vec<&str> = coords.split('-').collect();
+                if !parts.is_empty() && !parts[0].is_empty() {
+                    let s = parts[0].replace(",", "").parse::<u64>().unwrap_or(1);
+                    start = s.saturating_sub(1);
+                    req_start = start as i64;
+                }
+                if parts.len() > 1 && !parts[1].is_empty() {
+                    let e = parts[1].replace(",", "").parse::<u64>().unwrap_or(u64::MAX);
+                    req_end = e.saturating_sub(1) as i64;
+                } else if parts.len() == 1 {
+                    req_end = start as i64;
+                }
+            }
+
+            let iter_beg = if req_start == i64::MIN { 0 } else { req_start };
+            let iter_end = if req_end == i64::MAX { i64::MAX } else { req_end + 1 }; // half-open
+            region_parts = Some((chrom.to_string(), iter_beg, iter_end));
         }
-        for i in 1..num_files {
-            match sources[i].read_into(&mut side_records[i - 1]) {
+
+        // 2. Build the read sources.
+        let mut sources: Vec<Source> = Vec::with_capacity(num_files);
+
+        if let Some((ref _chrom, beg, end)) = region_parts {
+            let tid = req_rid.expect("region implies a resolved rid") as i32;
+            for p in &args.inputs {
+                sources.push(Source::Region(RegionReader::new(p, tid, beg, end)));
+            }
+        } else {
+            // In Whole mode, Source::Whole safely takes ownership of the readers.
+            let readers = opt_setup_readers.take().expect("Cannot read whole file multiple times");
+            for r in readers {
+                sources.push(Source::Whole(r));
+            }
+        }
+
+        loop {
+            match sources[0].read_into(&mut base_record) {
                 Some(()) => {}
-                None => panic!("FATAL: Side file ran out of records prematurely!"),
+                None => break,
             }
-        }
-
-        let base_rid = base_record.rid();
-        let pos = base_record.pos();
-
-        // In-memory guard. Redundant in region mode (the iterator already
-        // restricts), harmless otherwise.
-        if let Some(want) = req_rid {
-            if base_rid != Some(want) { continue; }
-            if pos < req_start { continue; }
-            if pos > req_end { break; }
-        }
-
-        let rid = base_rid.unwrap_or(0);
-
-        record_count += 1;
-        if record_count % 10_000 == 0 {
-            // setup_readers may have been consumed in whole-file mode; use a
-            // surviving header. In region mode setup_readers is still alive,
-            // but to be uniform we look the name up via the writer header.
-            let chrom_str = writer.header().rid2name(rid)
-                .map(|b| String::from_utf8_lossy(b).into_owned())
-                .unwrap_or_else(|_| "unknown".to_string());
-            eprintln!(
-                "[Progress] Pasted {} records in {:.2?} | Current: {}:{}",
-                record_count, start_time.elapsed(), chrom_str, pos + 1
-            );
-        }
-
-        let base_id = base_record.id();
-        let base_alleles = base_record.alleles();
-        for side_record in &side_records {
-            if base_rid != side_record.rid() || pos != side_record.pos() {
-                panic!("FATAL: Position mismatch!");
-            }
-            if base_id != side_record.id() {
-                panic!("FATAL: ID mismatch!");
-            }
-            if base_alleles != side_record.alleles() {
-                panic!("FATAL: REF/ALT mismatch!");
-            }
-        }
-
-        new_record.clear();
-        new_record.set_rid(base_rid);
-        new_record.set_pos(pos);
-        new_record.set_id(&base_id)?;
-        new_record.set_alleles(&base_alleles)?;
-        new_record.set_qual(base_record.qual());
-
-        for spec in &info_specs {
-            let tag = spec.bytes.as_slice();
-            match spec.ty {
-                TagType::Integer => {
-                    if let Some(val) = base_record.info(tag).integer().unwrap_or(None).as_ref().map(|b| &**b) {
-                        new_record.push_info_integer(tag, val)?;
-                    }
-                }
-                TagType::Float => {
-                    if let Some(val) = base_record.info(tag).float().unwrap_or(None).as_ref().map(|b| &**b) {
-                        new_record.push_info_float(tag, val)?;
-                    }
-                }
-                TagType::String => {
-                    if let Some(val) = base_record.info(tag).string().unwrap_or(None).as_ref().map(|b| &**b) {
-                        new_record.push_info_string(tag, val)?;
-                    }
-                }
-                TagType::Flag => {
-                    if base_record.info(tag).flag().unwrap_or(false) {
-                        new_record.push_info_flag(tag)?;
-                    }
+            for i in 1..num_files {
+                match sources[i].read_into(&mut side_records[i - 1]) {
+                    Some(()) => {}
+                    None => panic!("FATAL: Side file ran out of records prematurely!"),
                 }
             }
-        }
 
-        for spec in &format_specs {
-            let tag = spec.bytes.as_slice();
-            let tag_name = String::from_utf8_lossy(tag);
+            let base_rid = base_record.rid();
+            let pos = base_record.pos();
 
-            // Closure to format the position, pinpoint the file, and panic
-            let panic_mismatch = |missing_in_base: bool, side_idx: usize| -> ! {
+            // In-memory guard. Redundant in region mode (the iterator already
+            // restricts), harmless otherwise. Drops us out of inner loop when the region is exhausted.
+            if let Some(want) = req_rid {
+                if base_rid != Some(want) { continue; }
+                if pos < req_start { continue; }
+                if pos > req_end { break; }
+            }
+
+            let rid = base_rid.unwrap_or(0);
+
+            record_count += 1;
+            if record_count % 10_000 == 0 {
+                // setup_readers may have been consumed in whole-file mode; use a
+                // surviving header. In region mode setup_readers is still alive,
+                // but to be uniform we look the name up via the writer header.
                 let chrom_str = writer.header().rid2name(rid)
                     .map(|b| String::from_utf8_lossy(b).into_owned())
                     .unwrap_or_else(|_| "unknown".to_string());
-                
-                let base_file = &args.inputs[0];
-                let side_file = &args.inputs[side_idx];
-
-                if missing_in_base {
-                    panic!(
-                        "FATAL: FORMAT tag '{}' mismatch at {}:{}. Tag is missing in base file '{}' but present in '{}'.",
-                        tag_name, chrom_str, pos + 1, base_file, side_file
-                    );
-                } else {
-                    panic!(
-                        "FATAL: FORMAT tag '{}' mismatch at {}:{}. Tag is present in base file '{}' but missing in '{}'.",
-                        tag_name, chrom_str, pos + 1, base_file, side_file
-                    );
-                }
-            };
-
-            match spec.ty {
-                TagType::Integer => {
-                    int_buffer.clear();
-                    if let Ok(vals) = base_record.format(tag).integer() {
-                        for v in vals.iter() { int_buffer.extend_from_slice(v); }
-                        
-                        for (i, side_record) in side_records.iter_mut().enumerate() {
-                            if let Ok(side_vals) = side_record.format(tag).integer() {
-                                for v in side_vals.iter() { int_buffer.extend_from_slice(v); }
-                            } else {
-                                panic_mismatch(false, i + 1);
-                            }
-                        }
-                        new_record.push_format_integer(tag, &int_buffer)?;
-                    } else {
-                        // Base is missing the tag. Ensure sides are also missing it.
-                        for (i, side_record) in side_records.iter_mut().enumerate() {
-                            if side_record.format(tag).integer().is_ok() {
-                                panic_mismatch(true, i + 1);
-                            }
-                        }
-                    }
-                }
-                TagType::Float => {
-                    float_buffer.clear();
-                    if let Ok(vals) = base_record.format(tag).float() {
-                        for v in vals.iter() { float_buffer.extend_from_slice(v); }
-                        
-                        for (i, side_record) in side_records.iter_mut().enumerate() {
-                            if let Ok(side_vals) = side_record.format(tag).float() {
-                                for v in side_vals.iter() { float_buffer.extend_from_slice(v); }
-                            } else {
-                                panic_mismatch(false, i + 1);
-                            }
-                        }
-                        new_record.push_format_float(tag, &float_buffer)?;
-                    } else {
-                        for (i, side_record) in side_records.iter_mut().enumerate() {
-                            if side_record.format(tag).float().is_ok() {
-                                panic_mismatch(true, i + 1);
-                            }
-                        }
-                    }
-                }
-                TagType::String => {
-                    let mut n = 0usize;
-                    if let Ok(vals) = base_record.format(tag).string() {
-                        for v in vals.iter() {
-                            if n == string_storage.len() { string_storage.push(Vec::new()); }
-                            string_storage[n].clear();
-                            string_storage[n].extend_from_slice(v);
-                            n += 1;
-                        }
-                        
-                        for (i, side_record) in side_records.iter_mut().enumerate() {
-                            if let Ok(side_vals) = side_record.format(tag).string() {
-                                for v in side_vals.iter() {
-                                    if n == string_storage.len() { string_storage.push(Vec::new()); }
-                                    string_storage[n].clear();
-                                    string_storage[n].extend_from_slice(v);
-                                    n += 1;
-                                }
-                            } else {
-                                panic_mismatch(false, i + 1);
-                            }
-                        }
-                        let slices: Vec<&[u8]> = string_storage[..n].iter().map(|v| v.as_slice()).collect();
-                        new_record.push_format_string(tag, &slices)?;
-                    } else {
-                        for (i, side_record) in side_records.iter_mut().enumerate() {
-                            if side_record.format(tag).string().is_ok() {
-                                panic_mismatch(true, i + 1);
-                            }
-                        }
-                    }
-                }
-                _ => panic!("Unsupported FORMAT type for tag {}", tag_name),
+                eprintln!(
+                    "[Progress] Pasted {} records in {:.2?} | Current: {}:{}",
+                    record_count, start_time.elapsed(), chrom_str, pos + 1
+                );
             }
-        }
 
-        writer.write(&new_record)?;
+            let base_id = base_record.id();
+            let base_alleles = base_record.alleles();
+            for side_record in &side_records {
+                if base_rid != side_record.rid() || pos != side_record.pos() {
+                    panic!("FATAL: Position mismatch!");
+                }
+                if base_id != side_record.id() {
+                    panic!("FATAL: ID mismatch!");
+                }
+                if base_alleles != side_record.alleles() {
+                    panic!("FATAL: REF/ALT mismatch!");
+                }
+            }
+
+            new_record.clear();
+            new_record.set_rid(base_rid);
+            new_record.set_pos(pos);
+            new_record.set_id(&base_id)?;
+            new_record.set_alleles(&base_alleles)?;
+            new_record.set_qual(base_record.qual());
+
+            for spec in &info_specs {
+                let tag = spec.bytes.as_slice();
+                match spec.ty {
+                    TagType::Integer => {
+                        if let Some(val) = base_record.info(tag).integer().unwrap_or(None).as_ref().map(|b| &**b) {
+                            new_record.push_info_integer(tag, val)?;
+                        }
+                    }
+                    TagType::Float => {
+                        if let Some(val) = base_record.info(tag).float().unwrap_or(None).as_ref().map(|b| &**b) {
+                            new_record.push_info_float(tag, val)?;
+                        }
+                    }
+                    TagType::String => {
+                        if let Some(val) = base_record.info(tag).string().unwrap_or(None).as_ref().map(|b| &**b) {
+                            new_record.push_info_string(tag, val)?;
+                        }
+                    }
+                    TagType::Flag => {
+                        if base_record.info(tag).flag().unwrap_or(false) {
+                            new_record.push_info_flag(tag)?;
+                        }
+                    }
+                }
+            }
+
+            for spec in &format_specs {
+                let tag = spec.bytes.as_slice();
+                let tag_name = String::from_utf8_lossy(tag);
+
+                // Closure to format the position, pinpoint the file, and panic
+                let panic_mismatch = |missing_in_base: bool, side_idx: usize| -> ! {
+                    let chrom_str = writer.header().rid2name(rid)
+                        .map(|b| String::from_utf8_lossy(b).into_owned())
+                        .unwrap_or_else(|_| "unknown".to_string());
+                    
+                    let base_file = &args.inputs[0];
+                    let side_file = &args.inputs[side_idx];
+
+                    if missing_in_base {
+                        panic!(
+                            "FATAL: FORMAT tag '{}' mismatch at {}:{}. Tag is missing in base file '{}' but present in '{}'.",
+                            tag_name, chrom_str, pos + 1, base_file, side_file
+                        );
+                    } else {
+                        panic!(
+                            "FATAL: FORMAT tag '{}' mismatch at {}:{}. Tag is present in base file '{}' but missing in '{}'.",
+                            tag_name, chrom_str, pos + 1, base_file, side_file
+                        );
+                    }
+                };
+
+                match spec.ty {
+                    TagType::Integer => {
+                        int_buffer.clear();
+                        if let Ok(vals) = base_record.format(tag).integer() {
+                            for v in vals.iter() { int_buffer.extend_from_slice(v); }
+                            
+                            for (i, side_record) in side_records.iter_mut().enumerate() {
+                                if let Ok(side_vals) = side_record.format(tag).integer() {
+                                    for v in side_vals.iter() { int_buffer.extend_from_slice(v); }
+                                } else {
+                                    panic_mismatch(false, i + 1);
+                                }
+                            }
+                            new_record.push_format_integer(tag, &int_buffer)?;
+                        } else {
+                            // Base is missing the tag. Ensure sides are also missing it.
+                            for (i, side_record) in side_records.iter_mut().enumerate() {
+                                if side_record.format(tag).integer().is_ok() {
+                                    panic_mismatch(true, i + 1);
+                                }
+                            }
+                        }
+                    }
+                    TagType::Float => {
+                        float_buffer.clear();
+                        if let Ok(vals) = base_record.format(tag).float() {
+                            for v in vals.iter() { float_buffer.extend_from_slice(v); }
+                            
+                            for (i, side_record) in side_records.iter_mut().enumerate() {
+                                if let Ok(side_vals) = side_record.format(tag).float() {
+                                    for v in side_vals.iter() { float_buffer.extend_from_slice(v); }
+                                } else {
+                                    panic_mismatch(false, i + 1);
+                                }
+                            }
+                            new_record.push_format_float(tag, &float_buffer)?;
+                        } else {
+                            for (i, side_record) in side_records.iter_mut().enumerate() {
+                                if side_record.format(tag).float().is_ok() {
+                                    panic_mismatch(true, i + 1);
+                                }
+                            }
+                        }
+                    }
+                    TagType::String => {
+                        let mut n = 0usize;
+                        if let Ok(vals) = base_record.format(tag).string() {
+                            for v in vals.iter() {
+                                if n == string_storage.len() { string_storage.push(Vec::new()); }
+                                string_storage[n].clear();
+                                string_storage[n].extend_from_slice(v);
+                                n += 1;
+                            }
+                            
+                            for (i, side_record) in side_records.iter_mut().enumerate() {
+                                if let Ok(side_vals) = side_record.format(tag).string() {
+                                    for v in side_vals.iter() {
+                                        if n == string_storage.len() { string_storage.push(Vec::new()); }
+                                        string_storage[n].clear();
+                                        string_storage[n].extend_from_slice(v);
+                                        n += 1;
+                                    }
+                                } else {
+                                    panic_mismatch(false, i + 1);
+                                }
+                            }
+                            let slices: Vec<&[u8]> = string_storage[..n].iter().map(|v| v.as_slice()).collect();
+                            new_record.push_format_string(tag, &slices)?;
+                        } else {
+                            for (i, side_record) in side_records.iter_mut().enumerate() {
+                                if side_record.format(tag).string().is_ok() {
+                                    panic_mismatch(true, i + 1);
+                                }
+                            }
+                        }
+                    }
+                    _ => panic!("Unsupported FORMAT type for tag {}", tag_name),
+                }
+            }
+
+            writer.write(&new_record)?;
+        }
     }
 
     Ok(())

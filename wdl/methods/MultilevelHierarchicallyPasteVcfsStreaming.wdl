@@ -27,6 +27,13 @@ workflow HierarchicallyMergeVcfs {
     Array[String] vcfs_in = if defined(vcfs_array) then select_first([vcfs_array]) else read_lines(select_first([vcfs_fofn]))
     Array[String] vcf_idxs_in = if defined(vcf_idxs_array) then select_first([vcf_idxs_array]) else read_lines(select_first([vcf_idxs_fofn]))
 
+    call CreateBatches as L0_Batches {
+        input:
+            vcfs = vcfs_in,
+            vcf_idxs = vcf_idxs_in,
+            batch_size = batch_sizes[0]
+    }
+
     # Scatter by region FIRST to isolate chunks and reduce combinatorial explosion
     scatter (j in range(length(regions))) {
         String region = regions[j]
@@ -35,13 +42,6 @@ workflow HierarchicallyMergeVcfs {
         # ==========================================
         # LEVEL 0
         # ==========================================
-        call CreateBatches as L0_Batches {
-            input:
-                vcfs = vcfs_in,
-                vcf_idxs = vcf_idxs_in,
-                batch_size = batch_sizes[0]
-        }
-
         scatter (i in range(length(L0_Batches.vcf_batch_fofns))) {
             call MergeVcfs as L0_Merge {
                 input:
