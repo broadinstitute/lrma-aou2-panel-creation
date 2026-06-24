@@ -5,9 +5,9 @@ import "../MultilevelHierarchicallyPasteVcfsStreaming.wdl" as MultilevelHierarch
 
 workflow PreprocessPLsGVCF {
     input {
-        File? input_gvcfs_fofn
-        File? input_gvcf_idxs_fofn
-        File sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
+        File input_gvcfs_fofn
+        File input_gvcf_idxs_fofn
+        File sample_names_file          # order of sample names must match that of gVCFs
 
         String output_prefix
 
