@@ -5,7 +5,7 @@ import "../MultilevelHierarchicallyPasteVcfsStreaming.wdl" as MultilevelHierarch
 
 workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     input {
-        # joint VCF and single-sample gVCF inputs are mutually exclusive
+        # joint VCF, single-sample gVCF, and preprocessed joint VCF inputs are mutually exclusive
         File? input_joint_vcf
         File? input_joint_vcf_idx
 
@@ -13,6 +13,9 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File? input_gvcf_idxs_fofn
         File paste_vcfs_binary
         # TODO expose batch_sizes
+
+        File? input_preprocessed_joint_vcf
+        File? input_preprocessed_joint_vcf_idx
 
         File sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
         File? remap_sample_names_file   # TSV with old_name new_name mappings
@@ -90,7 +93,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     Array[File] panel_split_chunk_bins_ = select_first([panel_split_chunk_bins_bypass, ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin])
 
     # joint ###################################################################
-    if (defined(input_joint_vcf) && defined(input_joint_vcf_idx) && !defined(input_gvcfs_fofn) && !defined(input_gvcf_idxs_fofn)) {
+    if (defined(input_joint_vcf) && defined(input_joint_vcf_idx) && !defined(input_gvcfs_fofn) && !defined(input_gvcf_idxs_fofn) && !defined(input_preprocessed_joint_vcf) && !defined(input_preprocessed_joint_vcf_idx)) {
         scatter (k in range(length(output_regions_))) {
             call PreprocessPLs as ChunkedPreprocessPLsJoint {
                 input:
@@ -112,7 +115,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     ###########################################################################
 
     # gVCF ####################################################################
-    if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && defined(input_gvcfs_fofn) && defined(input_gvcf_idxs_fofn)) {
+    if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && defined(input_gvcfs_fofn) && defined(input_gvcf_idxs_fofn) && !defined(input_preprocessed_joint_vcf) && !defined(input_preprocessed_joint_vcf_idx)) {
         Array[File] input_gvcfs = read_lines(select_first([input_gvcfs_fofn]))
         Array[File] input_gvcf_idxs = read_lines(select_first([input_gvcf_idxs_fofn]))
     
@@ -160,9 +163,21 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     }
     ###########################################################################
 
-    # in joint mode the preprocessed VCFs are chunked, but in gVCF mode we redundantly pass the same chromosome preprocessed VCF to all chunks
-    Array[File] preprocessed_pls_vcfs = select_first([ChunkedPreprocessPLsJoint.preprocessed_pls_vcf, gvcf_preprocessed_pls_vcfs])
-    Array[File] preprocessed_pls_vcf_idxs = select_first([ChunkedPreprocessPLsJoint.preprocessed_pls_vcf_idx, gvcf_preprocessed_pls_vcf_idxs])
+    # preprocessed joint#######################################################
+    if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && !defined(input_gvcfs_fofn) && !defined(input_gvcf_idxs_fofn) && defined(input_preprocessed_joint_vcf) && defined(input_preprocessed_joint_vcf_idx)) {
+        scatter (k in range(length(output_regions_))) {
+            File joint_preprocessed_pls_vcf = select_first([input_preprocessed_joint_vcf])
+            File joint_preprocessed_pls_vcf_idx = select_first([input_preprocessed_joint_vcf_idx])
+        }
+
+        Array[File] joint_preprocessed_pls_vcfs = joint_preprocessed_pls_vcf
+        Array[File] joint_preprocessed_pls_vcf_idxs = joint_preprocessed_pls_vcf_idx
+    }
+    ###########################################################################
+
+    # in joint mode the preprocessed VCFs are chunked, but in gVCF and joint preprocessed VCF modes we redundantly pass the same preprocessed VCF to all chunks
+    Array[File] preprocessed_pls_vcfs = select_first([ChunkedPreprocessPLsJoint.preprocessed_pls_vcf, gvcf_preprocessed_pls_vcfs, joint_preprocessed_pls_vcfs])
+    Array[File] preprocessed_pls_vcf_idxs = select_first([ChunkedPreprocessPLsJoint.preprocessed_pls_vcf_idx, gvcf_preprocessed_pls_vcf_idxs, joint_preprocessed_pls_vcf_idxs])
 
     scatter (k in range(length(output_regions_))) {
         call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
