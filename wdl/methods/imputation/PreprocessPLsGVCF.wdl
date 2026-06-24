@@ -11,7 +11,8 @@ workflow PreprocessPLsGVCF {
         
         Array[File]? input_gvcfs
         Array[File]? input_gvcf_idxs
-        Array[String]? sample_names
+        Array[String]? entity_ids
+        File? sample_names_map_file           # TSV map of entity_id (research_id) to id2 for AoU DRAGEN gVCFs; Terra struggles with id2 as they are parsed as mixed strings/numbers
 
         String output_prefix
 
@@ -40,7 +41,14 @@ workflow PreprocessPLsGVCF {
     if (defined(sample_names_file)) {
         Array[String] parsed_sample_names = read_lines(select_first([sample_names_file]))
     }
-    Array[String] sample_names_ = select_first([sample_names, parsed_sample_names])
+    if (defined(entity_ids) && defined(sample_names_map_file)) {
+        Map[String, String] sample_names_map = read_map(select_first([sample_names_map_file]))
+        scatter (entity_id in select_first([entity_ids])) {
+            String mapped_sample_name = sample_names_map[entity_id]
+        }
+        Array[String] mapped_sample_names = mapped_sample_name
+    }
+    Array[String] sample_names_ = select_first([mapped_sample_names, parsed_sample_names])
 
     scatter (j in range(length(input_gvcfs_))) {
         call GLIMPSE2BatchedCaseShardedSingleBatch.PreprocessPLs as PreprocessPLsGVCF {
