@@ -12,7 +12,8 @@ workflow PreprocessPLsGVCF {
         Array[File]? input_gvcfs
         Array[File]? input_gvcf_idxs
         Array[String]? entity_ids
-        File? sample_names_map_file           # TSV map of entity_id (research_id) to id2 for AoU DRAGEN gVCFs; Terra struggles with id2 as they are parsed as mixed strings/numbers
+        File? sample_names_map_file           # TSV map of entity_id (research_id) to id2 for AoU DRAGEN gVCFs;
+                                              # Terra struggles with id2 as they are parsed as mixed strings/numbers
 
         String output_prefix
 
@@ -41,14 +42,17 @@ workflow PreprocessPLsGVCF {
     if (defined(sample_names_file)) {
         Array[String] parsed_sample_names = read_lines(select_first([sample_names_file]))
     }
+    
+    # Replaced map scatter with a bash task call
     if (defined(entity_ids) && defined(sample_names_map_file)) {
-        Map[String, String] sample_names_map = read_map(select_first([sample_names_map_file]))
-        scatter (entity_id in select_first([entity_ids])) {
-            String mapped_sample_name = sample_names_map[entity_id]
+        call MapSampleNames {
+            input:
+                entity_ids = select_first([entity_ids]),
+                sample_names_map_file = select_first([sample_names_map_file])
         }
-        Array[String] mapped_sample_names = mapped_sample_name
     }
-    Array[String] sample_names_ = select_first([mapped_sample_names, parsed_sample_names])
+    
+    Array[String] sample_names_ = select_first([MapSampleNames.mapped_sample_names, parsed_sample_names])
 
     scatter (j in range(length(input_gvcfs_))) {
         call GLIMPSE2BatchedCaseShardedSingleBatch.PreprocessPLs as PreprocessPLsGVCF {
@@ -85,5 +89,45 @@ workflow PreprocessPLsGVCF {
     output {
         File preprocessed_pls_vcf = PastePreprocessPLsGVCFs.merged_vcf
         File preprocessed_pls_vcf_idx = PastePreprocessPLsGVCFs.merged_vcf_idx
+    }
+}
+
+task MapSampleNames {
+    input {
+        Array[String] entity_ids
+        File sample_names_map_file
+    }
+
+    command <<<
+        set -euo pipefail
+
+        # Use awk to load the TSV map into memory, then translate the entity IDs array in order
+        awk 'BEGIN {FS="\t"; OFS="\t"} 
+        NR==FNR { 
+            # First pass: read the map file into an array
+            map[$1] = $2; 
+            next 
+        } 
+        { 
+            # Second pass: read the entity_ids file
+            if ($1 in map) { 
+                print map[$1] 
+            } else { 
+                print "Error: ID " $1 " not found in map file" > "/dev/stderr"
+                exit 1 
+            } 
+        }' ~{sample_names_map_file} ~{write_lines(entity_ids)} > mapped_names.txt
+    >>>
+
+    output {
+        Array[String] mapped_sample_names = read_lines("mapped_names.txt")
+    }
+
+    runtime {
+        docker: "ubuntu:22.04"
+        cpu: 1
+        memory: "4 GB"
+        disks: "local-disk 10 HDD"
+        preemptible: 3
     }
 }
