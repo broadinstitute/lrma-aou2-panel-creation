@@ -5,9 +5,13 @@ import "../MultilevelHierarchicallyPasteVcfsStreaming.wdl" as MultilevelHierarch
 
 workflow PreprocessPLsGVCF {
     input {
-        File input_gvcfs_fofn
-        File input_gvcf_idxs_fofn
-        File sample_names_file          # order of sample names must match that of gVCFs
+        File? input_gvcfs_fofn
+        File? input_gvcf_idxs_fofn
+        File? sample_names_file          # order of sample names must match that of gVCFs
+        
+        Array[File]? input_gvcfs
+        Array[File]? input_gvcf_idxs
+        Array[String]? sample_names
 
         String output_prefix
 
@@ -23,21 +27,20 @@ workflow PreprocessPLsGVCF {
         Array[String] paste_regions
     }
 
-    Array[String] sample_names = read_lines(select_first([sample_names_file]))
+    Array[File] input_gvcfs_ = select_first([read_lines(select_first([input_gvcfs_fofn])), input_gvcfs])
+    Array[File] input_gvcf_idxs_ = select_first([read_lines(select_first([input_gvcf_idxs_fofn])), input_gvcf_idxs])
+    Array[String] sample_names_ = select_first([read_lines(select_first([sample_names_file])), sample_names])
 
-    Array[File] input_gvcfs = read_lines(select_first([input_gvcfs_fofn]))
-    Array[File] input_gvcf_idxs = read_lines(select_first([input_gvcf_idxs_fofn]))
-
-    scatter (j in range(length(select_first([input_gvcfs])))) {
+    scatter (j in range(length(select_first([input_gvcfs_])))) {
         call GLIMPSE2BatchedCaseShardedSingleBatch.PreprocessPLs as PreprocessPLsGVCF {
             input:
-                input_vcf = input_gvcfs[j],
-                input_vcf_idx = input_gvcf_idxs[j],
+                input_vcf = input_gvcfs_[j],
+                input_vcf_idx = input_gvcf_idxs_[j],
                 mode = "gvcf",
                 panel_bubble_split_sites_only_vcf = preprocess_panel_bubble_split_sites_only_vcf,
                 panel_bubble_split_sites_only_vcf_idx = preprocess_panel_bubble_split_sites_only_vcf_idx,
-                sample_names = [sample_names[j]],
-                output_prefix = output_prefix + ".sample-" + j + "." + sample_names[j] + ".preprocessedPLs",
+                sample_names = [sample_names_[j]],
+                output_prefix = output_prefix + ".sample-" + j + "." + sample_names_[j] + ".preprocessedPLs",
                 extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
                 cargo_toml = extract_bubble_likelihoods_cargo_toml,
                 extract_bubble_likelihoods_binary = extract_bubble_likelihoods_binary,
