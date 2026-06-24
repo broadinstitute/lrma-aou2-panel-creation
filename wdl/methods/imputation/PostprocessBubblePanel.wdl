@@ -330,10 +330,10 @@ task SplitBubblesPanel {
     command <<<
         set -euox pipefail
 
-        bcftools view --no-version -r ~{region} --regions-overlap 0 ~{panel_bubble_vcf} -Ou | \
-            bcftools norm --no-version -m-any -Ou -N | \
-            bcftools +setGT --no-version -Ou -- -t . -n 0p | \
-            bcftools +fill-AN-AC --no-version -Oz | \
+        bcftools view -r ~{region} --regions-overlap 0 ~{panel_bubble_vcf} -Ou | \
+            bcftools norm -m-any -Ou -N | \
+            bcftools +setGT -Ou -- -t . -n 0p | \
+            bcftools +fill-AN-AC -Ou | \
             bcftools reheader -f ~{reference_fasta_fai} | \
             ~{if length(leave_out_samples_array) > 0 then "bcftools view -S ^" + leave_out_samples_list + " --force-samples -Ou |" else ""} \
             bcftools sort --max-mem ~{sort_mem_gb}G -W=csi -Ob -o ~{output_prefix}.bcf

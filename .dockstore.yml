@@ -39,6 +39,9 @@ workflows:
 - name: GLIMPSE2BatchedCaseShardedSingleBatch
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/GLIMPSE2BatchedCaseShardedSingleBatch.wdl
+- name: PreprocessPLsGVCF
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/PreprocessPLsGVCF.wdl
 - name: VcfdistEvaluation
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistEvaluation.wdl

@@ -379,7 +379,7 @@ task PreprocessPLs {
         String mode     # joint or gvcf
         File panel_bubble_split_sites_only_vcf
         File panel_bubble_split_sites_only_vcf_idx
-        String output_region
+        String? output_region
         Array[String] sample_names
         String output_prefix
 
@@ -415,7 +415,7 @@ task PreprocessPLs {
             ~{panel_bubble_split_sites_only_vcf}##idx##~{panel_bubble_split_sites_only_vcf_idx} \
             ~{input_vcf}##idx##~{input_vcf_idx} \
             ~{output_prefix}.bcf \
-            --region ~{output_region} \
+            ~{"--region " + output_region} \
             --samples ~{sample_names_list} \
             ~{extra_args}
             
