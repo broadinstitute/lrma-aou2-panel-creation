@@ -94,14 +94,14 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     # joint ###################################################################
     if (defined(input_joint_vcf) && defined(input_joint_vcf_idx) && !defined(input_gvcfs_fofn) && !defined(input_gvcf_idxs_fofn) && !defined(input_preprocessed_joint_vcf) && !defined(input_preprocessed_joint_vcf_idx) && 
-        defined(preprocess_panel_bubble_split_sites_only_vcf && defined(preprocess_panel_bubble_split_sites_only_vcf_idx))) {
+        defined(preprocess_panel_bubble_split_sites_only_vcf) && defined(preprocess_panel_bubble_split_sites_only_vcf_idx)) {
         scatter (k in range(length(output_regions_))) {
             call PreprocessPLs as ChunkedPreprocessPLsJoint {
                 input:
                     input_vcf = select_first([input_joint_vcf]),
                     input_vcf_idx = select_first([input_joint_vcf_idx]),
                     mode = "joint",
-                    panel_bubble_split_sites_only_vcf = select_first([preprocess_panel_bubble_split_sites_only_vcf],
+                    panel_bubble_split_sites_only_vcf = select_first([preprocess_panel_bubble_split_sites_only_vcf]),
                     panel_bubble_split_sites_only_vcf_idx = select_first([preprocess_panel_bubble_split_sites_only_vcf_idx]),
                     output_region = output_regions_[k],
                     sample_names = sample_names,
@@ -117,7 +117,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     # gVCF ####################################################################
     if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && defined(input_gvcfs_fofn) && defined(input_gvcf_idxs_fofn) && !defined(input_preprocessed_joint_vcf) && !defined(input_preprocessed_joint_vcf_idx) && 
-        defined(preprocess_panel_bubble_split_sites_only_vcf && defined(preprocess_panel_bubble_split_sites_only_vcf_idx))) {
+        defined(preprocess_panel_bubble_split_sites_only_vcf) && defined(preprocess_panel_bubble_split_sites_only_vcf_idx)) {
         Array[File] input_gvcfs = read_lines(select_first([input_gvcfs_fofn]))
         Array[File] input_gvcf_idxs = read_lines(select_first([input_gvcf_idxs_fofn]))
     
@@ -167,7 +167,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     # preprocessed joint#######################################################
     if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && !defined(input_gvcfs_fofn) && !defined(input_gvcf_idxs_fofn) && defined(input_preprocessed_joint_vcf) && defined(input_preprocessed_joint_vcf_idx) && 
-        !defined(preprocess_panel_bubble_split_sites_only_vcf && !defined(preprocess_panel_bubble_split_sites_only_vcf_idx))) {
+        !defined(preprocess_panel_bubble_split_sites_only_vcf) && !defined(preprocess_panel_bubble_split_sites_only_vcf_idx)) {
         scatter (k in range(length(output_regions_))) {
             File joint_preprocessed_pls_vcf = select_first([input_preprocessed_joint_vcf])
             File joint_preprocessed_pls_vcf_idx = select_first([input_preprocessed_joint_vcf_idx])
