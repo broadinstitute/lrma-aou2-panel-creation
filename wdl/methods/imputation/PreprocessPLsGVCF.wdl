@@ -27,9 +27,9 @@ workflow PreprocessPLsGVCF {
         Array[String] paste_regions
     }
 
-    Array[File] input_gvcfs_ = select_first([read_lines(select_first([input_gvcfs_fofn])), input_gvcfs])
-    Array[File] input_gvcf_idxs_ = select_first([read_lines(select_first([input_gvcf_idxs_fofn])), input_gvcf_idxs])
-    Array[String] sample_names_ = select_first([read_lines(select_first([sample_names_file])), sample_names])
+    Array[File] input_gvcfs_ = select_first([input_gvcfs, read_lines(select_first([input_gvcfs_fofn]))])
+    Array[File] input_gvcf_idxs_ = select_first([input_gvcf_idxs, read_lines(select_first([input_gvcf_idxs_fofn]))])
+    Array[String] sample_names_ = select_first([sample_names, read_lines(select_first([sample_names_file]))])
 
     scatter (j in range(length(select_first([input_gvcfs_])))) {
         call GLIMPSE2BatchedCaseShardedSingleBatch.PreprocessPLs as PreprocessPLsGVCF {
