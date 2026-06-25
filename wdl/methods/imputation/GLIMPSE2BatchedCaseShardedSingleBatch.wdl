@@ -636,10 +636,12 @@ task PopAndMarginalizeCollisions {
             POP_BIN="./pop-glimpse2/target/release/pop-glimpse2"
         fi
 
-        bcftools annotate -r ~{region} --regions-overlap 0 -a ~{panel_bubble_split_sites_only_vcf} ~{posteriors_vcf} \
-            -c CHROM,POS,REF,ALT,ID:=INFO/ID,INFO/ID:=INFO/ID | \
-        $POP_BIN ~{panel_id_split_vcf_gz} | \
-        bcftools sort -W -Ob -o ~{output_prefix}.bcf
+        # this now only works for pop-glimpse2-joint-opt.rs;
+        # the sort may also be extraneous, but we keep it in to guard against getting out of sync with the popped panel
+        bcftools view -r ~{region} --regions-overlap 0 ~{panel_bubble_split_sites_only_vcf} -Oz -o panel.bubble.split.sites.shard.vcf.gz
+        bcftools view -r ~{region} --regions-overlap 0 ~{posteriors_vcf} | \
+            $POP_BIN ~{panel_id_split_vcf_gz} panel.bubble.split.sites.shard.vcf.gz | \
+            bcftools sort --max-mem=2G -W -Ob -o ~{output_prefix}.bcf
     >>>
 
     output {
@@ -650,7 +652,7 @@ task PopAndMarginalizeCollisions {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
-        mem_gb:             16,
+        mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
