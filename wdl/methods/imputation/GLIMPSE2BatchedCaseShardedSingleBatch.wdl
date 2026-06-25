@@ -48,9 +48,10 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         # inputs for PopAndMarginalizeCollisions
         File panel_id_split_vcf_gz
         File panel_id_split_vcf_gz_tbi
-        File? pop_glimpse2_script      # modified version of convert-to-biallelic.py
+        File? pop_glimpse2_script               # heavily modified version of convert-to-biallelic.py
         File? pop_glimpse2_cargo_toml
         File? pop_glimpse2_binary
+        Array[String]? pop_regions     # non-overlapping, if not provided then GLIMPSE2 chunks will be used
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
     }
@@ -207,7 +208,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             docker = glimpse2_docker
     }
 
-    scatter (k in range(length(output_regions_))) {
+    Array[String] pop_regions_ = select_first([pop_regions, output_regions_])
+    scatter (k in range(length(pop_regions_))) {
         call PopAndMarginalizeCollisions { input:
             posteriors_vcf = GLIMPSE2Ligate.ligated_vcf,
             posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx,
@@ -218,7 +220,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
             pop_glimpse2_script = pop_glimpse2_script,
             cargo_toml = pop_glimpse2_cargo_toml,
             pop_glimpse2_binary = pop_glimpse2_binary,
-            region = output_regions_[k],
+            region = pop_regions_[k],
             output_prefix = output_prefix + ".glimpse2.popped"
         }
     }
