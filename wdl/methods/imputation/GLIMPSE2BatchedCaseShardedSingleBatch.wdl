@@ -17,7 +17,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
         File? input_preprocessed_joint_vcf
         File? input_preprocessed_joint_vcf_idx
 
-        File sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
+        File? sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
         File? remap_sample_names_file   # TSV with old_name new_name mappings
 
         String chromosome
@@ -56,7 +56,6 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
     }
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
-    Array[String] sample_names = read_lines(select_first([sample_names_file]))
 
     if (!defined(input_regions_bypass) && !defined(output_regions_bypass) && !defined(panel_split_chunk_bins_bypass)) {
         call GLIMPSE2Chunk {
@@ -94,7 +93,9 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     # joint ###################################################################
     if (defined(input_joint_vcf) && defined(input_joint_vcf_idx) && !defined(input_gvcfs_fofn) && !defined(input_gvcf_idxs_fofn) && !defined(input_preprocessed_joint_vcf) && !defined(input_preprocessed_joint_vcf_idx) && 
-        defined(preprocess_panel_bubble_split_sites_only_vcf) && defined(preprocess_panel_bubble_split_sites_only_vcf_idx)) {
+        defined(preprocess_panel_bubble_split_sites_only_vcf) && defined(preprocess_panel_bubble_split_sites_only_vcf_idx) && defined(sample_names_file)) {
+        Array[String] sample_names_joint = read_lines(select_first([sample_names_file]))
+        
         scatter (k in range(length(output_regions_))) {
             call PreprocessPLs as ChunkedPreprocessPLsJoint {
                 input:
@@ -104,7 +105,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     panel_bubble_split_sites_only_vcf = select_first([preprocess_panel_bubble_split_sites_only_vcf]),
                     panel_bubble_split_sites_only_vcf_idx = select_first([preprocess_panel_bubble_split_sites_only_vcf_idx]),
                     output_region = output_regions_[k],
-                    sample_names = sample_names,
+                    sample_names = sample_names_joint,
                     output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
                     extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
                     cargo_toml = extract_bubble_likelihoods_cargo_toml,
@@ -117,9 +118,10 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     # gVCF ####################################################################
     if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && defined(input_gvcfs_fofn) && defined(input_gvcf_idxs_fofn) && !defined(input_preprocessed_joint_vcf) && !defined(input_preprocessed_joint_vcf_idx) && 
-        defined(preprocess_panel_bubble_split_sites_only_vcf) && defined(preprocess_panel_bubble_split_sites_only_vcf_idx)) {
+        defined(preprocess_panel_bubble_split_sites_only_vcf) && defined(preprocess_panel_bubble_split_sites_only_vcf_idx) && defined(sample_names_file)) {
         Array[File] input_gvcfs = read_lines(select_first([input_gvcfs_fofn]))
         Array[File] input_gvcf_idxs = read_lines(select_first([input_gvcf_idxs_fofn]))
+        Array[String] sample_names_gvcf = read_lines(select_first([sample_names_file]))
     
         # for each input, localize entire genome gVCF but genotype only requested chromosome (i.e., some redundant localization)
         scatter (j in range(length(select_first([input_gvcfs])))) {
@@ -131,8 +133,8 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
                     panel_bubble_split_sites_only_vcf = select_first([preprocess_panel_bubble_split_sites_only_vcf]),
                     panel_bubble_split_sites_only_vcf_idx = select_first([preprocess_panel_bubble_split_sites_only_vcf_idx]),
                     output_region = chromosome,
-                    sample_names = [sample_names[j]],
-                    output_prefix = output_prefix + ".sample-" + j + "." + sample_names[j] + ".preprocessedPLs",
+                    sample_names = [sample_names_gvcf[j]],
+                    output_prefix = output_prefix + ".sample-" + j + "." + sample_names_gvcf[j] + ".preprocessedPLs",
                     extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
                     cargo_toml = extract_bubble_likelihoods_cargo_toml,
                     extract_bubble_likelihoods_binary = extract_bubble_likelihoods_binary,
@@ -167,7 +169,7 @@ workflow GLIMPSE2BatchedCaseShardedSingleBatch {
 
     # preprocessed joint#######################################################
     if (!defined(input_joint_vcf) && !defined(input_joint_vcf_idx) && !defined(input_gvcfs_fofn) && !defined(input_gvcf_idxs_fofn) && defined(input_preprocessed_joint_vcf) && defined(input_preprocessed_joint_vcf_idx) && 
-        !defined(preprocess_panel_bubble_split_sites_only_vcf) && !defined(preprocess_panel_bubble_split_sites_only_vcf_idx)) {
+        !defined(preprocess_panel_bubble_split_sites_only_vcf) && !defined(preprocess_panel_bubble_split_sites_only_vcf_idx) && !defined(sample_names_file)) {
         scatter (k in range(length(output_regions_))) {
             File joint_preprocessed_pls_vcf = select_first([input_preprocessed_joint_vcf])
             File joint_preprocessed_pls_vcf_idx = select_first([input_preprocessed_joint_vcf_idx])
