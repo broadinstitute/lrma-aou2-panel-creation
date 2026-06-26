@@ -18,7 +18,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         String output_prefix
 
         # inputs for PopAndMarginalizeCollisions
-        File pop_and_marginalize_panel_resources_json
+        File pop_glimpse2_panel_resources_json
         File? pop_glimpse2_script               # heavily modified version of convert-to-biallelic.py
         File? pop_glimpse2_cargo_toml
         File? pop_glimpse2_binary
@@ -34,12 +34,12 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     Array[String] output_regions = chunked_panel[chromosome].output_regions
     Array[File] panel_split_chunk_bins = chunked_panel[chromosome].panel_split_chunk_bins
 
-    Map[String, PopAndMarginalizePanelResourcesChromosome] pop_and_marginalize_panel_resources = read_json(pop_and_marginalize_panel_resources_json)
-    File panel_bubble_split_sites_only_vcf = pop_and_marginalize_panel_resources[chromosome].panel_bubble_split_sites_only_vcf
-    File panel_bubble_split_sites_only_vcf_idx = pop_and_marginalize_panel_resources[chromosome].panel_bubble_split_sites_only_vcf_idx
-    File panel_id_split_vcf_gz = pop_and_marginalize_panel_resources[chromosome].panel_id_split_vcf_gz
-    File panel_id_split_vcf_gz_tbi = pop_and_marginalize_panel_resources[chromosome].panel_id_split_vcf_gz_tbi
-    Array[String] pop_regions = select_first([pop_and_marginalize_panel_resources[chromosome].pop_regions, output_regions])
+    Map[String, PopAndMarginalizePanelResourcesChromosome] pop_glimpse2_panel_resources = read_json(pop_glimpse2_panel_resources_json)
+    File panel_bubble_split_sites_only_vcf = pop_glimpse2_panel_resources[chromosome].panel_bubble_split_sites_only_vcf
+    File panel_bubble_split_sites_only_vcf_idx = pop_glimpse2_panel_resources[chromosome].panel_bubble_split_sites_only_vcf_idx
+    File panel_id_split_vcf_gz = pop_glimpse2_panel_resources[chromosome].panel_id_split_vcf_gz
+    File panel_id_split_vcf_gz_tbi = pop_glimpse2_panel_resources[chromosome].panel_id_split_vcf_gz_tbi
+    Array[String] pop_regions = select_first([pop_glimpse2_panel_resources[chromosome].pop_regions, output_regions])
     
 
     scatter (k in range(length(output_regions))) {
@@ -133,18 +133,18 @@ struct RuntimeAttr {
 }
 
 struct ChunkedPanelChromosome {
-    File chunks_tsv
+    String chunks_tsv
     Array[String] input_regions
     Array[String] output_regions
-    Array[File] panel_split_chunk_bins  # non-overlapping, if not provided then GLIMPSE2 chunks will be used
+    Array[String] panel_split_chunk_bins
 }
 
 struct PopAndMarginalizePanelResourcesChromosome {
-    File panel_bubble_split_sites_only_vcf
-    File panel_bubble_split_sites_only_vcf_idx
-    File panel_id_split_vcf_gz
-    File panel_id_split_vcf_gz_tbi
-    Array[String]? pop_regions
+    String panel_bubble_split_sites_only_vcf
+    String panel_bubble_split_sites_only_vcf_idx
+    String panel_id_split_vcf_gz
+    String panel_id_split_vcf_gz_tbi
+    Array[String]? pop_regions              # non-overlapping, if not provided then GLIMPSE2 chunks will be used
 }
 
 # checkpoint implementation borrowed from https://github.com/broadinstitute/palantir-workflows/blob/main/GlimpseImputationPipeline/Glimpse2Imputation.wdl
