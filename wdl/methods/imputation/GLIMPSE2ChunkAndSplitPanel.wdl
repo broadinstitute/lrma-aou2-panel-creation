@@ -61,9 +61,12 @@ workflow GLIMPSE2ChunkAndSplitPanel {
         Pair[String, ChunkedPanelChromosome] chunked_panel_chromosome_pair = (chromosome, chunked_panel_chromosome)
     }
 
+    File serialized_pairs_file = write_json(chunked_panel_chromosome_pair)
+
     call CoercePairsToMap {
         input:
-            pair_array = chunked_panel_chromosome_pair
+            serialized_pairs_json = serialized_pairs_file,
+            output_prefix = output_prefix
     }
 
     output {
@@ -207,7 +210,8 @@ task GLIMPSE2SplitReference {
 
 task CoercePairsToMap {
     input {
-        Array[Pair[String, ChunkedPanelChromosome]] pair_array
+        File serialized_pairs_json
+        String output_prefix
         
         RuntimeAttr? runtime_attr_override
     }
@@ -216,18 +220,18 @@ task CoercePairsToMap {
         python3 <<CODE
         import json
 
-        with open("~{write_json(pair_array)}", "r") as f:
+        with open("~{serialized_pairs_json}", "r") as f:
             pairs = json.load(f)
 
         out_map = {item["left"]: item["right"] for item in pairs}
 
-        with open("out_map.json", "w") as f:
+        with open("~{output_prefix}.json", "w") as f:
             json.dump(out_map, f)
         CODE
     >>>
 
     output {
-        File out_map_json = "out_map.json"
+        File out_map_json = "~{output_prefix}.json"
     }
 
     #########################
