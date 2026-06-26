@@ -64,8 +64,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             docker = glimpse2_docker
     }
 
-    Array[String] pop_regions_ = select_first([pop_regions, output_regions])
-    scatter (k in range(length(pop_regions_))) {
+    scatter (k in range(length(pop_regions))) {
         call PopAndMarginalizeCollisions { input:
             posteriors_vcf = GLIMPSE2Ligate.ligated_vcf,
             posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx,
@@ -76,7 +75,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             pop_glimpse2_script = pop_glimpse2_script,
             cargo_toml = pop_glimpse2_cargo_toml,
             pop_glimpse2_binary = pop_glimpse2_binary,
-            region = pop_regions_[k],
+            region = pop_regions[k],
             output_prefix = output_prefix + ".glimpse2.popped"
         }
     }
