@@ -61,11 +61,9 @@ workflow GLIMPSE2ChunkAndSplitPanel {
         Pair[String, ChunkedPanelChromosome] chunked_panel_chromosome_pair = (chromosome, chunked_panel_chromosome)
     }
 
-    File serialized_pairs_file = write_json(chunked_panel_chromosome_pair)
-
     call CoercePairsToMap {
         input:
-            serialized_pairs_json = serialized_pairs_file,
+            pair_array = chunked_panel_chromosome_pair,
             output_prefix = output_prefix
     }
 
@@ -87,10 +85,10 @@ struct RuntimeAttr {
 }
 
 struct ChunkedPanelChromosome {
-    File chunks_tsv
+    String chunks_tsv
     Array[String] input_regions
     Array[String] output_regions
-    Array[File] panel_split_chunk_bins
+    Array[String] panel_split_chunk_bins
 }
 
 task GLIMPSE2Chunk {
@@ -210,7 +208,7 @@ task GLIMPSE2SplitReference {
 
 task CoercePairsToMap {
     input {
-        File serialized_pairs_json
+        Array[Pair[String, ChunkedPanelChromosome]] pair_array
         String output_prefix
         
         RuntimeAttr? runtime_attr_override
@@ -220,14 +218,15 @@ task CoercePairsToMap {
         python3 <<CODE
         import json
 
-        with open("~{serialized_pairs_json}", "r") as f:
+        # write_json is safe here because it executes inside the task container
+        with open("~{write_json(pair_array)}", "r") as f:
             pairs = json.load(f)
 
         out_map = {item["left"]: item["right"] for item in pairs}
 
         with open("~{output_prefix}.json", "w") as f:
-            json.dump(out_map, f)
-        CODE
+            json.dump(out_map, f, indent=2)
+    CODE
     >>>
 
     output {
