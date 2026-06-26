@@ -39,6 +39,9 @@ workflows:
 - name: GLIMPSE2BatchedCaseShardedSingleBatch
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/GLIMPSE2BatchedCaseShardedSingleBatch.wdl
+- name: GLIMPSE2ChunkAndSplitPanel
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/GLIMPSE2ChunkAndSplitPanel.wdl
 - name: PreprocessPLsGVCF
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/PreprocessPLsGVCF.wdl
