@@ -226,7 +226,7 @@ task CoercePairsToMap {
 
         with open("~{output_prefix}.json", "w") as f:
             json.dump(out_map, f, indent=2)
-    CODE
+        CODE
     >>>
 
     output {
