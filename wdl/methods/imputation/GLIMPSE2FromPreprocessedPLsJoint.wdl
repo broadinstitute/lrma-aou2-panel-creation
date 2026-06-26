@@ -155,14 +155,14 @@ task GLIMPSE2Phase {
         String output_region
         File genetic_map
         String output_prefix
-        String? extra_phase_args
+        String? extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
 
         String docker
 
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 50 + 3 * ceil(size([input_vcf, panel_split_chunk_bin], "GB"))
+    Int disk_size_gb = 50        # TODO pass shard-specific or autoscaled values (for latter, note that only a shard of input_vcf is used)
 
     command <<<
         set -euxo pipefail
@@ -202,7 +202,7 @@ task GLIMPSE2Phase {
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
-        preemptible_tries:  9,
+        preemptible_tries:  10,
         max_retries:        1,
         docker:             docker
     }
