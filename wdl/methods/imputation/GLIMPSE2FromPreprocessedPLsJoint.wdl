@@ -13,7 +13,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         File genetic_maps_tsv
         File chunked_panel_json
 
-        String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites"
+        String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
         String output_prefix
 
         # inputs for PopAndMarginalizeCollisions
