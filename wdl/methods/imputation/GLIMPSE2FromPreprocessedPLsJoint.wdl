@@ -18,12 +18,8 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         String output_prefix
 
         # inputs for PopAndMarginalizeCollisions
-        File panel_bubble_split_sites_only_vcf
-        File panel_bubble_split_sites_only_vcf_idx
-        File panel_id_split_vcf_gz
-        File panel_id_split_vcf_gz_tbi
+        File pop_and_marginalize_panel_resources_json
         File pop_glimpse2_binary
-        Array[String]? pop_regions     # non-overlapping, if not provided then GLIMPSE2 chunks will be used
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
     }
@@ -35,6 +31,14 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     Array[String] input_regions = chunked_panel[chromosome].input_regions
     Array[String] output_regions = chunked_panel[chromosome].output_regions
     Array[File] panel_split_chunk_bins = chunked_panel[chromosome].panel_split_chunk_bins
+
+    Map[String, PopAndMarginalizePanelResourcesChromosome] pop_and_marginalize_panel_resources = read_json(pop_and_marginalize_panel_resources_json)
+    File panel_bubble_split_sites_only_vcf = pop_and_marginalize_panel_resources[chromosome].panel_bubble_split_sites_only_vcf
+    File panel_bubble_split_sites_only_vcf_idx = pop_and_marginalize_panel_resources[chromosome].panel_bubble_split_sites_only_vcf_idx
+    File panel_id_split_vcf_gz = pop_and_marginalize_panel_resources[chromosome].panel_id_split_vcf_gz
+    File panel_id_split_vcf_gz_tbi = pop_and_marginalize_panel_resources[chromosome].panel_id_split_vcf_gz_tbi
+    Array[String]? pop_regions = select_first([pop_and_marginalize_panel_resources[chromosome].pop_regions, output_regions])
+    
 
     scatter (k in range(length(output_regions))) {
         call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
@@ -128,7 +132,15 @@ struct ChunkedPanelChromosome {
     File chunks_tsv
     Array[String] input_regions
     Array[String] output_regions
-    Array[File] panel_split_chunk_bins
+    Array[File] panel_split_chunk_bins  # non-overlapping, if not provided then GLIMPSE2 chunks will be used
+}
+
+struct PopAndMarginalizePanelResourcesChromosome {
+    File panel_bubble_split_sites_only_vcf
+    File panel_bubble_split_sites_only_vcf_idx
+    File panel_id_split_vcf_gz
+    File panel_id_split_vcf_gz_tbi
+    Array[String]? pop_regions
 }
 
 # checkpoint implementation borrowed from https://github.com/broadinstitute/palantir-workflows/blob/main/GlimpseImputationPipeline/Glimpse2Imputation.wdl
