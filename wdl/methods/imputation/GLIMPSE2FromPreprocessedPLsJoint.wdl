@@ -150,7 +150,7 @@ task GLIMPSE2Phase {
 
     Int disk_size_gb = 50 + 3 * ceil(size([input_vcf, panel_split_chunk_bin], "GB"))
 
-    command {
+    command <<<
         set -euxo pipefail
 
         cmd="/bin/GLIMPSE2_phase \
@@ -174,7 +174,7 @@ task GLIMPSE2Phase {
         cat input.header.txt glimpse2.header.txt input.columns.txt > header.txt
         bcftools reheader -h header.txt ~{output_prefix}.raw.bcf -o ~{output_prefix}.bcf
         bcftools index ~{output_prefix}.bcf
-    }
+    >>>
 
     output {
         File phased_vcf = "~{output_prefix}.bcf"
