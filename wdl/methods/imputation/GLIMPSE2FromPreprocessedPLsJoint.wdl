@@ -7,7 +7,6 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         File input_preprocessed_joint_vcf
         File input_preprocessed_joint_vcf_idx
 
-        File? sample_names_file          # in gVCF mode, order of sample names must match that of gVCFs
         File? remap_sample_names_file    # TSV with old_name new_name mappings
 
         String chromosome
