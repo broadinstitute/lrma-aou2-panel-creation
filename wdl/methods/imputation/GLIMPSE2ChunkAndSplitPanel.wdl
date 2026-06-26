@@ -67,6 +67,7 @@ workflow GLIMPSE2ChunkAndSplitPanel {
     }
 
     output {
+        File chunked_panel_json = CoercePairsToMap.out_map_json
         Map[String, ChunkedPanelChromosome] chunked_panel = read_json(CoercePairsToMap.out_map_json)
     }
 }
