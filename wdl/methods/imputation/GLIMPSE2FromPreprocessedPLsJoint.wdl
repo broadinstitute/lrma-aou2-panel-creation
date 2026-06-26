@@ -19,7 +19,9 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 
         # inputs for PopAndMarginalizeCollisions
         File pop_and_marginalize_panel_resources_json
-        File pop_glimpse2_binary
+        File? pop_glimpse2_script               # heavily modified version of convert-to-biallelic.py
+        File? pop_glimpse2_cargo_toml
+        File? pop_glimpse2_binary
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
     }
@@ -37,7 +39,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     File panel_bubble_split_sites_only_vcf_idx = pop_and_marginalize_panel_resources[chromosome].panel_bubble_split_sites_only_vcf_idx
     File panel_id_split_vcf_gz = pop_and_marginalize_panel_resources[chromosome].panel_id_split_vcf_gz
     File panel_id_split_vcf_gz_tbi = pop_and_marginalize_panel_resources[chromosome].panel_id_split_vcf_gz_tbi
-    Array[String]? pop_regions = select_first([pop_and_marginalize_panel_resources[chromosome].pop_regions, output_regions])
+    Array[String] pop_regions = select_first([pop_and_marginalize_panel_resources[chromosome].pop_regions, output_regions])
     
 
     scatter (k in range(length(output_regions))) {
@@ -72,6 +74,8 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
             panel_id_split_vcf_gz = panel_id_split_vcf_gz,
             panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
+            pop_glimpse2_script = pop_glimpse2_script,
+            cargo_toml = pop_glimpse2_cargo_toml,
             pop_glimpse2_binary = pop_glimpse2_binary,
             region = pop_regions_[k],
             output_prefix = output_prefix + ".glimpse2.popped"
