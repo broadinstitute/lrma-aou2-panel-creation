@@ -197,6 +197,7 @@ task GLIMPSE2Phase {
 
     #########################
     RuntimeAttr default_attr = object {
+        predefinedMachineType: "e2-standard-4"
         cpu_cores:          4,
         mem_gb:             16,
         disk_gb:            disk_size_gb,
