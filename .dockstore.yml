@@ -42,6 +42,9 @@ workflows:
 - name: GLIMPSE2ChunkAndSplitPanel
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/GLIMPSE2ChunkAndSplitPanel.wdl
+- name: GLIMPSE2FromPreprocessedPLsJoint
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/GLIMPSE2FromPreprocessedPLsJoint.wdl
 - name: PreprocessPLsGVCF
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/PreprocessPLsGVCF.wdl
