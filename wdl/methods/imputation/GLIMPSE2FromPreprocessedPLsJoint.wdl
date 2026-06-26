@@ -198,7 +198,7 @@ task GLIMPSE2Phase {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          4,
-        mem_gb:             8,
+        mem_gb:             16,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -249,7 +249,7 @@ task GLIMPSE2Ligate {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
-        mem_gb:             8,
+        mem_gb:             12,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -324,7 +324,7 @@ task PopAndMarginalizeCollisions {
     #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
-        mem_gb:             8,
+        mem_gb:             12,
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
