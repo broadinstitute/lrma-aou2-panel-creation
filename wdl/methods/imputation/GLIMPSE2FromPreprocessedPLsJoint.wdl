@@ -120,7 +120,6 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 }
 
 struct RuntimeAttr {
-    String? predefinedMachineType
     Float? mem_gb
     Int? cpu_cores
     Int? disk_gb
@@ -209,7 +208,6 @@ task GLIMPSE2Phase {
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
-        predefinedMachineType:  select_first([runtime_attr.predefinedMachineType,         default_attr.predefinedMachineType])
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
