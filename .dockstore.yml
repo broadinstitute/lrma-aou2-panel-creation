@@ -48,6 +48,9 @@ workflows:
 - name: PreprocessPLsGVCF
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/PreprocessPLsGVCF.wdl
+- name: PreprocessPLsJointVCF
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/PreprocessPLsJointVCF.wdl
 - name: VcfdistEvaluation
   subclass: wdl
   primaryDescriptorPath: /wdl/evaluation/phasing/VcfdistEvaluation.wdl
