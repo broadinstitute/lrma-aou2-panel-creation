@@ -9,10 +9,12 @@ workflow PreprocessPLsJointVCF {
         File input_joint_vcf_idx
         File sample_names_file
 
+        String chromosome
+        File chunked_panel_json
+
         String output_prefix
 
         # inputs for PreprocessPLs
-        Array[String] preprocess_regions
         File preprocess_panel_bubble_split_sites_only_vcf       # can be subset of panel, e.g., simple bubble alleles only
         File preprocess_panel_bubble_split_sites_only_vcf_idx
         File? extract_bubble_likelihoods_script
@@ -20,8 +22,11 @@ workflow PreprocessPLsJointVCF {
         File? extract_bubble_likelihoods_binary
         String? extract_bubble_likelihoods_extra_args
     }
+    
+    Map[String, ChunkedPanelChromosome] chunked_panel = read_json(chunked_panel_json)
+    Array[String] output_regions = chunked_panel[chromosome].output_regions
 
-   scatter (k in range(length(preprocess_regions))) {
+   scatter (k in range(length(output_regions))) {
         call GLIMPSE2BatchedCaseShardedSingleBatch.PreprocessPLs as ChunkedPreprocessPLsJoint {
             input:
                 input_vcf = input_joint_vcf,
@@ -29,7 +34,7 @@ workflow PreprocessPLsJointVCF {
                 mode = "joint",
                 panel_bubble_split_sites_only_vcf = preprocess_panel_bubble_split_sites_only_vcf,
                 panel_bubble_split_sites_only_vcf_idx = preprocess_panel_bubble_split_sites_only_vcf_idx,
-                output_region = preprocess_regions[k],
+                output_region = output_regions[k],
                 sample_names = read_lines(sample_names_file),
                 output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
                 extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
@@ -55,4 +60,11 @@ workflow PreprocessPLsJointVCF {
         File preprocessed_pls_vcf = ConcatPreprocessPLsJoint.concatenated_vcf
         File preprocessed_pls_vcf_idx = ConcatPreprocessPLsJoint.concatenated_vcf_idx
     }
+}
+
+struct ChunkedPanelChromosome {
+    String chunks_tsv
+    Array[String] input_regions
+    Array[String] output_regions
+    Array[String] panel_split_chunk_bins
 }
