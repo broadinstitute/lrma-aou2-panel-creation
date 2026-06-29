@@ -10,7 +10,7 @@ workflow PreprocessPLsJointVCF {
         File sample_names_file
 
         String chromosome
-        File chunked_panel_json
+        File? chunked_panel_json
 
         String output_prefix
 
@@ -22,11 +22,15 @@ workflow PreprocessPLsJointVCF {
         File? extract_bubble_likelihoods_binary
         String? extract_bubble_likelihoods_extra_args
     }
-    
-    Map[String, ChunkedPanelChromosome] chunked_panel = read_json(chunked_panel_json)
-    Array[String] output_regions = chunked_panel[chromosome].output_regions
 
-   scatter (k in range(length(output_regions))) {
+    if (defined(chunked_panel_json)) {
+        Map[String, ChunkedPanelChromosome] chunked_panel = read_json(select_first([chunked_panel_json]))
+        Array[String] output_regions = chunked_panel[chromosome].output_regions
+    }
+
+    Array[String] regions = select_first([output_regions, [chromosome]])
+
+    scatter (k in range(length(regions))) {
         call GLIMPSE2BatchedCaseShardedSingleBatch.PreprocessPLs as ChunkedPreprocessPLsJoint {
             input:
                 input_vcf = input_joint_vcf,
@@ -34,7 +38,7 @@ workflow PreprocessPLsJointVCF {
                 mode = "joint",
                 panel_bubble_split_sites_only_vcf = preprocess_panel_bubble_split_sites_only_vcf,
                 panel_bubble_split_sites_only_vcf_idx = preprocess_panel_bubble_split_sites_only_vcf_idx,
-                output_region = output_regions[k],
+                output_region = regions[k],
                 sample_names = read_lines(sample_names_file),
                 output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
                 extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
