@@ -27,7 +27,8 @@ workflow PreprocessPLsJointVCF {
     }
 
     if (defined(preprocess_pls_regions_json)) {
-        Map[String, Array[String]] preprocess_pls_regions_ = read_json(select_first([preprocess_pls_regions_json]))
+        Map[String, Regions] preprocess_pls_regions_map = read_json(select_first([preprocess_pls_regions_json]))
+        Array[String] preprocess_pls_regions_ = preprocess_pls_regions_map[chromosome].regions
     }
     if (defined(chunked_panel_json)) {
         Map[String, ChunkedPanelChromosome] chunked_panel = read_json(select_first([chunked_panel_json]))
@@ -70,6 +71,10 @@ workflow PreprocessPLsJointVCF {
         File preprocessed_pls_vcf = ConcatPreprocessPLsJoint.concatenated_vcf
         File preprocessed_pls_vcf_idx = ConcatPreprocessPLsJoint.concatenated_vcf_idx
     }
+}
+
+struct Regions {
+    Array[String] regions
 }
 
 struct ChunkedPanelChromosome {
