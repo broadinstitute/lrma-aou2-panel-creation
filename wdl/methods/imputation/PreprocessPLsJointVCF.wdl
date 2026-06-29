@@ -10,7 +10,10 @@ workflow PreprocessPLsJointVCF {
         File sample_names_file
 
         String chromosome
-        File? chunked_panel_json
+
+        # if neither of these two is provided, a single chromosome will be run unsharded (in which case, cpu_cores could be increased to increase network speed for localization)
+        File? preprocess_pls_regions_json       # chromosome -> Array[String] regions; prioritized above chunked_panel_json if both are accidentally provided
+        File? chunked_panel_json            # output_regions will be used
 
         String output_prefix
 
@@ -23,14 +26,17 @@ workflow PreprocessPLsJointVCF {
         String? extract_bubble_likelihoods_extra_args
     }
 
+    if (defined(preprocess_pls_regions_json)) {
+        Map[String, Array[String]] preprocess_pls_regions_ = read_json(select_first([preprocess_pls_regions_json]))
+    }
     if (defined(chunked_panel_json)) {
         Map[String, ChunkedPanelChromosome] chunked_panel = read_json(select_first([chunked_panel_json]))
         Array[String] output_regions = chunked_panel[chromosome].output_regions
     }
 
-    Array[String] regions = select_first([output_regions, [chromosome]])
+    Array[String] preprocess_pls_regions = select_first([preprocess_pls_regions_, output_regions, [chromosome]])
 
-    scatter (k in range(length(regions))) {
+    scatter (k in range(length(preprocess_pls_regions))) {
         call GLIMPSE2BatchedCaseShardedSingleBatch.PreprocessPLs as ChunkedPreprocessPLsJoint {
             input:
                 input_vcf = input_joint_vcf,
@@ -38,7 +44,7 @@ workflow PreprocessPLsJointVCF {
                 mode = "joint",
                 panel_bubble_split_sites_only_vcf = preprocess_panel_bubble_split_sites_only_vcf,
                 panel_bubble_split_sites_only_vcf_idx = preprocess_panel_bubble_split_sites_only_vcf_idx,
-                output_region = regions[k],
+                output_region = preprocess_pls_regions[k],
                 sample_names = read_lines(sample_names_file),
                 output_prefix = output_prefix + ".shard-" + k + ".preprocessedPLs",
                 extract_bubble_likelihoods_script = extract_bubble_likelihoods_script,
