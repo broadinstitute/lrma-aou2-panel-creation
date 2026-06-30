@@ -237,8 +237,13 @@ task PlotSummaries {
         # Plots
         def plot_hist2d(p_af, c_af, title, outfile):
             if len(p_af) == 0: return
+            
+            # Prevent matplotlib raster overflow by forcing a valid range for LogNorm
+            counts, _, _ = np.histogram2d(p_af, c_af, bins=np.linspace(0, 1, 50))
+            vmax = max(counts.max(), 2)
+            
             plt.figure()
-            plt.hist2d(p_af, c_af, bins=np.linspace(0, 1, 50), norm=matplotlib.colors.LogNorm())
+            plt.hist2d(p_af, c_af, bins=np.linspace(0, 1, 50), norm=matplotlib.colors.LogNorm(vmin=1, vmax=vmax))
             plt.title(title); plt.xlabel('AoU+HPRC2+HGSVC3 allele frequency'); plt.ylabel('Target allele frequency')
             plt.gca().set_aspect('equal')
             plt.colorbar().set_label('Number of variants', rotation=270, labelpad=10)
@@ -307,7 +312,11 @@ task PlotSummaries {
             counts_arr = np.column_stack((hom_ref_arr, hom_alt_arr, het_arr))
             unique_counts, point_weights = np.unique(counts_arr, axis=0, return_counts=True)
             x_ternary_v, y_ternary_v = ternary_to_cartesian(unique_counts[:,0], unique_counts[:,1], unique_counts[:,2])
-            hb = ax.hexbin(x_ternary_v, y_ternary_v, C=point_weights, reduce_C_function=np.sum, gridsize=gridsize, extent=[0, 1, 0, np.sqrt(3) / 2], norm=matplotlib.colors.LogNorm())
+            
+            # Prevent matplotlib raster overflow
+            vmax = max(point_weights.max(), 2)
+            
+            hb = ax.hexbin(x_ternary_v, y_ternary_v, C=point_weights, reduce_C_function=np.sum, gridsize=gridsize, extent=[0, 1, 0, np.sqrt(3) / 2], norm=matplotlib.colors.LogNorm(vmin=1, vmax=vmax))
             plt.colorbar(hb, ax=ax, shrink=0.5).set_label('Number of variants', rotation=270, labelpad=10)
             
             x_values = np.linspace(0, 1, 50)
@@ -336,7 +345,7 @@ task PlotSummaries {
         Array[File] plots_png = glob("*.png")
         Array[File] plots_pdf = glob("*.pdf")
     }
-    RuntimeAttr default_attr = object { cpu_cores: 4, mem_gb: 16, disk_gb: disk_gb, boot_disk_gb: 10, disk_type: "SSD", preemptible_tries: 2, max_retries: 0, docker: "continuumio/miniconda3:latest" }
+    RuntimeAttr default_attr = object { cpu_cores: 4, mem_gb: 16, disk_gb: disk_gb, boot_disk_gb: 10, disk_type: "SSD", preemptible_tries: 1, max_retries: 0, docker: "continuumio/miniconda3:latest" }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime { cpu: select_first([runtime_attr.cpu_cores, default_attr.cpu_cores]) memory: select_first([runtime_attr.mem_gb, default_attr.mem_gb]) + " GiB" disks: "local-disk " + select_first([runtime_attr.disk_gb, default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type]) bootDiskSizeGb: select_first([runtime_attr.boot_disk_gb, default_attr.boot_disk_gb]) preemptible: select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries]) maxRetries: select_first([runtime_attr.max_retries, default_attr.max_retries]) docker: select_first([runtime_attr.docker, default_attr.docker]) }
 }
