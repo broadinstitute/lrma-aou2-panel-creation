@@ -266,7 +266,7 @@ task CalculateMendelianMetrics {
         File filtered_pkl = "~{output_prefix}-filtered-0.9.pkl"
     }
 
-    RuntimeAttr default_attr = object { cpu_cores: 4, mem_gb: 16, disk_gb: disk_gb, boot_disk_gb: 10, disk_type: "SSD", preemptible_tries: 1, max_retries: 0, docker: "continuumio/miniconda3:latest" }
+    RuntimeAttr default_attr = object { cpu_cores: 4, mem_gb: 16, disk_gb: disk_gb, boot_disk_gb: 10, disk_type: "SSD", preemptible_tries: 2, max_retries: 0, docker: "continuumio/miniconda3:latest" }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     
     runtime { 
@@ -408,7 +408,7 @@ task PlotMendelianMetrics {
         Array[File] plots_png = glob("*.png")
         Array[File] plots_pdf = glob("*.pdf")
     }
-    RuntimeAttr default_attr = object { cpu_cores: 4, mem_gb: 16, disk_gb: disk_gb, boot_disk_gb: 10, disk_type: "SSD", preemptible_tries: 1, max_retries: 0, docker: "continuumio/miniconda3:latest" }
+    RuntimeAttr default_attr = object { cpu_cores: 4, mem_gb: 16, disk_gb: disk_gb, boot_disk_gb: 10, disk_type: "SSD", preemptible_tries: 2, max_retries: 0, docker: "continuumio/miniconda3:latest" }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime { 
         cpu: select_first([runtime_attr.cpu_cores, default_attr.cpu_cores]) 
