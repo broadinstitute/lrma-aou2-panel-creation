@@ -107,7 +107,7 @@ task CalculateMendelianMetrics {
     
     command <<<
         set -euxo pipefail
-        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy
+        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy pyarrow
         
         python - --input_path ~{annotated_vcf} --ped_path ~{pedigree} --output_prefix ~{output_prefix} --chunk_size ~{chunk_size} <<-'EOF'
         import argparse, numpy as np, pandas as pd, allel, sys, time, subprocess, warnings
@@ -291,7 +291,7 @@ task PlotMendelianMetrics {
     Int disk_gb = 10 + ceil(size(unfiltered_pkls, "GiB") + size(filtered_pkls, "GiB"))
     command <<<
         set -euxo pipefail
-        conda install -y -c bioconda -c conda-forge pandas numpy matplotlib seaborn
+        conda install -y -c bioconda -c conda-forge pandas numpy matplotlib seaborn pyarrow
         python - "~{sep=',' unfiltered_pkls}" "~{sep=',' filtered_pkls}" "~{pedigree}" "~{output_prefix}" <<-'EOF'
         import sys, pandas as pd, numpy as np, matplotlib.pyplot as plt, seaborn as sns, warnings
 
