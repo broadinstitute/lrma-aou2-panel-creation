@@ -71,10 +71,10 @@ workflow GLIMPSE2Concordance {
     }
 
     output {
-        Array[File] aggregate_plots_png = PlotResultsAggregate.plots_png
-        Array[File] aggregate_plots_pdf = PlotResultsAggregate.plots_pdf
-        Array[File] per_chrom_plots_png = flatten(PlotResultsPerChrom.plots_png)
-        Array[File] per_chrom_plots_pdf = flatten(PlotResultsPerChrom.plots_pdf)
+        Array[File] concordance_aggregate_plots_png = PlotResultsAggregate.plots_png
+        Array[File] concordance_aggregate_plots_pdf = PlotResultsAggregate.plots_pdf
+        Array[File] concordance_per_chrom_plots_png = flatten(PlotResultsPerChrom.plots_png)
+        Array[File] concordance_per_chrom_plots_pdf = flatten(PlotResultsPerChrom.plots_pdf)
         Array[Array[File]] concordance_results = [all_rsquare_grp_files, all_rsquare_spl_files, all_error_grp_files, all_error_spl_files, all_error_cal_files]
     }
 }

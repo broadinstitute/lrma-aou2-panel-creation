@@ -36,10 +36,10 @@ workflow GLIMPSE2Summarize {
 
     output {
         File summarize_pearson_tsv = PlotSummariesAggregate.summarize_pearson_tsv
-        Array[File] aggregate_plots_png = PlotSummariesAggregate.plots_png
-        Array[File] aggregate_plots_pdf = PlotSummariesAggregate.plots_pdf
-        Array[File] per_chrom_plots_png = flatten(PlotSummariesPerChrom.plots_png)
-        Array[File] per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.plots_pdf)
+        Array[File] summarize_aggregate_plots_png = PlotSummariesAggregate.plots_png
+        Array[File] summarize_aggregate_plots_pdf = PlotSummariesAggregate.plots_pdf
+        Array[File] summarize_per_chrom_plots_png = flatten(PlotSummariesPerChrom.plots_png)
+        Array[File] summarize_per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.plots_pdf)
     }
 }
 

@@ -48,10 +48,10 @@ workflow MendelianConsistency {
     }
 
     output {
-        Array[File] aggregate_plots_png = PlotMetricsAggregate.plots_png
-        Array[File] aggregate_plots_pdf = PlotMetricsAggregate.plots_pdf
-        Array[File] per_chrom_plots_png = flatten(PlotMetricsPerChrom.plots_png)
-        Array[File] per_chrom_plots_pdf = flatten(PlotMetricsPerChrom.plots_pdf)
+        Array[File] mendelian_aggregate_plots_png = PlotMetricsAggregate.plots_png
+        Array[File] mendelian_aggregate_plots_pdf = PlotMetricsAggregate.plots_pdf
+        Array[File] mendelian_per_chrom_plots_png = flatten(PlotMetricsPerChrom.plots_png)
+        Array[File] mendelian_per_chrom_plots_pdf = flatten(PlotMetricsPerChrom.plots_pdf)
     }
 }
 
