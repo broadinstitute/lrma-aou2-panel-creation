@@ -291,7 +291,9 @@ task PlotMendelianMetrics {
     Int disk_gb = 10 + ceil(size(unfiltered_pkls, "GiB") + size(filtered_pkls, "GiB"))
     command <<<
         set -euxo pipefail
+        
         conda install -y -c bioconda -c conda-forge pandas numpy matplotlib seaborn pyarrow
+        
         python - "~{sep=',' unfiltered_pkls}" "~{sep=',' filtered_pkls}" "~{pedigree}" "~{output_prefix}" <<-'EOF'
         import sys, pandas as pd, numpy as np, matplotlib.pyplot as plt, seaborn as sns, warnings
 
@@ -408,5 +410,13 @@ task PlotMendelianMetrics {
     }
     RuntimeAttr default_attr = object { cpu_cores: 4, mem_gb: 16, disk_gb: disk_gb, boot_disk_gb: 10, disk_type: "SSD", preemptible_tries: 1, max_retries: 0, docker: "continuumio/miniconda3:latest" }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime { cpu: select_first([runtime_attr.cpu_cores, default_attr.cpu_cores]) memory: select_first([runtime_attr.mem_gb, default_attr.mem_gb]) + " GiB" disks: "local-disk " + select_first([runtime_attr.disk_gb, default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type]) bootDiskSizeGb: select_first([runtime_attr.boot_disk_gb, default_attr.boot_disk_gb]) preemptible: select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries]) maxRetries: select_first([runtime_attr.max_retries, default_attr.max_retries]) docker: select_first([runtime_attr.docker, default_attr.docker]) }
+    runtime { 
+        cpu: select_first([runtime_attr.cpu_cores, default_attr.cpu_cores]) 
+        memory: select_first([runtime_attr.mem_gb, default_attr.mem_gb]) + " GiB" 
+        disks: "local-disk " + select_first([runtime_attr.disk_gb, default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type]) 
+        bootDiskSizeGb: select_first([runtime_attr.boot_disk_gb, default_attr.boot_disk_gb]) 
+        preemptible: select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries]) 
+        maxRetries: select_first([runtime_attr.max_retries, default_attr.max_retries]) 
+        docker: select_first([runtime_attr.docker, default_attr.docker]) 
+    }
 }
