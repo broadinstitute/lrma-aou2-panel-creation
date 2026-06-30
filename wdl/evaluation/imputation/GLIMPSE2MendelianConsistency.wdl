@@ -104,9 +104,11 @@ task CalculateMendelianMetrics {
         RuntimeAttr? runtime_attr_override
     }
     Int disk_gb = 20 + ceil(size(annotated_vcf, "GiB"))
+    
     command <<<
         set -euxo pipefail
         conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy
+        
         python - --input_path ~{annotated_vcf} --ped_path ~{pedigree} --output_prefix ~{output_prefix} --chunk_size ~{chunk_size} <<-'EOF'
         import argparse, numpy as np, pandas as pd, allel, sys, time, subprocess, warnings
         from datetime import timedelta
@@ -247,19 +249,35 @@ task CalculateMendelianMetrics {
                 elif min_gp == 0.9: rows_09.append(row)
             
             cols = ['AF_BIN', 'LENGTH_BIN', 'IN_TRH', 'ERROR_VT', 'NON_HOM_REF_VT', 'LOCUS_RATES', 'NUM_LOCI']
-            pd.DataFrame(rows_0 if rows_0 else columns=cols).to_pickle(f"{args.output_prefix}-unfiltered.pkl")
-            pd.DataFrame(rows_09 if rows_09 else columns=cols).to_pickle(f"{args.output_prefix}-filtered-0.9.pkl")
+            
+            # Use explicit Dataframe instantiations to prevent syntax errors
+            df_0 = pd.DataFrame(rows_0) if rows_0 else pd.DataFrame(columns=cols)
+            df_09 = pd.DataFrame(rows_09) if rows_09 else pd.DataFrame(columns=cols)
+            
+            df_0.to_pickle(f"{args.output_prefix}-unfiltered.pkl")
+            df_09.to_pickle(f"{args.output_prefix}-filtered-0.9.pkl")
 
         if __name__ == "__main__": main()
         EOF
     >>>
+
     output {
         File unfiltered_pkl = "~{output_prefix}-unfiltered.pkl"
         File filtered_pkl = "~{output_prefix}-filtered-0.9.pkl"
     }
+
     RuntimeAttr default_attr = object { cpu_cores: 4, mem_gb: 16, disk_gb: disk_gb, boot_disk_gb: 10, disk_type: "SSD", preemptible_tries: 1, max_retries: 0, docker: "continuumio/miniconda3:latest" }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime { cpu: select_first([runtime_attr.cpu_cores, default_attr.cpu_cores]) memory: select_first([runtime_attr.mem_gb, default_attr.mem_gb]) + " GiB" disks: "local-disk " + select_first([runtime_attr.disk_gb, default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type]) bootDiskSizeGb: select_first([runtime_attr.boot_disk_gb, default_attr.boot_disk_gb]) preemptible: select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries]) maxRetries: select_first([runtime_attr.max_retries, default_attr.max_retries]) docker: select_first([runtime_attr.docker, default_attr.docker]) }
+    
+    runtime { 
+        cpu: select_first([runtime_attr.cpu_cores, default_attr.cpu_cores]) 
+        memory: select_first([runtime_attr.mem_gb, default_attr.mem_gb]) + " GiB" 
+        disks: "local-disk " + select_first([runtime_attr.disk_gb, default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type]) 
+        bootDiskSizeGb: select_first([runtime_attr.boot_disk_gb, default_attr.boot_disk_gb]) 
+        preemptible: select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries]) 
+        maxRetries: select_first([runtime_attr.max_retries, default_attr.max_retries]) 
+        docker: select_first([runtime_attr.docker, default_attr.docker]) 
+    }
 }
 
 task PlotMendelianMetrics {
