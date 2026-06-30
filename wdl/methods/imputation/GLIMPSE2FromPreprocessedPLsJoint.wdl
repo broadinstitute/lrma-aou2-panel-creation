@@ -13,7 +13,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         File genetic_maps_tsv
         File chunked_panel_json
 
-        String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
+        String extra_phase_args = "--thread $(nproc) --impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
         String output_prefix
 
         # inputs for PopAndMarginalizeCollisions
@@ -155,7 +155,7 @@ task GLIMPSE2Phase {
         String output_region
         File genetic_map
         String output_prefix
-        String? extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
+        String? extra_phase_args = "--thread $(nproc) --impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
 
         String docker
 
@@ -170,7 +170,6 @@ task GLIMPSE2Phase {
         cmd="/bin/GLIMPSE2_phase \
                 --input-gl ~{input_vcf} \
                 -R ~{panel_split_chunk_bin} \
-                --thread $(nproc) \
                 ~{extra_phase_args} \
                 --output ~{output_prefix}.raw.bcf \
                 --checkpoint-file-out checkpoint.bin"
