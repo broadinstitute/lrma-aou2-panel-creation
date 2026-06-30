@@ -64,9 +64,11 @@ task SummarizeMetrics {
         RuntimeAttr? runtime_attr_override
     }
     Int disk_gb = 20 + ceil(size(panel_vcf, "GiB") + size(imputed_vcf, "GiB"))
+    
     command <<<
         set -euxo pipefail
         conda install -y -c bioconda -c conda-forge cyvcf2 numpy pandas
+        
         python - ~{panel_vcf} ~{imputed_vcf} ~{output_prefix} <<-'EOF'
         import sys, numpy as np, pandas as pd, cyvcf2, pickle
 
@@ -89,12 +91,21 @@ task SummarizeMetrics {
         c_is_het, c_is_hom_ref, c_is_hom_alt = np.empty(num_c_samples, dtype=bool), np.empty(num_c_samples, dtype=bool), np.empty(num_c_samples, dtype=bool)
 
         for p_var, c_var in zip(panel_vcf, imputed_vcf):
+            # Strict safety check to prevent mismatched chromosomes/positions
+            if p_var.CHROM != c_var.CHROM or p_var.POS != c_var.POS:
+                raise ValueError(
+                    f"VCFs are out of sync! Check your input arrays.\n"
+                    f"Panel : {p_var.CHROM}:{p_var.POS}\n"
+                    f"Target: {c_var.CHROM}:{c_var.POS}"
+                )
+
             alts = p_var.ALT
             if not alts: continue
             altlen = len(alts[0]) - len(p_var.REF)
             altlen_all.append(altlen)
             is_ins, is_del = altlen >= 50, altlen <= -50
 
+            # --- Panel Extraction ---
             p_gt = p_var.gt_types
             np.equal(p_gt, 1, out=p_is_het); np.equal(p_gt, 0, out=p_is_hom_ref); np.equal(p_gt, 3, out=p_is_hom_alt)
             p_het_all += p_is_het; p_hom_ref_all += p_is_hom_ref; p_hom_alt_all += p_is_hom_alt
@@ -105,8 +116,11 @@ task SummarizeMetrics {
             p_valid = (p_var.num_hom_ref + p_var.num_het + p_var.num_hom_alt) * 2
             p_alt_count = p_var.num_het + 2 * p_var.num_hom_alt
             panel_af_all.append(p_alt_count / p_valid if p_valid > 0 else 0.0)
-            panel_mean_alt_alleles_all.append(p_alt_count / num_p_samples)
+            
+            # Safe division to support sites-only VCFs
+            panel_mean_alt_alleles_all.append(p_alt_count / num_p_samples if num_p_samples > 0 else 0.0)
 
+            # --- Target Extraction ---
             c_gt = c_var.gt_types
             np.equal(c_gt, 1, out=c_is_het); np.equal(c_gt, 0, out=c_is_hom_ref); np.equal(c_gt, 3, out=c_is_hom_alt)
             c_het_all += c_is_het; c_hom_ref_all += c_is_hom_ref; c_hom_alt_all += c_is_hom_alt
@@ -117,7 +131,9 @@ task SummarizeMetrics {
             c_valid = (c_var.num_hom_ref + c_var.num_het + c_var.num_hom_alt) * 2
             c_alt_count = c_var.num_het + 2 * c_var.num_hom_alt
             target_af_all.append(c_alt_count / c_valid if c_valid > 0 else 0.0)
-            target_mean_alt_alleles_all.append(c_alt_count / num_c_samples)
+            
+            # Safe division
+            target_mean_alt_alleles_all.append(c_alt_count / num_c_samples if num_c_samples > 0 else 0.0)
 
         stats_dict = {
             'altlen_all': altlen_all, 'panel_af_all': panel_af_all, 'target_af_all': target_af_all,
@@ -129,16 +145,27 @@ task SummarizeMetrics {
             },
             'panel_samples': list(panel_vcf.samples), 'target_samples': list(imputed_vcf.samples)
         }
+        
         with open(f"{sys.argv[3]}.summary.pkl", "wb") as f:
             pickle.dump(stats_dict, f)
         EOF
     >>>
+
     output {
         File summary_pkl = "~{output_prefix}.summary.pkl"
     }
+
     RuntimeAttr default_attr = object { cpu_cores: 4, mem_gb: 16, disk_gb: disk_gb, boot_disk_gb: 10, disk_type: "SSD", preemptible_tries: 1, max_retries: 0, docker: "continuumio/miniconda3:latest" }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    runtime { cpu: select_first([runtime_attr.cpu_cores, default_attr.cpu_cores]) memory: select_first([runtime_attr.mem_gb, default_attr.mem_gb]) + " GiB" disks: "local-disk " + select_first([runtime_attr.disk_gb, default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type]) bootDiskSizeGb: select_first([runtime_attr.boot_disk_gb, default_attr.boot_disk_gb]) preemptible: select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries]) maxRetries: select_first([runtime_attr.max_retries, default_attr.max_retries]) docker: select_first([runtime_attr.docker, default_attr.docker]) }
+    runtime { 
+        cpu: select_first([runtime_attr.cpu_cores, default_attr.cpu_cores]) 
+        memory: select_first([runtime_attr.mem_gb, default_attr.mem_gb]) + " GiB" 
+        disks: "local-disk " + select_first([runtime_attr.disk_gb, default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type]) 
+        bootDiskSizeGb: select_first([runtime_attr.boot_disk_gb, default_attr.boot_disk_gb]) 
+        preemptible: select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries]) 
+        maxRetries: select_first([runtime_attr.max_retries, default_attr.max_retries]) 
+        docker: select_first([runtime_attr.docker, default_attr.docker]) 
+    }
 }
 
 task PlotSummaries {
