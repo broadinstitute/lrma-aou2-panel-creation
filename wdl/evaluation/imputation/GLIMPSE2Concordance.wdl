@@ -70,7 +70,7 @@ workflow GLIMPSE2Concordance {
 
     output {
         Array[File] aggregate_plots = [PlotResultsAggregate.r2_plot_inTRH, PlotResultsAggregate.r2_plot_outTRH, PlotResultsAggregate.nrd_plot_inTRH, PlotResultsAggregate.nrd_plot_outTRH]
-        Array[File] per_chrom_plots = flatten([[PlotResultsPerChrom.r2_plot_inTRH, PlotResultsPerChrom.r2_plot_outTRH, PlotResultsPerChrom.nrd_plot_inTRH, PlotResultsPerChrom.nrd_plot_outTRH]])
+        Array[File] per_chrom_plots = flatten([PlotResultsPerChrom.r2_plot_inTRH, PlotResultsPerChrom.r2_plot_outTRH, PlotResultsPerChrom.nrd_plot_inTRH, PlotResultsPerChrom.nrd_plot_outTRH])
         Array[Array[File]] concordance_results = [all_rsquare_grp_files, all_rsquare_spl_files, all_error_grp_files, all_error_spl_files, all_error_cal_files]
     }
 }
@@ -272,6 +272,10 @@ task PlotResults {
 
         r2_vs_af_df = pd.DataFrame(r2_vs_af_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_COUNT', 'AF_BIN_MEAN', 'R2_DS'])
 
+        # Aggregate across regions if combined arrays are passed
+        if not r2_vs_af_df.empty:
+            r2_vs_af_df = r2_vs_af_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_MEAN']).agg({'AF_BIN_COUNT': 'sum', 'R2_DS': 'mean'}).reset_index()
+
         # 2. Load Error/Concordance Rate Data
         sample_df_values = []
         for filepath in error_files:
@@ -292,6 +296,10 @@ task PlotResults {
                 sample_df_values.append([trh_bin, length_bin, min_tar_gp, row['sample_name'], float(row['non_reference_discordanc_rate_percent']), float(row['imputed_ds_rsquared'])])
 
         sample_df = pd.DataFrame(sample_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name', 'non_reference_discordanc_rate_percent', 'imputed_ds_rsquared'])
+
+        # Average across regions for the same sample if combined arrays are passed
+        if not sample_df.empty:
+            sample_df = sample_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name']).mean().reset_index()
 
         # 3. Calculate metrics for title
         num_samples = sample_df['sample_name'].nunique()

@@ -13,9 +13,9 @@ struct RuntimeAttr {
 
 workflow MendelianConsistency {
     input {
-        Array[File] panel_sites_only_vcfs       # split to biallelic
+        Array[File] panel_sites_only_vcfs
         Array[File] panel_sites_only_vcf_idxs
-        Array[File] imputed_vcfs                # split to biallelic
+        Array[File] imputed_vcfs
         Array[File] imputed_vcf_idxs
         File trh_bed
         File trh_bed_idx
@@ -41,7 +41,6 @@ workflow MendelianConsistency {
             output_prefix = output_prefix + "." + idx
         }
 
-        # Generate Per-Chromosome Plots
         call PlotMendelianMetrics as PlotMetricsPerChrom { input:
             pkl_files = [CalculateMendelianMetrics.results_pkl],
             pedigree = pedigree,
@@ -49,7 +48,6 @@ workflow MendelianConsistency {
         }
     }
 
-    # Generate Aggregate Plots
     call PlotMendelianMetrics as PlotMetricsAggregate { input:
         pkl_files = CalculateMendelianMetrics.results_pkl,
         pedigree = pedigree,
@@ -58,12 +56,10 @@ workflow MendelianConsistency {
 
     output {
         Array[File] aggregate_plots = [PlotMetricsAggregate.trio_plot_inTRH, PlotMetricsAggregate.trio_plot_outTRH, PlotMetricsAggregate.locus_plot_inTRH, PlotMetricsAggregate.locus_plot_outTRH]
-        Array[File] per_chrom_plots = flatten([[PlotMetricsPerChrom.trio_plot_inTRH, PlotMetricsPerChrom.trio_plot_outTRH, PlotMetricsPerChrom.locus_plot_inTRH, PlotMetricsPerChrom.locus_plot_outTRH]])
+        Array[File] per_chrom_plots = flatten([PlotMetricsPerChrom.trio_plot_inTRH, PlotMetricsPerChrom.trio_plot_outTRH, PlotMetricsPerChrom.locus_plot_inTRH, PlotMetricsPerChrom.locus_plot_outTRH])
     }
 }
 
-# NOTE: imputed_vcf may be merged across samples with bcftools merge, which can apply a silent normalization;
-# however, bcftools annotate will match equivalent representations
 task AnnotateVcf {
     input {
         File panel_sites_only_vcf
@@ -232,7 +228,7 @@ task CalculateMendelianMetrics {
                     len_bins = np.full(len(length), 'UNKNOWN', dtype=object)
                     len_bins[is_snp] = 'SNP'
                     len_bins[(50 <= length)] = '[50, inf)'
-                    len_bins[(0 <= length) & (length < 50) & ~is_snp] = '[0, 50)'   # unlike Phase 1, include non-SNP substitutions
+                    len_bins[(0 <= length) & (length < 50) & ~is_snp] = '[0, 50)'
                     len_bins[(-50 < length) & (length <= -1)] = '(-50, -1]'
                     len_bins[(length <= -50)] = '(-inf, -50]'
                     
@@ -345,11 +341,9 @@ task CalculateMendelianMetrics {
                 args.input_path, trios, subset_samples, args.chunk_size, num_trios
             )
             
-            # Serialize the raw dictionary structure to avoid Pandas serialization grouping errors
             export_data = {'num_trios': num_trios, 'agg_results': agg_results}
             with open(f"{args.output_prefix}.pkl", "wb") as f:
                 pickle.dump(export_data, f)
-            print(f"Successfully generated dict pickle.")
 
         if __name__ == "__main__":
             main()
@@ -433,7 +427,6 @@ task PlotMendelianMetrics {
                     agg_results[key]['n_loci'] += res['n_loci']
 
         def generate_plots(agg_results, num_trios, output_prefix):
-            """Generate plots matching formatting specifications precisely."""
             print("Generating plots...")
             length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[0, 50)', '[50, inf)']
             af_bin_labels = ['[0, 0.01)', '[0.01, 0.1)', '[0.1, 1]']
@@ -457,7 +450,6 @@ task PlotMendelianMetrics {
                                     errs = res['errors_per_trio']
                                     nhr = res['nhr_per_trio']
                                     
-                                    # Div by 0 forces NaN output exactly mirroring the notebook, ignored by Seaborn
                                     error_rates_per_trio = np.divide(errs, nhr, out=np.full(num_trios, np.nan), where=(nhr > 0))
                                     mean_num_non_hom_ref = nhr.mean()
                                     

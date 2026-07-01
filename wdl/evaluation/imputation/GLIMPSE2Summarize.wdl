@@ -46,7 +46,7 @@ workflow GLIMPSE2Summarize {
     output {
         File summarize_pearson_tsv = PlotSummariesAggregate.summarize_pearson_tsv
         Array[File] aggregate_plots_pdf = PlotSummariesAggregate.summarize_plots
-        Array[File] per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.summarize_plots)
+        Array[File] per_chrom_plots_pdf = flatten([PlotSummariesPerChrom.summarize_plots])
     }
 }
 
@@ -84,7 +84,6 @@ task SummarizeMetrics {
         imputed_vcf_path = sys.argv[2]
         output_prefix = sys.argv[3]
 
-        # 1. Initialize VCF readers
         panel_vcf = cyvcf2.VCF(panel_vcf_path)
         imputed_vcf = cyvcf2.VCF(imputed_vcf_path)
 
@@ -93,7 +92,6 @@ task SummarizeMetrics {
         num_p_samples = len(panel_samples)
         num_c_samples = len(target_samples)
 
-        # 2. Global Storage for Metrics
         altlen_all = []
         panel_af_all, target_af_all = [], []
 
@@ -102,7 +100,6 @@ task SummarizeMetrics {
 
         panel_mean_alt_alleles_all, target_mean_alt_alleles_all = [], []
 
-        # Pre-allocate per-sample accumulators (fast 1D numpy integer arrays)
         p_het_all = np.zeros(num_p_samples, dtype=int)
         p_hom_ref_all = np.zeros(num_p_samples, dtype=int)
         p_hom_alt_all = np.zeros(num_p_samples, dtype=int)
@@ -115,7 +112,6 @@ task SummarizeMetrics {
         c_het_ins = np.zeros(num_c_samples, dtype=int)
         c_het_del = np.zeros(num_c_samples, dtype=int)
 
-        # Pre-allocated boolean buffers for the loop (avoids millions of memory allocations)
         p_is_het = np.empty(num_p_samples, dtype=bool)
         p_is_hom_ref = np.empty(num_p_samples, dtype=bool)
         p_is_hom_alt = np.empty(num_p_samples, dtype=bool)
@@ -124,13 +120,11 @@ task SummarizeMetrics {
         c_is_hom_ref = np.empty(num_c_samples, dtype=bool)
         c_is_hom_alt = np.empty(num_c_samples, dtype=bool)
 
-        # 3. Stream Variants with Native C-Extracted Logic
         print("Streaming variants...", flush=True)
         variants_processed = 0
         start_time = time.time()
 
         for p_var, c_var in zip(panel_vcf, imputed_vcf):
-            # Strict safety check to ensure perfect sync
             if p_var.CHROM != c_var.CHROM or p_var.POS != c_var.POS or p_var.REF != c_var.REF or p_var.ALT != c_var.ALT:
                 p_alt_str = p_var.ALT[0] if p_var.ALT else "."
                 c_alt_str = c_var.ALT[0] if c_var.ALT else "."
@@ -149,21 +143,17 @@ task SummarizeMetrics {
             is_ins = altlen >= 50
             is_del = altlen <= -50
 
-            # --- Panel Extraction ---
             p_gt = p_var.gt_types
-            # Write directly into pre-allocated boolean buffers
             np.equal(p_gt, 1, out=p_is_het)
             np.equal(p_gt, 0, out=p_is_hom_ref)
             np.equal(p_gt, 3, out=p_is_hom_alt)
             
-            # Update sample stats
             p_het_all += p_is_het
             p_hom_ref_all += p_is_hom_ref
             p_hom_alt_all += p_is_hom_alt
             if is_ins: p_het_ins += p_is_het
             elif is_del: p_het_del += p_is_het
             
-            # Use native C-level property extractions to avoid python .sum()
             p_n_het = p_var.num_het
             p_n_hom_ref = p_var.num_hom_ref
             p_n_hom_alt = p_var.num_hom_alt
@@ -176,10 +166,8 @@ task SummarizeMetrics {
             p_alt_count = p_n_het + 2 * p_n_hom_alt
             panel_af_all.append(p_alt_count / p_valid if p_valid > 0 else 0.0)
             
-            # Safe division check left here strictly to protect against sites.bcf errors that the user hit earlier
             panel_mean_alt_alleles_all.append(p_alt_count / num_p_samples if num_p_samples > 0 else 0.0)
 
-            # --- Target Extraction ---
             c_gt = c_var.gt_types
             np.equal(c_gt, 1, out=c_is_het)
             np.equal(c_gt, 0, out=c_is_hom_ref)
@@ -348,11 +336,9 @@ task PlotSummaries {
         is_sv_ins = altlen >= 50
         is_sv_del = altlen <= -50
 
-        # 4. Pearson Correlations (TSV Output)
         print("Calculating Pearson correlations...", flush=True)
         pearson_records = []
 
-        # Helper to safely calculate pearsonr against edge-case 0-variance bins
         def safe_pearson(x, y):
             if len(x) > 1 and np.std(x) > 0 and np.std(y) > 0:
                 return pearsonr(x, y)[0]
@@ -376,7 +362,6 @@ task PlotSummaries {
 
         pd.DataFrame(pearson_records).to_csv(f'{output_prefix}.pearson.tsv', sep='\t', index=False)
 
-        # 5. AF Hist2D Plots
         print("Generating AF Hist2D Plots...", flush=True)
         def plot_hist2d(p_af, c_af, title, outfile):
             if len(p_af) == 0: return
@@ -395,7 +380,6 @@ task PlotSummaries {
         plot_hist2d(panel_af[is_sv_ins], target_af[is_sv_ins], 'SV-length insertions', f'{output_prefix}-AF-SV-ins')
         plot_hist2d(panel_af[is_sv_del], target_af[is_sv_del], 'SV-length deletions', f'{output_prefix}-AF-SV-del')
 
-        # 6. Sample Metrics & Boxplots
         print("Generating population boxplots...", flush=True)
         population_df = pd.read_csv(population_tsv_path, sep='\t')
 
@@ -443,7 +427,6 @@ task PlotSummaries {
         plot_boxplot(panel_results_df, 'Heterozygous SV-length deletions per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-SV-del', [0, 500])
         plot_boxplot(target_results_df, 'Heterozygous SV-length deletions per sample', 'Target', f'{output_prefix}-target-het-SV-del', [0, 500])
 
-        # 7. ALT Length Weighted Histogram
         print("Generating ALT Length Histogram...", flush=True)
         if len(altlen) > 0:
             bins = list(np.linspace(-10000, -100, 397)) + [-75, -50, -25, -1, -0.1, 0.1, 1, 25, 50, 75] + list(np.linspace(100, 10000, 397))
@@ -463,7 +446,6 @@ task PlotSummaries {
             plt.savefig(f'{output_prefix}-alt-alleles-per-sample-hist.pdf', bbox_inches='tight')
             plt.close()
 
-        # 8. De Finetti Plots
         print("Generating De Finetti Plots...", flush=True)
         ternary_to_cartesian = lambda a, b, c: (0.5 * (2 * b + c) / (a + b + c + 1E-10), 0.5 * np.sqrt(3) * c / (a + b + c + 1E-10))
 
