@@ -2,79 +2,59 @@ version 1.0
 
 workflow GLIMPSE2Concordance {
     input {
-        Array[File] panel_vcfs
-        Array[File] panel_vcf_idxs
-        Array[File] imputed_vcfs
-        Array[File] imputed_vcf_idxs
+        File panel_vcf          # split to biallelic
+        File panel_vcf_idx
+        File imputed_vcf        # split to biallelic
+        File imputed_vcf_idx
         File trh_bed
         File trh_bed_idx
-        Array[String] regions
+        String region
         String output_prefix
     }
 
     Array[String] trh_bins = ["outTRH", "inTRH"]
     Array[String] length_bins = ["SV_DEL", "DEL", "SNP", "INS", "SV_INS"]
 
-    scatter (idx in range(length(regions))) {
-        call AnnotateImputed { input:
-            imputed_vcf = imputed_vcfs[idx],
-            imputed_vcf_idx = imputed_vcf_idxs[idx],
-            trh_bed = trh_bed,
-            trh_bed_idx = trh_bed_idx,
-            region = regions[idx],
-            output_prefix = output_prefix + "." + regions[idx]
-        }
+    call AnnotateImputed { input:
+        imputed_vcf = imputed_vcf,
+        imputed_vcf_idx = imputed_vcf_idx,
+        trh_bed = trh_bed,
+        trh_bed_idx = trh_bed_idx,
+        region = region,
+        output_prefix = output_prefix
+    }
 
-        scatter (trh_bin in trh_bins) {
-            scatter (length_bin in length_bins) {
-                call FilterAndConcordance { input:
-                    annotated_bcf = AnnotateImputed.annotated_vcf,
-                    annotated_bcf_index = AnnotateImputed.annotated_vcf_idx,
-                    panel_vcf = panel_vcfs[idx],
-                    panel_vcf_idx = panel_vcf_idxs[idx],
-                    trh_bin = trh_bin,
-                    length_bin = length_bin,
-                    region = regions[idx],
-                    output_prefix = output_prefix + "." + regions[idx] + "." + trh_bin + "." + length_bin
-                }
+    scatter (trh_bin in trh_bins) {
+        scatter (length_bin in length_bins) {
+            call FilterAndConcordance { input:
+                annotated_bcf = AnnotateImputed.annotated_vcf,
+                annotated_bcf_index = AnnotateImputed.annotated_vcf_idx,
+                panel_vcf = panel_vcf,
+                panel_vcf_idx = panel_vcf_idx,
+                trh_bin = trh_bin,
+                length_bin = length_bin,
+                region = region,
+                output_prefix = output_prefix + "." + trh_bin + "." + length_bin
             }
-        }
-
-        # Generate Per-Chromosome Plots
-        Array[File] chrom_rsquare_grp = flatten(flatten(FilterAndConcordance.rsquare_grp_files))
-        Array[File] chrom_error_spl = flatten(flatten(FilterAndConcordance.error_spl_files))
-
-        call PlotResults as PlotResultsPerChrom { input:
-            rsquare_grp_files = chrom_rsquare_grp,
-            error_spl_files = chrom_error_spl,
-            output_prefix = output_prefix + "." + regions[idx],
-            panel_name = basename(panel_vcfs[idx]),
-            imputed_name = basename(imputed_vcfs[idx])
         }
     }
 
-    # Generate Aggregate Plots
-    Array[File] all_rsquare_grp_files = flatten(flatten(flatten(FilterAndConcordance.rsquare_grp_files)))
-    Array[File] all_rsquare_spl_files = flatten(flatten(flatten(FilterAndConcordance.rsquare_spl_files)))
-    Array[File] all_error_grp_files = flatten(flatten(flatten(FilterAndConcordance.error_grp_files)))
-    Array[File] all_error_spl_files = flatten(flatten(flatten(FilterAndConcordance.error_spl_files)))
-    Array[File] all_error_cal_files = flatten(flatten(flatten(FilterAndConcordance.error_cal_files)))
+    Array[File] all_rsquare_grp_files = flatten(flatten(FilterAndConcordance.rsquare_grp_files))
+    Array[File] all_rsquare_spl_files = flatten(flatten(FilterAndConcordance.rsquare_spl_files))
+    Array[File] all_error_grp_files = flatten(flatten(FilterAndConcordance.error_grp_files))
+    Array[File] all_error_spl_files = flatten(flatten(FilterAndConcordance.error_spl_files))
+    Array[File] all_error_cal_files = flatten(flatten(FilterAndConcordance.error_cal_files))
 
-    call PlotResults as PlotResultsAggregate { input:
+    call PlotResults { input:
         rsquare_grp_files = all_rsquare_grp_files,
         error_spl_files = all_error_spl_files,
-        output_prefix = output_prefix + ".aggregate",
-        panel_name = "Aggregate Panel",
-        imputed_name = "Aggregate Imputed"
+        output_prefix = output_prefix,
+        panel_name = basename(panel_vcf),
+        imputed_name = basename(imputed_vcf)
     }
 
     output {
-        Array[File] concordance_aggregate_plots_pdf = [PlotResultsAggregate.r2_plot_inTRH_pdf, PlotResultsAggregate.r2_plot_outTRH_pdf, PlotResultsAggregate.nrd_plot_inTRH_pdf, PlotResultsAggregate.nrd_plot_outTRH_pdf]
-        Array[File] concordance_aggregate_plots_png = [PlotResultsAggregate.r2_plot_inTRH_png, PlotResultsAggregate.r2_plot_outTRH_png, PlotResultsAggregate.nrd_plot_inTRH_png, PlotResultsAggregate.nrd_plot_outTRH_png]
-        
-        Array[File] concordance_per_chrom_plots_pdf = flatten([PlotResultsPerChrom.r2_plot_inTRH_pdf, PlotResultsPerChrom.r2_plot_outTRH_pdf, PlotResultsPerChrom.nrd_plot_inTRH_pdf, PlotResultsPerChrom.nrd_plot_outTRH_pdf])
-        Array[File] concordance_per_chrom_plots_png = flatten([PlotResultsPerChrom.r2_plot_inTRH_png, PlotResultsPerChrom.r2_plot_outTRH_png, PlotResultsPerChrom.nrd_plot_inTRH_png, PlotResultsPerChrom.nrd_plot_outTRH_png])
-        
+        Array[File] concordance_plots = [PlotResults.r2_plot_inTRH, PlotResults.r2_plot_outTRH, PlotResults.nrd_plot_inTRH, PlotResults.nrd_plot_outTRH]
         Array[Array[File]] concordance_results = [all_rsquare_grp_files, all_rsquare_spl_files, all_error_grp_files, all_error_spl_files, all_error_cal_files]
     }
 }
@@ -275,10 +255,6 @@ task PlotResults {
                     r2_vs_af_df_values.append([trh_bin, length_bin, min_tar_gp, row['AF_BIN_COUNT'], row['AF_BIN_MEAN'], row['R2_DS']])
 
         r2_vs_af_df = pd.DataFrame(r2_vs_af_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_COUNT', 'AF_BIN_MEAN', 'R2_DS'])
-        
-        # Aggregate across regions if combined arrays are passed
-        if not r2_vs_af_df.empty:
-            r2_vs_af_df = r2_vs_af_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_MEAN']).agg({'AF_BIN_COUNT': 'sum', 'R2_DS': 'mean'}).reset_index()
 
         # 2. Load Error/Concordance Rate Data
         sample_df_values = []
@@ -300,13 +276,9 @@ task PlotResults {
                 sample_df_values.append([trh_bin, length_bin, min_tar_gp, row['sample_name'], float(row['non_reference_discordanc_rate_percent']), float(row['imputed_ds_rsquared'])])
 
         sample_df = pd.DataFrame(sample_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name', 'non_reference_discordanc_rate_percent', 'imputed_ds_rsquared'])
-        
-        # Average across regions for the same sample if combined arrays are passed
-        if not sample_df.empty:
-            sample_df = sample_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name']).mean().reset_index()
 
         # 3. Calculate metrics for title
-        num_samples = sample_df['sample_name'].nunique() if not sample_df.empty else 0
+        num_samples = sample_df['sample_name'].nunique()
         title_metadata = f"Panel: {panel_name}\nTarget: {imputed_name}\nEvaluated samples: {num_samples}"
 
         # 4. Generate Dosage R2 Plots
@@ -316,19 +288,17 @@ task PlotResults {
                 ax2 = ax[i].twinx()
                 for min_tar_gp in [0.0, 0.9]:
                     label = 'unfiltered' if min_tar_gp == 0.0 else f'GP > {min_tar_gp}'
-                    if not r2_vs_af_df.empty:
-                        x = (r2_vs_af_df['TRH_BIN'] == trh_bin) & (r2_vs_af_df['LENGTH_BIN'] == length_bin) & (r2_vs_af_df['MIN_TAR_GP'] == min_tar_gp)
-                        
-                        if not r2_vs_af_df[x].empty:
-                            ax[i].plot(r2_vs_af_df[x]['AF_BIN_MEAN'], r2_vs_af_df[x]['R2_DS'], label=label, 
-                                       ls={'unfiltered': 'solid', 'GP > 0.9': 'dotted'}[label], color='C0')
-                            ax2.plot(r2_vs_af_df[x]['AF_BIN_MEAN'], r2_vs_af_df[x]['AF_BIN_COUNT'], label=label, 
-                                     ls={'unfiltered': 'solid', 'GP > 0.9': 'dotted'}[label], color='C1')
+                    x = (r2_vs_af_df['TRH_BIN'] == trh_bin) & (r2_vs_af_df['LENGTH_BIN'] == length_bin) & (r2_vs_af_df['MIN_TAR_GP'] == min_tar_gp)
+                    
+                    if not r2_vs_af_df[x].empty:
+                        ax[i].plot(r2_vs_af_df[x]['AF_BIN_MEAN'], r2_vs_af_df[x]['R2_DS'], label=label, 
+                                   ls={'unfiltered': 'solid', 'GP > 0.9': 'dotted'}[label], color='C0')
+                        ax2.plot(r2_vs_af_df[x]['AF_BIN_MEAN'], r2_vs_af_df[x]['AF_BIN_COUNT'], label=label, 
+                                 ls={'unfiltered': 'solid', 'GP > 0.9': 'dotted'}[label], color='C1')
 
                 ax[i].set_xscale('log')
                 ax[i].set_xlim([1E-4, 1])
                 ax[i].set_ylim([0, 1])
-                
                 ax2.set_yscale('log')
                 ax2.set_ylim([10**2, 10**9])
                 ax2.set_yticks([10**j for j in range(2, 10)])
@@ -352,8 +322,7 @@ task PlotResults {
                     length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[0, 50)', 'SV_INS': '[50, inf)'}[length_bin]
                     ax[i].set_xlabel(f'\n\n{length_bin_label}', fontsize=12)
 
-            plt.savefig(f'{sys.argv[5]}.{trh_bin}.r2.png', bbox_inches='tight')
-            plt.savefig(f'{sys.argv[5]}.{trh_bin}.r2.pdf', bbox_inches='tight')
+            plt.savefig(f'~{output_prefix}.{trh_bin}.r2.png', bbox_inches='tight')
             plt.close()
 
         # 5. Generate Error Plots
@@ -367,12 +336,11 @@ task PlotResults {
                 length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[0, 50)', 'SV_INS': '[50, inf)'}[length_bin]
                 for min_tar_gp in [0.0, 0.9]:
                     min_tar_gp_label = 'unfiltered' if min_tar_gp == 0.0 else f'GP > {min_tar_gp}'
-                    if not sample_df.empty:
-                        x = (sample_df['TRH_BIN'] == trh_bin) & (sample_df['LENGTH_BIN'] == length_bin) & (sample_df['MIN_TAR_GP'] == min_tar_gp)
-                        bin_df = sample_df[x]
-                        
-                        for s in range(bin_df.shape[0]):
-                            plt_df_values.append([length_bin_label, min_tar_gp_label, 1 - 0.01 * bin_df['non_reference_discordanc_rate_percent'].values[s]])
+                    x = (sample_df['TRH_BIN'] == trh_bin) & (sample_df['LENGTH_BIN'] == length_bin) & (sample_df['MIN_TAR_GP'] == min_tar_gp)
+                    bin_df = sample_df[x]
+                    
+                    for s in range(bin_df.shape[0]):
+                        plt_df_values.append([length_bin_label, min_tar_gp_label, 1 - 0.01 * bin_df['non_reference_discordanc_rate_percent'].values[s]])
 
             if plt_df_values:
                 plt_df = pd.DataFrame(plt_df_values, columns=['LENGTH_BIN_TEXT', 'MIN_TAR_GP_TEXT', 'non_reference_discordanc_rate_percent'])
@@ -381,26 +349,19 @@ task PlotResults {
                 ax.set_ylabel('non-reference concordance rate', fontsize=8)
                 ax.set_ylim([0, 1.01])
                 plt.legend(loc='lower center', fontsize=8)
-            
-            plt.tight_layout()
-            plt.savefig(f'{sys.argv[5]}.{trh_bin}.nrd.png', bbox_inches='tight')
-            plt.savefig(f'{sys.argv[5]}.{trh_bin}.nrd.pdf', bbox_inches='tight')
+                plt.tight_layout()
+                plt.savefig(f'~{output_prefix}.{trh_bin}.nrd.png', bbox_inches='tight')
             plt.close()
         EOF
 
-        python3 plot_script.py "~{sep=',' rsquare_grp_files}" "~{sep=',' error_spl_files}" "~{panel_name}" "~{imputed_name}" "~{output_prefix}"
+        python3 plot_script.py "~{sep=',' rsquare_grp_files}" "~{sep=',' error_spl_files}" "~{panel_name}" "~{imputed_name}"
     >>>
 
     output {
-        File r2_plot_inTRH_png = "~{output_prefix}.inTRH.r2.png"
-        File r2_plot_outTRH_png = "~{output_prefix}.outTRH.r2.png"
-        File nrd_plot_inTRH_png = "~{output_prefix}.inTRH.nrd.png"
-        File nrd_plot_outTRH_png = "~{output_prefix}.outTRH.nrd.png"
-
-        File r2_plot_inTRH_pdf = "~{output_prefix}.inTRH.r2.pdf"
-        File r2_plot_outTRH_pdf = "~{output_prefix}.outTRH.r2.pdf"
-        File nrd_plot_inTRH_pdf = "~{output_prefix}.inTRH.nrd.pdf"
-        File nrd_plot_outTRH_pdf = "~{output_prefix}.outTRH.nrd.pdf"
+        File r2_plot_inTRH = "~{output_prefix}.inTRH.r2.png"
+        File r2_plot_outTRH = "~{output_prefix}.outTRH.r2.png"
+        File nrd_plot_inTRH = "~{output_prefix}.inTRH.nrd.png"
+        File nrd_plot_outTRH = "~{output_prefix}.outTRH.nrd.png"
     }
 
     #########################
