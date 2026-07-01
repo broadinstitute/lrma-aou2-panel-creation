@@ -13,41 +13,60 @@ struct RuntimeAttr {
 
 workflow MendelianConsistency {
     input {
-        File panel_sites_only_vcf       # split to biallelic
-        File panel_sites_only_vcf_idx
-        File imputed_vcf                # split to biallelic
-        File imputed_vcf_idx
+        Array[File] panel_sites_only_vcfs       # split to biallelic
+        Array[File] panel_sites_only_vcf_idxs
+        Array[File] imputed_vcfs                # split to biallelic
+        Array[File] imputed_vcf_idxs
         File trh_bed
         File trh_bed_idx
         File pedigree
         String output_prefix
     }
 
-    call AnnotateVcf { input:
-        panel_sites_only_vcf = panel_sites_only_vcf,
-        panel_sites_only_vcf_idx = panel_sites_only_vcf_idx,
-        imputed_vcf = imputed_vcf,
-        imputed_vcf_idx = imputed_vcf_idx,
-        trh_bed = trh_bed,
-        trh_bed_idx = trh_bed_idx,
-        output_prefix = output_prefix
+    scatter (idx in range(length(panel_sites_only_vcfs))) {
+        call AnnotateVcf { input:
+            panel_sites_only_vcf = panel_sites_only_vcfs[idx],
+            panel_sites_only_vcf_idx = panel_sites_only_vcf_idxs[idx],
+            imputed_vcf = imputed_vcfs[idx],
+            imputed_vcf_idx = imputed_vcf_idxs[idx],
+            trh_bed = trh_bed,
+            trh_bed_idx = trh_bed_idx,
+            output_prefix = output_prefix + "." + idx
+        }
+
+        call CalculateMendelianMetrics { input:
+            annotated_vcf = AnnotateVcf.annotated_vcf,
+            annotated_vcf_idx = AnnotateVcf.annotated_vcf_idx,
+            pedigree = pedigree,
+            output_prefix = output_prefix + "." + idx
+        }
+
+        # Generate Per-Chromosome Plots
+        call PlotMendelianMetrics as PlotMetricsPerChrom { input:
+            pkl_files = [CalculateMendelianMetrics.results_pkl],
+            pedigree = pedigree,
+            output_prefix = output_prefix + "." + idx
+        }
     }
 
-    call CalculateMendelianConsistency { input:
-        annotated_vcf = AnnotateVcf.annotated_vcf,
-        annotated_vcf_idx = AnnotateVcf.annotated_vcf_idx,
+    # Generate Aggregate Plots
+    call PlotMendelianMetrics as PlotMetricsAggregate { input:
+        pkl_files = CalculateMendelianMetrics.results_pkl,
         pedigree = pedigree,
-        output_prefix = output_prefix
+        output_prefix = output_prefix + ".aggregate"
     }
 
     output {
-        Array[File] mendelian_pkls = [CalculateMendelianConsistency.unfiltered_pkl, CalculateMendelianConsistency.filtered_pkl]
-        Array[File] mendelian_plots = [CalculateMendelianConsistency.trio_plot_inTRH, CalculateMendelianConsistency.trio_plot_outTRH, 
-                                       CalculateMendelianConsistency.locus_plot_inTRH, CalculateMendelianConsistency.locus_plot_outTRH]
+        Array[File] mendelian_aggregate_plots_pdf = [PlotMetricsAggregate.trio_plot_inTRH_pdf, PlotMetricsAggregate.trio_plot_outTRH_pdf, PlotMetricsAggregate.locus_plot_inTRH_pdf, PlotMetricsAggregate.locus_plot_outTRH_pdf]
+        Array[File] mendelian_aggregate_plots_png = [PlotMetricsAggregate.trio_plot_inTRH_png, PlotMetricsAggregate.trio_plot_outTRH_png, PlotMetricsAggregate.locus_plot_inTRH_png, PlotMetricsAggregate.locus_plot_outTRH_png]
+        
+        Array[File] mendelian_per_chrom_plots_pdf = flatten([PlotMetricsPerChrom.trio_plot_inTRH_pdf, PlotMetricsPerChrom.trio_plot_outTRH_pdf, PlotMetricsPerChrom.locus_plot_inTRH_pdf, PlotMetricsPerChrom.locus_plot_outTRH_pdf])
+        Array[File] mendelian_per_chrom_plots_png = flatten([PlotMetricsPerChrom.trio_plot_inTRH_png, PlotMetricsPerChrom.trio_plot_outTRH_png, PlotMetricsPerChrom.locus_plot_inTRH_png, PlotMetricsPerChrom.locus_plot_outTRH_png])
     }
 }
 
-# NOTE: imputed_vcf may be merged across samples with bcftools merge, which can apply a silent normalization; however, bcftools annotate will match equivalent representations
+# NOTE: imputed_vcf may be merged across samples with bcftools merge, which can apply a silent normalization;
+# however, bcftools annotate will match equivalent representations
 task AnnotateVcf {
     input {
         File panel_sites_only_vcf
@@ -89,7 +108,7 @@ task AnnotateVcf {
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         disk_type:          "SSD",
-        preemptible_tries:  1,
+        preemptible_tries:  2,
         max_retries:        0,
         docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
     }
@@ -105,7 +124,7 @@ task AnnotateVcf {
     }
 }
 
-task CalculateMendelianConsistency {
+task CalculateMendelianMetrics {
     input {
         File annotated_vcf
         File annotated_vcf_idx
@@ -122,8 +141,7 @@ task CalculateMendelianConsistency {
     command <<<
         set -euxo pipefail
 
-        # Install the dependencies for variant streaming and plotting
-        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy matplotlib seaborn
+        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy
 
         python - --input_path ~{annotated_vcf} \
                  --ped_path ~{pedigree} \
@@ -136,13 +154,11 @@ task CalculateMendelianConsistency {
         import sys
         import time
         import subprocess
+        import pickle
         from datetime import timedelta
-        import matplotlib.pyplot as plt
-        import seaborn as sns
         import warnings
 
         def parse_pedigree(ped_path, vcf_samples):
-            """Parse PED file and find complete trios present in the VCF/BCF."""
             ped_df = pd.read_csv(ped_path, sep='\t', 
                                  names=['familyID', 'sampleID', 'fatherID', 'motherID', 'sex', 'status'])
             
@@ -165,12 +181,10 @@ task CalculateMendelianConsistency {
                 print("Error: No complete trios found in the input file.")
                 sys.exit(1)
             
-            # Ensure subset samples keep the original order found inside the VCF stream
             subset_samples = [s for s in vcf_samples if s in valid_samples_set]
             return valid_trios, subset_samples
 
         def process_vcf_in_chunks(input_path, valid_trios, subset_samples, chunk_size, num_trios):
-            """Process VCF/BCF in chunks with matching notebook extraction string logic."""
             agg_results = {}
             
             fields_to_extract = [
@@ -194,7 +208,6 @@ task CalculateMendelianConsistency {
             proc = subprocess.Popen(bcftools_pipeline, shell=True, stdout=subprocess.PIPE)
             vcf_stream = proc.stdout
             
-            # Let scikit-allel parse headers natively to allow proper handling of multiallelic GP arrays
             fields, stream_samples, headers, it = allel.iter_vcf_chunks(
                 vcf_stream, fields=fields_to_extract, chunk_length=chunk_size
             )
@@ -215,8 +228,6 @@ task CalculateMendelianConsistency {
                     chrom_str = chrom_val.decode('utf-8').rstrip('\x00') if hasattr(chrom_val, 'decode') else str(chrom_val).rstrip('\x00')
                     print(f"Processed {total_records:,} records... [Elapsed: {elapsed_str}] [Location: {chrom_str}:{pos_val}]", flush=True)
                     
-                    # --- 1. Locus Metric Extraction ---
-                    # Use native altlen for sizes, string len for is_snp (Matches notebook)
                     altlen_arr = chunk['variants/altlen']
                     length = altlen_arr[:, 0] if altlen_arr.ndim > 1 else altlen_arr
                     is_snp = chunk['variants/is_snp']
@@ -239,18 +250,15 @@ task CalculateMendelianConsistency {
                     trhs = chunk['variants/TRH']
                     trhs = (trhs[:, 0] if trhs.ndim > 1 else trhs).astype(bool)
 
-                    # --- 2. Genotype & Mendelian Error Extraction ---
                     GT_base = chunk['calldata/GT']
                     
                     if 'calldata/GP' in chunk:
                         with warnings.catch_warnings():
                             warnings.simplefilter("ignore", category=RuntimeWarning)
-                            # np.nanmax correctly ignores the padded NaNs in multiallelic GP arrays
                             max_gp = np.nanmax(chunk['calldata/GP'], axis=2) 
                     else:
                         max_gp = np.zeros(GT_base.shape[:2], dtype=np.float32) 
 
-                    # Unroll Genotype axes to explicit 1D arrays to prevent any NumPy broadcasting edge cases
                     P = GT_base[:, proband_idx, :]
                     F = GT_base[:, father_idx, :]
                     M = GT_base[:, mother_idx, :]
@@ -268,7 +276,6 @@ task CalculateMendelianConsistency {
 
                     for min_gp in [0.0, 0.9]:
                         if min_gp > 0:
-                            # ~np.greater exactly mirrors `bcftools -e 'FORMAT/GP>0.9'` and correctly masks NaNs
                             p_mask = ~np.greater(max_gp[:, proband_idx], min_gp)
                             f_mask = ~np.greater(max_gp[:, father_idx], min_gp)
                             m_mask = ~np.greater(max_gp[:, mother_idx], min_gp)
@@ -276,14 +283,12 @@ task CalculateMendelianConsistency {
                         else:
                             has_missing = has_missing_base
                         
-                        # Evaluate final logical masks
                         non_hom_ref = ~is_hom_ref_base & ~has_missing
-                        errors = is_error_base & non_hom_ref # Enforce mathematical equivalent of (error_vt * non_hom_ref_vt)
+                        errors = is_error_base & non_hom_ref
                         
                         locus_errors = errors.sum(axis=1)
                         locus_nhr = non_hom_ref.sum(axis=1)
                         
-                        # --- 3. Aggregate Results into Bins ---
                         chunk_df = pd.DataFrame({'AF_BIN': af_bins, 'LENGTH_BIN': len_bins, 'IN_TRH': trhs})
                         groups = chunk_df.groupby(['AF_BIN', 'LENGTH_BIN', 'IN_TRH'])
                         
@@ -316,32 +321,119 @@ task CalculateMendelianConsistency {
             print(f"\nFinished processing {total_records:,} records in {total_elapsed}.")
             return agg_results
 
-        def save_pickles(agg_results, output_prefix):
-            """Save the accumulated raw data as pandas dataframes to fulfill WDL outputs."""
-            rows_0, rows_09 = [], []
-            for key, res in agg_results.items():
-                af_bin, len_bin, in_trh, min_gp = key
-                row = {
-                    'AF_BIN': af_bin,
-                    'LENGTH_BIN': len_bin,
-                    'IN_TRH': in_trh,
-                    'ERROR_VT': res['errors_per_trio'],
-                    'NON_HOM_REF_VT': res['nhr_per_trio'],
-                    'NUM_LOCI': res['n_loci']
-                }
-                if min_gp == 0.0: rows_0.append(row)
-                elif min_gp == 0.9: rows_09.append(row)
+        def main(args=None):
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--input_path", required=True)
+            parser.add_argument("--ped_path", required=True)
+            parser.add_argument("--output_prefix", required=True)
+            parser.add_argument("--chunk_size", type=int, default=10000)
+            args = parser.parse_args(args=args)
+
+            is_bcf = args.input_path.lower().endswith('.bcf')
             
-            # Form dataframes, falling back to empty with proper columns if no variants passed chunks
-            cols = ['AF_BIN', 'LENGTH_BIN', 'IN_TRH', 'ERROR_VT', 'NON_HOM_REF_VT', 'NUM_LOCI']
-            df_0 = pd.DataFrame(rows_0) if rows_0 else pd.DataFrame(columns=cols)
-            df_09 = pd.DataFrame(rows_09) if rows_09 else pd.DataFrame(columns=cols)
+            if is_bcf:
+                samples_out = subprocess.run(
+                    ['bcftools', 'query', '-l', args.input_path], 
+                    stdout=subprocess.PIPE, text=True, check=True
+                )
+                vcf_samples = [s for s in samples_out.stdout.strip().split('\n') if s]
+            else:
+                headers = allel.read_vcf_headers(args.input_path)
+                vcf_samples = headers.samples
             
-            df_0.to_pickle(f"{output_prefix}-unfiltered.pkl")
-            df_09.to_pickle(f"{output_prefix}-filtered-0.9.pkl")
+            trios, subset_samples = parse_pedigree(args.ped_path, vcf_samples)
+            num_trios = len(trios)
+            
+            agg_results = process_vcf_in_chunks(
+                args.input_path, trios, subset_samples, args.chunk_size, num_trios
+            )
+            
+            export_data = {'num_trios': num_trios, 'agg_results': agg_results}
+            with open(f"{args.output_prefix}.pkl", "wb") as f:
+                pickle.dump(export_data, f)
+
+        if __name__ == "__main__":
+            main()
+        EOF
+    >>>
+
+    output {
+        File results_pkl = "~{output_prefix}.pkl"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          4,
+        mem_gb:             16,
+        disk_gb:            disk_gb,
+        boot_disk_gb:       10,
+        disk_type:          "SSD",
+        preemptible_tries:  2,
+        max_retries:        0,
+        docker:             "continuumio/miniconda3:latest"
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + " " + select_first([runtime_attr.disk_type, default_attr.disk_type])
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+    }
+}
+
+task PlotMendelianMetrics {
+    input {
+        Array[File] pkl_files
+        File pedigree
+        String output_prefix
+
+        RuntimeAttr? runtime_attr_override
+    }
+    
+    Int disk_gb = 10 + ceil(size(pkl_files, "GiB"))
+    
+    command <<<
+        set -euxo pipefail
+        
+        conda install -y -c bioconda -c conda-forge pandas numpy matplotlib<=3.10 seaborn
+        
+        python - "~{sep=',' pkl_files}" "~{output_prefix}" <<-'EOF'
+        import sys
+        import pandas as pd
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        import warnings
+        import pickle
+
+        pkl_paths = [f for f in sys.argv[1].split(',') if f.strip()]
+        output_prefix = sys.argv[2]
+
+        agg_results = {}
+        num_trios = 0
+        
+        for f in pkl_paths:
+            with open(f, 'rb') as fp:
+                data = pickle.load(fp)
+                if num_trios == 0: num_trios = data['num_trios']
+                
+                for key, res in data['agg_results'].items():
+                    if key not in agg_results:
+                        agg_results[key] = {
+                            'errors_per_trio': np.zeros(num_trios, dtype=int),
+                            'nhr_per_trio': np.zeros(num_trios, dtype=int),
+                            'locus_rates': [],
+                            'n_loci': 0
+                        }
+                    agg_results[key]['errors_per_trio'] += res['errors_per_trio']
+                    agg_results[key]['nhr_per_trio'] += res['nhr_per_trio']
+                    agg_results[key]['locus_rates'].extend(res['locus_rates'])
+                    agg_results[key]['n_loci'] += res['n_loci']
 
         def generate_plots(agg_results, num_trios, output_prefix):
-            """Generate plots matching formatting specifications precisely."""
             print("Generating plots...")
             length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[0, 50)', '[50, inf)']
             af_bin_labels = ['[0, 0.01)', '[0.01, 0.1)', '[0.1, 1]']
@@ -365,7 +457,6 @@ task CalculateMendelianConsistency {
                                     errs = res['errors_per_trio']
                                     nhr = res['nhr_per_trio']
                                     
-                                    # Div by 0 forces NaN output exactly mirroring the notebook, ignored by Seaborn
                                     error_rates_per_trio = np.divide(errs, nhr, out=np.full(num_trios, np.nan), where=(nhr > 0))
                                     mean_num_non_hom_ref = nhr.mean()
                                     
@@ -397,6 +488,7 @@ task CalculateMendelianConsistency {
                                 ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                     
                     plt.tight_layout()
+                    plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.png")
                     plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.pdf")
                     plt.close()
 
@@ -444,53 +536,24 @@ task CalculateMendelianConsistency {
                                 ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                     
                     plt.tight_layout()
+                    plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.png")
                     plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.pdf")
                     plt.close()
 
-        def main(args=None):
-            parser = argparse.ArgumentParser(description="Mendelian Error calculation matching target notebook mappings perfectly.")
-            parser.add_argument("--input_path", required=True, help="Path to input VCF/BCF.")
-            parser.add_argument("--ped_path", required=True, help="Path to pedigree (.ped) file.")
-            parser.add_argument("--output_prefix", required=True, help="Prefix for output plots.")
-            parser.add_argument("--chunk_size", type=int, default=10000, help="VCF chunk size.")
-            args = parser.parse_args(args=args)
-
-            is_bcf = args.input_path.lower().endswith('.bcf')
-            
-            if is_bcf:
-                print("Detected BCF format. Fetching samples using bcftools...")
-                samples_out = subprocess.run(
-                    ['bcftools', 'query', '-l', args.input_path], 
-                    stdout=subprocess.PIPE, text=True, check=True
-                )
-                vcf_samples = [s for s in samples_out.stdout.strip().split('\n') if s]
-            else:
-                headers = allel.read_vcf_headers(args.input_path)
-                vcf_samples = headers.samples
-            
-            trios, subset_samples = parse_pedigree(args.ped_path, vcf_samples)
-            num_trios = len(trios)
-            
-            agg_results = process_vcf_in_chunks(
-                args.input_path, trios, subset_samples, args.chunk_size, num_trios
-            )
-            
-            save_pickles(agg_results, args.output_prefix)
-            generate_plots(agg_results, num_trios, args.output_prefix)
-            print(f"Successfully generated plots and pickles with prefix '{args.output_prefix}'.")
-
-        if __name__ == "__main__":
-            main()
+        generate_plots(agg_results, num_trios, output_prefix)
         EOF
     >>>
 
     output {
-        File unfiltered_pkl = "~{output_prefix}-unfiltered.pkl"
-        File filtered_pkl = "~{output_prefix}-filtered-0.9.pkl"
-        File trio_plot_inTRH = "~{output_prefix}.trio.inTRH.pdf"
-        File trio_plot_outTRH = "~{output_prefix}.trio.outTRH.pdf"
-        File locus_plot_inTRH = "~{output_prefix}.locus.inTRH.pdf"
-        File locus_plot_outTRH = "~{output_prefix}.locus.outTRH.pdf"
+        File trio_plot_inTRH_png = "~{output_prefix}.trio.inTRH.png"
+        File trio_plot_outTRH_png = "~{output_prefix}.trio.outTRH.png"
+        File locus_plot_inTRH_png = "~{output_prefix}.locus.inTRH.png"
+        File locus_plot_outTRH_png = "~{output_prefix}.locus.outTRH.png"
+
+        File trio_plot_inTRH_pdf = "~{output_prefix}.trio.inTRH.pdf"
+        File trio_plot_outTRH_pdf = "~{output_prefix}.trio.outTRH.pdf"
+        File locus_plot_inTRH_pdf = "~{output_prefix}.locus.inTRH.pdf"
+        File locus_plot_outTRH_pdf = "~{output_prefix}.locus.outTRH.pdf"
     }
 
     #########################
@@ -500,7 +563,7 @@ task CalculateMendelianConsistency {
         disk_gb:            disk_gb,
         boot_disk_gb:       10,
         disk_type:          "SSD",
-        preemptible_tries:  1,
+        preemptible_tries:  2,
         max_retries:        0,
         docker:             "continuumio/miniconda3:latest"
     }
