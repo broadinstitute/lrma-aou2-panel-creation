@@ -59,9 +59,7 @@ workflow MendelianConsistency {
     }
 
     output {
-        Array[File] aggregate_plots_png = PlotMetricsAggregate.plots_png
         Array[File] aggregate_plots_pdf = PlotMetricsAggregate.plots_pdf
-        Array[File] per_chrom_plots_png = flatten(PlotMetricsPerChrom.plots_png)
         Array[File] per_chrom_plots_pdf = flatten(PlotMetricsPerChrom.plots_pdf)
     }
 }
@@ -438,7 +436,6 @@ task PlotMendelianMetrics {
     command <<<
         set -euxo pipefail
         
-        # Make sure to install pyarrow to read pandas pickles safely
         conda install -y -c bioconda -c conda-forge pandas numpy matplotlib seaborn pyarrow
         
         python - "~{sep=',' unfiltered_pkls}" "~{sep=',' filtered_pkls}" "~{pedigree}" "~{output_prefix}" <<-'EOF'
@@ -484,12 +481,6 @@ task PlotMendelianMetrics {
         length_bin_labels = ['(-inf, -50]', '(-50, -1]', 'SNP', '[0, 50)', '[50, inf)']
         af_bin_labels = ['[0, 0.01)', '[0.01, 0.1)', '[0.1, 1]']
         
-        # Pre-calculate explicit y-ticks to prevent Matplotlib SymmetricalLogLocator crashes
-        explicit_yticks = [k * 0.0001 for k in range(0, 10)] + \
-                          [k * 0.001 for k in range(0, 10)] + \
-                          [k * 0.01 for k in range(1, 10)] + \
-                          [k * 0.1 for k in range(1, 11)]
-        
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             
@@ -531,14 +522,16 @@ task PlotMendelianMetrics {
                         
                         ax[i].set_yscale('symlog', linthresh=0.001)
                         ax[i].set_ylim([-1E-4, 1.001])
-                        ax[i].set_yticks(explicit_yticks)
+                        ax[i].set_yticks([k * 0.0001 for k in range(0, 10)] + 
+                                         [k * 0.001 for k in range(0, 10)] + 
+                                         [k * 0.01 for k in range(1, 10)] + 
+                                         [k * 0.1 for k in range(1, 11)])
                         
                         if i == 2:
                             handles, labels = ax[i].get_legend_handles_labels()
                             ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                 
                 plt.tight_layout()
-                plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.png")
                 plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.pdf")
                 plt.close()
 
@@ -576,21 +569,22 @@ task PlotMendelianMetrics {
                         
                         ax[i].set_yscale('symlog', linthresh=0.001)
                         ax[i].set_ylim([-1E-5, 1])
-                        ax[i].set_yticks(explicit_yticks)
+                        ax[i].set_yticks([k * 0.0001 for k in range(0, 10)] + 
+                                         [k * 0.001 for k in range(0, 10)] + 
+                                         [k * 0.01 for k in range(1, 10)] + 
+                                         [k * 0.1 for k in range(1, 11)])
                         
                         if i == 2:
                             handles, labels = ax[i].get_legend_handles_labels()
                             ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                 
                 plt.tight_layout()
-                plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.png")
                 plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.pdf")
                 plt.close()
         EOF
     >>>
 
     output {
-        Array[File] plots_png = glob("*.png")
         Array[File] plots_pdf = glob("*.pdf")
     }
 

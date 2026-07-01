@@ -47,9 +47,7 @@ workflow GLIMPSE2Summarize {
 
     output {
         File summarize_pearson_tsv = PlotSummariesAggregate.summarize_pearson_tsv
-        Array[File] aggregate_plots_png = PlotSummariesAggregate.plots_png
         Array[File] aggregate_plots_pdf = PlotSummariesAggregate.plots_pdf
-        Array[File] per_chrom_plots_png = flatten(PlotSummariesPerChrom.plots_png)
         Array[File] per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.plots_pdf)
     }
 }
@@ -377,12 +375,8 @@ task PlotSummaries {
         def plot_hist2d(p_af, c_af, title, outfile):
             if len(p_af) == 0: return
             
-            # Prevent matplotlib raster overflow by forcing at least 1 order of magnitude
-            counts, _, _ = np.histogram2d(p_af, c_af, bins=np.linspace(0, 1, 50))
-            vmax = max(float(counts.max()), 10.0)
-            
             plt.figure()
-            plt.hist2d(p_af, c_af, bins=np.linspace(0, 1, 50), norm=matplotlib.colors.LogNorm(vmin=1.0, vmax=vmax))
+            plt.hist2d(p_af, c_af, bins=np.linspace(0, 1, 50), norm=matplotlib.colors.LogNorm())
             plt.title(title)
             plt.xlabel('AoU+HPRC2+HGSVC3 allele frequency')
             plt.ylabel('Target allele frequency')
@@ -391,7 +385,6 @@ task PlotSummaries {
             cbar = plt.colorbar()
             cbar.set_label('Number of variants', rotation=270, labelpad=10)
             
-            plt.savefig(f'{outfile}.png', bbox_inches='tight')
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
@@ -437,7 +430,6 @@ task PlotSummaries {
             plt.title(title)
             plt.xlim(xlim)
             
-            plt.savefig(f'{outfile}.png', bbox_inches='tight')
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
@@ -465,7 +457,6 @@ task PlotSummaries {
             plt.xlabel('ALT length - REF length (bp)')
             plt.legend()
             
-            plt.savefig(f'{output_prefix}-alt-alleles-per-sample-hist.png', bbox_inches='tight')
             plt.savefig(f'{output_prefix}-alt-alleles-per-sample-hist.pdf', bbox_inches='tight')
             plt.close()
 
@@ -497,19 +488,10 @@ task PlotSummaries {
             if len(hom_ref_arr) == 0: return
             fig, ax = make_de_finetti_ax()
 
-            # 1. Combine arrays into a 2D matrix
             counts_arr = np.column_stack((hom_ref_arr, hom_alt_arr, het_arr))
-
-            # 2. Pre-aggregate identical variant counts
             unique_counts, point_weights = np.unique(counts_arr, axis=0, return_counts=True)
-
-            # 3. Calculate X/Y coordinates ONLY for unique combinations
             x_ternary_v, y_ternary_v = ternary_to_cartesian(unique_counts[:,0], unique_counts[:,1], unique_counts[:,2])
 
-            # Prevent matplotlib raster overflow
-            vmax = max(float(point_weights.max()), 10.0)
-
-            # 4. Pass the point_weights directly to hexbin using 'C'
             hb = ax.hexbin(
                 x_ternary_v, 
                 y_ternary_v, 
@@ -517,7 +499,7 @@ task PlotSummaries {
                 reduce_C_function=np.sum, 
                 gridsize=gridsize, 
                 extent=[0, 1, 0, np.sqrt(3) / 2], 
-                norm=matplotlib.colors.LogNorm(vmin=1.0, vmax=vmax)
+                norm=matplotlib.colors.LogNorm()
             )
 
             cbar = plt.colorbar(hb, ax=ax, shrink=0.5)
@@ -529,7 +511,6 @@ task PlotSummaries {
 
             ax.text(0.5, -0.3, title, fontsize=18, ha='center')
             
-            plt.savefig(f'{outfile}.png', bbox_inches='tight')
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
@@ -563,7 +544,6 @@ task PlotSummaries {
 
     output {
         File summarize_pearson_tsv = "~{output_prefix}.pearson.tsv"
-        Array[File] plots_png = glob("*.png")
         Array[File] plots_pdf = glob("*.pdf")
     }
 

@@ -71,9 +71,7 @@ workflow GLIMPSE2Concordance {
     }
 
     output {
-        Array[File] aggregate_plots_png = PlotResultsAggregate.plots_png
         Array[File] aggregate_plots_pdf = PlotResultsAggregate.plots_pdf
-        Array[File] per_chrom_plots_png = flatten(PlotResultsPerChrom.plots_png)
         Array[File] per_chrom_plots_pdf = flatten(PlotResultsPerChrom.plots_pdf)
         Array[Array[File]] concordance_results = [all_rsquare_grp_files, all_rsquare_spl_files, all_error_grp_files, all_error_spl_files, all_error_cal_files]
     }
@@ -350,7 +348,6 @@ task PlotResults {
                     length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[0, 50)', 'SV_INS': '[50, inf)'}[length_bin]
                     ax[i].set_xlabel(f'\n\n{length_bin_label}', fontsize=12)
 
-            plt.savefig(f'~{output_prefix}.{trh_bin}.r2.png', bbox_inches='tight')
             plt.savefig(f'~{output_prefix}.{trh_bin}.r2.pdf', bbox_inches='tight')
             plt.close()
 
@@ -381,7 +378,6 @@ task PlotResults {
                 plt.legend(loc='lower center', fontsize=8)
             
             plt.tight_layout()
-            plt.savefig(f'~{output_prefix}.{trh_bin}.nrd.png', bbox_inches='tight')
             plt.savefig(f'~{output_prefix}.{trh_bin}.nrd.pdf', bbox_inches='tight')
             plt.close()
         EOF
@@ -390,7 +386,6 @@ task PlotResults {
     >>>
 
     output {
-        Array[File] plots_png = glob("*.png")
         Array[File] plots_pdf = glob("*.pdf")
     }
 
