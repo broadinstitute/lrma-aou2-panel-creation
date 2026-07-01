@@ -45,9 +45,11 @@ workflow GLIMPSE2Summarize {
 
     output {
         File summarize_pearson_tsv = PlotSummariesAggregate.summarize_pearson_tsv
-        Array[File] aggregate_plots_pdf = PlotSummariesAggregate.summarize_plots
-        # Brackets removed here to correctly flatten the Array[Array[File]]
-        Array[File] per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.summarize_plots)
+        Array[File] aggregate_plots_pdf = PlotSummariesAggregate.summarize_plots_pdf
+        Array[File] aggregate_plots_png = PlotSummariesAggregate.summarize_plots_png
+        
+        Array[File] per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.summarize_plots_pdf)
+        Array[File] per_chrom_plots_png = flatten(PlotSummariesPerChrom.summarize_plots_png)
     }
 }
 
@@ -374,6 +376,7 @@ task PlotSummaries {
             plt.gca().set_aspect('equal')
             cbar = plt.colorbar()
             cbar.set_label('Number of variants', rotation=270, labelpad=10)
+            plt.savefig(f'{outfile}.png', bbox_inches='tight')
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
@@ -418,6 +421,7 @@ task PlotSummaries {
             plt.title(title)
             plt.xlim(xlim)
             
+            plt.savefig(f'{outfile}.png', bbox_inches='tight')
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
@@ -444,6 +448,7 @@ task PlotSummaries {
             plt.xlabel('ALT length - REF length (bp)')
             plt.legend()
             
+            plt.savefig(f'{output_prefix}-alt-alleles-per-sample-hist.png', bbox_inches='tight')
             plt.savefig(f'{output_prefix}-alt-alleles-per-sample-hist.pdf', bbox_inches='tight')
             plt.close()
 
@@ -496,6 +501,7 @@ task PlotSummaries {
             ax.plot(cart_values[:, 0], cart_values[:, 1], c='C1', ls='solid', lw=3)
 
             ax.text(0.5, -0.3, title, fontsize=18, ha='center')
+            plt.savefig(f'{outfile}.png', bbox_inches='tight')
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
@@ -528,7 +534,8 @@ task PlotSummaries {
 
     output {
         File summarize_pearson_tsv = "~{output_prefix}.pearson.tsv"
-        Array[File] summarize_plots = glob("*.pdf")
+        Array[File] summarize_plots_png = glob("*.png")
+        Array[File] summarize_plots_pdf = glob("*.pdf")
     }
 
     #########################

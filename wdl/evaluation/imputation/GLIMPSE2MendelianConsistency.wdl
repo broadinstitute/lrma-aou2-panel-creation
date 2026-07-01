@@ -13,9 +13,9 @@ struct RuntimeAttr {
 
 workflow MendelianConsistency {
     input {
-        Array[File] panel_sites_only_vcfs
+        Array[File] panel_sites_only_vcfs       # split to biallelic
         Array[File] panel_sites_only_vcf_idxs
-        Array[File] imputed_vcfs
+        Array[File] imputed_vcfs                # split to biallelic
         Array[File] imputed_vcf_idxs
         File trh_bed
         File trh_bed_idx
@@ -41,6 +41,7 @@ workflow MendelianConsistency {
             output_prefix = output_prefix + "." + idx
         }
 
+        # Generate Per-Chromosome Plots
         call PlotMendelianMetrics as PlotMetricsPerChrom { input:
             pkl_files = [CalculateMendelianMetrics.results_pkl],
             pedigree = pedigree,
@@ -48,6 +49,7 @@ workflow MendelianConsistency {
         }
     }
 
+    # Generate Aggregate Plots
     call PlotMendelianMetrics as PlotMetricsAggregate { input:
         pkl_files = CalculateMendelianMetrics.results_pkl,
         pedigree = pedigree,
@@ -55,11 +57,16 @@ workflow MendelianConsistency {
     }
 
     output {
-        Array[File] aggregate_plots = [PlotMetricsAggregate.trio_plot_inTRH, PlotMetricsAggregate.trio_plot_outTRH, PlotMetricsAggregate.locus_plot_inTRH, PlotMetricsAggregate.locus_plot_outTRH]
-        Array[File] per_chrom_plots = flatten([PlotMetricsPerChrom.trio_plot_inTRH, PlotMetricsPerChrom.trio_plot_outTRH, PlotMetricsPerChrom.locus_plot_inTRH, PlotMetricsPerChrom.locus_plot_outTRH])
+        Array[File] aggregate_plots_pdf = [PlotMetricsAggregate.trio_plot_inTRH_pdf, PlotMetricsAggregate.trio_plot_outTRH_pdf, PlotMetricsAggregate.locus_plot_inTRH_pdf, PlotMetricsAggregate.locus_plot_outTRH_pdf]
+        Array[File] aggregate_plots_png = [PlotMetricsAggregate.trio_plot_inTRH_png, PlotMetricsAggregate.trio_plot_outTRH_png, PlotMetricsAggregate.locus_plot_inTRH_png, PlotMetricsAggregate.locus_plot_outTRH_png]
+        
+        Array[File] per_chrom_plots_pdf = flatten([PlotMetricsPerChrom.trio_plot_inTRH_pdf, PlotMetricsPerChrom.trio_plot_outTRH_pdf, PlotMetricsPerChrom.locus_plot_inTRH_pdf, PlotMetricsPerChrom.locus_plot_outTRH_pdf])
+        Array[File] per_chrom_plots_png = flatten([PlotMetricsPerChrom.trio_plot_inTRH_png, PlotMetricsPerChrom.trio_plot_outTRH_png, PlotMetricsPerChrom.locus_plot_inTRH_png, PlotMetricsPerChrom.locus_plot_outTRH_png])
     }
 }
 
+# NOTE: imputed_vcf may be merged across samples with bcftools merge, which can apply a silent normalization;
+# however, bcftools annotate will match equivalent representations
 task AnnotateVcf {
     input {
         File panel_sites_only_vcf
@@ -228,7 +235,7 @@ task CalculateMendelianMetrics {
                     len_bins = np.full(len(length), 'UNKNOWN', dtype=object)
                     len_bins[is_snp] = 'SNP'
                     len_bins[(50 <= length)] = '[50, inf)'
-                    len_bins[(0 <= length) & (length < 50) & ~is_snp] = '[0, 50)'
+                    len_bins[(0 <= length) & (length < 50) & ~is_snp] = '[0, 50)'   # unlike Phase 1, include non-SNP substitutions
                     len_bins[(-50 < length) & (length <= -1)] = '(-50, -1]'
                     len_bins[(length <= -50)] = '(-inf, -50]'
                     
@@ -481,6 +488,7 @@ task PlotMendelianMetrics {
                                 ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                     
                     plt.tight_layout()
+                    plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.png")
                     plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.pdf")
                     plt.close()
 
@@ -528,6 +536,7 @@ task PlotMendelianMetrics {
                                 ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                     
                     plt.tight_layout()
+                    plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.png")
                     plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.pdf")
                     plt.close()
 
@@ -536,10 +545,15 @@ task PlotMendelianMetrics {
     >>>
 
     output {
-        File trio_plot_inTRH = "~{output_prefix}.trio.inTRH.pdf"
-        File trio_plot_outTRH = "~{output_prefix}.trio.outTRH.pdf"
-        File locus_plot_inTRH = "~{output_prefix}.locus.inTRH.pdf"
-        File locus_plot_outTRH = "~{output_prefix}.locus.outTRH.pdf"
+        File trio_plot_inTRH_png = "~{output_prefix}.trio.inTRH.png"
+        File trio_plot_outTRH_png = "~{output_prefix}.trio.outTRH.png"
+        File locus_plot_inTRH_png = "~{output_prefix}.locus.inTRH.png"
+        File locus_plot_outTRH_png = "~{output_prefix}.locus.outTRH.png"
+
+        File trio_plot_inTRH_pdf = "~{output_prefix}.trio.inTRH.pdf"
+        File trio_plot_outTRH_pdf = "~{output_prefix}.trio.outTRH.pdf"
+        File locus_plot_inTRH_pdf = "~{output_prefix}.locus.inTRH.pdf"
+        File locus_plot_outTRH_pdf = "~{output_prefix}.locus.outTRH.pdf"
     }
 
     #########################
