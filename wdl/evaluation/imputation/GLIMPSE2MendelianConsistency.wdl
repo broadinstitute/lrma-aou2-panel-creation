@@ -398,7 +398,7 @@ task PlotMendelianMetrics {
     command <<<
         set -euxo pipefail
         
-        conda install -y -c bioconda -c conda-forge pandas numpy matplotlib<=3.10 seaborn
+        conda install -y -c bioconda -c conda-forge pandas numpy "matplotlib<=3.10" seaborn
         
         python - "~{sep=',' pkl_files}" "~{output_prefix}" <<-'EOF'
         import sys
