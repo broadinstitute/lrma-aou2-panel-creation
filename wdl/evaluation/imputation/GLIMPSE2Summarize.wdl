@@ -412,6 +412,15 @@ task PlotSummaries {
         panel_results_df = make_results_df(panel_samples, sample_stats['panel'] if sample_stats else None)
         target_results_df = make_results_df(target_samples, sample_stats['target'] if sample_stats else None)
 
+        # Calculates a shared x-axis limit dynamically across both datasets for unified scaling
+        def get_shared_xlim(df_panel, df_target, col):
+            max_p = df_panel[col].max() if (not df_panel.empty and col in df_panel) else 0
+            max_t = df_target[col].max() if (not df_target.empty and col in df_target) else 0
+            max_val = max(max_p, max_t)
+            if pd.isna(max_val) or max_val == 0:
+                return [0, 10]
+            return [0, max_val * 1.05]
+
         def plot_boxplot(df, x_col, title, outfile, xlim):
             if df.empty: return
             plt.figure(figsize=(4, 6))
@@ -425,12 +434,19 @@ task PlotSummaries {
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
-        plot_boxplot(panel_results_df, 'Heterozygous variants per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-all', [0, 6E4])
-        plot_boxplot(target_results_df, 'Heterozygous variants per sample', 'Target', f'{output_prefix}-target-het-all', [0, 6E4])
-        plot_boxplot(panel_results_df, 'Heterozygous SV-length insertions per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-SV-ins', [0, 500])
-        plot_boxplot(target_results_df, 'Heterozygous SV-length insertions per sample', 'Target', f'{output_prefix}-target-het-SV-ins', [0, 500])
-        plot_boxplot(panel_results_df, 'Heterozygous SV-length deletions per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-SV-del', [0, 500])
-        plot_boxplot(target_results_df, 'Heterozygous SV-length deletions per sample', 'Target', f'{output_prefix}-target-het-SV-del', [0, 500])
+        # Shared limits calculation
+        xlim_het_all = get_shared_xlim(panel_results_df, target_results_df, 'Heterozygous variants per sample')
+        xlim_het_ins = get_shared_xlim(panel_results_df, target_results_df, 'Heterozygous SV-length insertions per sample')
+        xlim_het_del = get_shared_xlim(panel_results_df, target_results_df, 'Heterozygous SV-length deletions per sample')
+
+        plot_boxplot(panel_results_df, 'Heterozygous variants per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-all', xlim_het_all)
+        plot_boxplot(target_results_df, 'Heterozygous variants per sample', 'Target', f'{output_prefix}-target-het-all', xlim_het_all)
+        
+        plot_boxplot(panel_results_df, 'Heterozygous SV-length insertions per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-SV-ins', xlim_het_ins)
+        plot_boxplot(target_results_df, 'Heterozygous SV-length insertions per sample', 'Target', f'{output_prefix}-target-het-SV-ins', xlim_het_ins)
+        
+        plot_boxplot(panel_results_df, 'Heterozygous SV-length deletions per sample', 'HPRC2+HGSVC3 in AoU+HPRC2+HGSVC3', f'{output_prefix}-panel-het-SV-del', xlim_het_del)
+        plot_boxplot(target_results_df, 'Heterozygous SV-length deletions per sample', 'Target', f'{output_prefix}-target-het-SV-del', xlim_het_del)
 
         print("Generating ALT Length Histogram...", flush=True)
         if len(altlen) > 0:
