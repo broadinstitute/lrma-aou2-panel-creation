@@ -17,8 +17,8 @@ workflow MendelianConsistency {
         Array[File] panel_sites_only_vcf_idxs
         Array[File] imputed_vcfs                # split to biallelic
         Array[File] imputed_vcf_idxs
-        Array[File] trh_beds
-        Array[File] trh_bed_idxs
+        File trh_bed
+        File trh_bed_idx
         File pedigree
         String output_prefix
     }
@@ -29,8 +29,8 @@ workflow MendelianConsistency {
             panel_sites_only_vcf_idx = panel_sites_only_vcf_idxs[idx],
             imputed_vcf = imputed_vcfs[idx],
             imputed_vcf_idx = imputed_vcf_idxs[idx],
-            trh_bed = trh_beds[idx],
-            trh_bed_idx = trh_bed_idxs[idx],
+            trh_bed = trh_bed,
+            trh_bed_idx = trh_bed_idx,
             output_prefix = output_prefix + "." + idx
         }
 
