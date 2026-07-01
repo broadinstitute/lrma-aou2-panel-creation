@@ -46,7 +46,8 @@ workflow GLIMPSE2Summarize {
     output {
         File summarize_pearson_tsv = PlotSummariesAggregate.summarize_pearson_tsv
         Array[File] aggregate_plots_pdf = PlotSummariesAggregate.summarize_plots
-        Array[File] per_chrom_plots_pdf = flatten([PlotSummariesPerChrom.summarize_plots])
+        # Brackets removed here to correctly flatten the Array[Array[File]]
+        Array[File] per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.summarize_plots)
     }
 }
 
