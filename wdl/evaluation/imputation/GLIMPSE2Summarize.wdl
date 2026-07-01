@@ -238,12 +238,12 @@ task PlotSummaries {
         def plot_hist2d(p_af, c_af, title, outfile):
             if len(p_af) == 0: return
             
-            # Prevent matplotlib raster overflow by forcing a valid range for LogNorm
+            # Prevent matplotlib raster overflow by forcing at least 1 order of magnitude
             counts, _, _ = np.histogram2d(p_af, c_af, bins=np.linspace(0, 1, 50))
-            vmax = max(counts.max(), 2)
+            vmax = max(float(counts.max()), 10.0)
             
             plt.figure()
-            plt.hist2d(p_af, c_af, bins=np.linspace(0, 1, 50), norm=matplotlib.colors.LogNorm(vmin=1, vmax=vmax))
+            plt.hist2d(p_af, c_af, bins=np.linspace(0, 1, 50), norm=matplotlib.colors.LogNorm(vmin=1.0, vmax=vmax))
             plt.title(title); plt.xlabel('AoU+HPRC2+HGSVC3 allele frequency'); plt.ylabel('Target allele frequency')
             plt.gca().set_aspect('equal')
             plt.colorbar().set_label('Number of variants', rotation=270, labelpad=10)
@@ -314,9 +314,9 @@ task PlotSummaries {
             x_ternary_v, y_ternary_v = ternary_to_cartesian(unique_counts[:,0], unique_counts[:,1], unique_counts[:,2])
             
             # Prevent matplotlib raster overflow
-            vmax = max(point_weights.max(), 2)
+            vmax = max(float(point_weights.max()), 10.0)
             
-            hb = ax.hexbin(x_ternary_v, y_ternary_v, C=point_weights, reduce_C_function=np.sum, gridsize=gridsize, extent=[0, 1, 0, np.sqrt(3) / 2], norm=matplotlib.colors.LogNorm(vmin=1, vmax=vmax))
+            hb = ax.hexbin(x_ternary_v, y_ternary_v, C=point_weights, reduce_C_function=np.sum, gridsize=gridsize, extent=[0, 1, 0, np.sqrt(3) / 2], norm=matplotlib.colors.LogNorm(vmin=1.0, vmax=vmax))
             plt.colorbar(hb, ax=ax, shrink=0.5).set_label('Number of variants', rotation=270, labelpad=10)
             
             x_values = np.linspace(0, 1, 50)
