@@ -45,11 +45,11 @@ workflow GLIMPSE2Summarize {
 
     output {
         File summarize_pearson_tsv = PlotSummariesAggregate.summarize_pearson_tsv
-        Array[File] aggregate_plots_pdf = PlotSummariesAggregate.summarize_plots_pdf
-        Array[File] aggregate_plots_png = PlotSummariesAggregate.summarize_plots_png
+        Array[File] summarize_aggregate_plots_pdf = PlotSummariesAggregate.summarize_plots_pdf
+        Array[File] summarize_aggregate_plots_png = PlotSummariesAggregate.summarize_plots_png
         
-        Array[File] per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.summarize_plots_pdf)
-        Array[File] per_chrom_plots_png = flatten(PlotSummariesPerChrom.summarize_plots_png)
+        Array[File] summarize_per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.summarize_plots_pdf)
+        Array[File] summarize_per_chrom_plots_png = flatten(PlotSummariesPerChrom.summarize_plots_png)
     }
 }
 

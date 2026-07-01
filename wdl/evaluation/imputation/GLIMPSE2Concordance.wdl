@@ -69,11 +69,11 @@ workflow GLIMPSE2Concordance {
     }
 
     output {
-        Array[File] aggregate_plots_pdf = [PlotResultsAggregate.r2_plot_inTRH_pdf, PlotResultsAggregate.r2_plot_outTRH_pdf, PlotResultsAggregate.nrd_plot_inTRH_pdf, PlotResultsAggregate.nrd_plot_outTRH_pdf]
-        Array[File] aggregate_plots_png = [PlotResultsAggregate.r2_plot_inTRH_png, PlotResultsAggregate.r2_plot_outTRH_png, PlotResultsAggregate.nrd_plot_inTRH_png, PlotResultsAggregate.nrd_plot_outTRH_png]
+        Array[File] concordance_aggregate_plots_pdf = [PlotResultsAggregate.r2_plot_inTRH_pdf, PlotResultsAggregate.r2_plot_outTRH_pdf, PlotResultsAggregate.nrd_plot_inTRH_pdf, PlotResultsAggregate.nrd_plot_outTRH_pdf]
+        Array[File] concordance_aggregate_plots_png = [PlotResultsAggregate.r2_plot_inTRH_png, PlotResultsAggregate.r2_plot_outTRH_png, PlotResultsAggregate.nrd_plot_inTRH_png, PlotResultsAggregate.nrd_plot_outTRH_png]
         
-        Array[File] per_chrom_plots_pdf = flatten([PlotResultsPerChrom.r2_plot_inTRH_pdf, PlotResultsPerChrom.r2_plot_outTRH_pdf, PlotResultsPerChrom.nrd_plot_inTRH_pdf, PlotResultsPerChrom.nrd_plot_outTRH_pdf])
-        Array[File] per_chrom_plots_png = flatten([PlotResultsPerChrom.r2_plot_inTRH_png, PlotResultsPerChrom.r2_plot_outTRH_png, PlotResultsPerChrom.nrd_plot_inTRH_png, PlotResultsPerChrom.nrd_plot_outTRH_png])
+        Array[File] concordance_per_chrom_plots_pdf = flatten([PlotResultsPerChrom.r2_plot_inTRH_pdf, PlotResultsPerChrom.r2_plot_outTRH_pdf, PlotResultsPerChrom.nrd_plot_inTRH_pdf, PlotResultsPerChrom.nrd_plot_outTRH_pdf])
+        Array[File] concordance_per_chrom_plots_png = flatten([PlotResultsPerChrom.r2_plot_inTRH_png, PlotResultsPerChrom.r2_plot_outTRH_png, PlotResultsPerChrom.nrd_plot_inTRH_png, PlotResultsPerChrom.nrd_plot_outTRH_png])
         
         Array[Array[File]] concordance_results = [all_rsquare_grp_files, all_rsquare_spl_files, all_error_grp_files, all_error_spl_files, all_error_cal_files]
     }
