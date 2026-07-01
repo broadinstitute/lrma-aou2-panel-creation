@@ -276,7 +276,7 @@ task PlotSummaries {
     command <<<
         set -euxo pipefail
         
-        conda install -y -c bioconda -c conda-forge numpy pandas matplotlib<=3.10 seaborn scipy
+        conda install -y -c bioconda -c conda-forge numpy pandas "matplotlib<=3.10" seaborn scipy
 
         python - "~{sep=',' summary_pkls}" \
                  "~{population_tsv}" \
