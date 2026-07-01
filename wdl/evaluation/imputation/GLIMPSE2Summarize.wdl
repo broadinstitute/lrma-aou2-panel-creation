@@ -13,9 +13,9 @@ struct RuntimeAttr {
 
 workflow GLIMPSE2Summarize {
     input {
-        Array[File] panel_vcfs              # split to biallelic
+        Array[File] panel_vcfs              
         Array[File] panel_vcf_idxs
-        Array[File] imputed_vcfs            # split to biallelic, variants in same order as in panel
+        Array[File] imputed_vcfs            
         Array[File] imputed_vcf_idxs
         File population_tsv    
         String output_prefix
@@ -30,7 +30,6 @@ workflow GLIMPSE2Summarize {
             output_prefix = output_prefix + "." + idx
         }
 
-        # Generate Per-Chromosome Plots
         call PlotSummaries as PlotSummariesPerChrom { input:
             summary_pkls = [SummarizeMetrics.summary_pkl],
             population_tsv = population_tsv,
@@ -38,7 +37,6 @@ workflow GLIMPSE2Summarize {
         }
     }
 
-    # Generate Aggregate Plots
     call PlotSummaries as PlotSummariesAggregate { input:
         summary_pkls = SummarizeMetrics.summary_pkl,
         population_tsv = population_tsv,
@@ -47,8 +45,8 @@ workflow GLIMPSE2Summarize {
 
     output {
         File summarize_pearson_tsv = PlotSummariesAggregate.summarize_pearson_tsv
-        Array[File] aggregate_plots_pdf = PlotSummariesAggregate.plots_pdf
-        Array[File] per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.plots_pdf)
+        Array[File] aggregate_plots_pdf = PlotSummariesAggregate.summarize_plots
+        Array[File] per_chrom_plots_pdf = flatten(PlotSummariesPerChrom.summarize_plots)
     }
 }
 
@@ -68,12 +66,9 @@ task SummarizeMetrics {
     command <<<
         set -euxo pipefail
         
-        # Install dependencies for variant streaming, stats, and serializing
         conda install -y -c bioconda -c conda-forge cyvcf2 numpy pandas
 
-        python - ~{panel_vcf} \
-                 ~{imputed_vcf} \
-                 ~{output_prefix} <<-'EOF'
+        python - ~{panel_vcf} ~{imputed_vcf} ~{output_prefix} <<-'EOF'
         import sys
         import time
         import numpy as np
@@ -81,6 +76,7 @@ task SummarizeMetrics {
         import cyvcf2
         import pickle
         import warnings
+        from datetime import timedelta
 
         warnings.filterwarnings('ignore', category=RuntimeWarning)
 
@@ -130,6 +126,8 @@ task SummarizeMetrics {
 
         # 3. Stream Variants with Native C-Extracted Logic
         print("Streaming variants...", flush=True)
+        variants_processed = 0
+        start_time = time.time()
 
         for p_var, c_var in zip(panel_vcf, imputed_vcf):
             # Strict safety check to ensure perfect sync
@@ -178,7 +176,7 @@ task SummarizeMetrics {
             p_alt_count = p_n_het + 2 * p_n_hom_alt
             panel_af_all.append(p_alt_count / p_valid if p_valid > 0 else 0.0)
             
-            # Use safe division to prevent zero division error if processing sites-only panel
+            # Safe division check left here strictly to protect against sites.bcf errors that the user hit earlier
             panel_mean_alt_alleles_all.append(p_alt_count / num_p_samples if num_p_samples > 0 else 0.0)
 
             # --- Target Extraction ---
@@ -207,7 +205,16 @@ task SummarizeMetrics {
             
             target_mean_alt_alleles_all.append(c_alt_count / num_c_samples if num_c_samples > 0 else 0.0)
 
-        # 4. Serialize to Pickle
+            variants_processed += 1
+            if variants_processed % 10000 == 0:
+                elapsed_secs = time.time() - start_time
+                elapsed_str = str(timedelta(seconds=int(elapsed_secs)))
+                print(f"Processed {variants_processed:,} records... [Elapsed: {elapsed_str}] [Location: {p_var.CHROM}:{p_var.POS}]", flush=True)
+
+        elapsed_secs = time.time() - start_time
+        elapsed_str = str(timedelta(seconds=int(elapsed_secs)))
+        print(f"\nFinished processing {variants_processed:,} total variants in {elapsed_str}.", flush=True)
+
         stats_dict = {
             'altlen_all': altlen_all, 
             'panel_af_all': panel_af_all, 
@@ -299,7 +306,6 @@ task PlotSummaries {
         population_tsv_path = sys.argv[2]
         output_prefix = sys.argv[3]
 
-        # Combine all dictionaries
         agg = {
             'altlen_all': [], 
             'panel_af_all': [], 
@@ -374,17 +380,14 @@ task PlotSummaries {
         print("Generating AF Hist2D Plots...", flush=True)
         def plot_hist2d(p_af, c_af, title, outfile):
             if len(p_af) == 0: return
-            
             plt.figure()
             plt.hist2d(p_af, c_af, bins=np.linspace(0, 1, 50), norm=matplotlib.colors.LogNorm())
             plt.title(title)
             plt.xlabel('AoU+HPRC2+HGSVC3 allele frequency')
             plt.ylabel('Target allele frequency')
             plt.gca().set_aspect('equal')
-            
             cbar = plt.colorbar()
             cbar.set_label('Number of variants', rotation=270, labelpad=10)
-            
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
@@ -510,11 +513,9 @@ task PlotSummaries {
             ax.plot(cart_values[:, 0], cart_values[:, 1], c='C1', ls='solid', lw=3)
 
             ax.text(0.5, -0.3, title, fontsize=18, ha='center')
-            
             plt.savefig(f'{outfile}.pdf', bbox_inches='tight')
             plt.close()
 
-        # Slice HWE dictionaries for subsets
         def slice_hwe(hwe_dict, mask):
             mask = np.array(mask)
             return {k: np.array(v)[mask] for k, v in hwe_dict.items()}
@@ -544,7 +545,7 @@ task PlotSummaries {
 
     output {
         File summarize_pearson_tsv = "~{output_prefix}.pearson.tsv"
-        Array[File] plots_pdf = glob("*.pdf")
+        Array[File] summarize_plots = glob("*.pdf")
     }
 
     #########################
