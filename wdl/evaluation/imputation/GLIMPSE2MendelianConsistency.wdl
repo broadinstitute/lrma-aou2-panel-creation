@@ -145,9 +145,13 @@ task CalculateMendelianMetrics {
     command <<<
         set -euxo pipefail
 
-        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy
+        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy pyarrow
 
-        python - --input_path ~{annotated_vcf} \
+        # Safely rename the GLIMPSE2 'INFO' tag to 'IMPINFO' to bypass scikit-allel keyword collisions
+        echo 'INFO/INFO INFO/IMPINFO' > rename.txt
+        bcftools annotate --threads $(nproc) --rename-annots rename.txt -Ob -o safe.bcf ~{annotated_vcf}
+
+        python - --input_path safe.bcf \
                  --ped_path ~{pedigree} \
                  --output_prefix ~{output_prefix} \
                  --chunk_size ~{chunk_size} <<-'EOF'
@@ -190,6 +194,7 @@ task CalculateMendelianMetrics {
         def process_vcf_in_chunks(input_path, valid_trios, subset_samples, chunk_size, num_trios):
             agg_results = {}
             
+            # Use IMPINFO exactly as mapped by the bash tag renamer
             fields_to_extract = [
                 'calldata/GT', 
                 'calldata/GP', 
@@ -198,7 +203,7 @@ task CalculateMendelianMetrics {
                 'variants/ALT', 
                 'variants/AF', 
                 'variants/TRH',
-                'variants/INFO',
+                'variants/IMPINFO',
                 'variants/altlen',
                 'variants/is_snp'
             ]
@@ -254,10 +259,10 @@ task CalculateMendelianMetrics {
                     trhs = chunk['variants/TRH']
                     trhs = (trhs[:, 0] if trhs.ndim > 1 else trhs).astype(bool)
 
-                    # Safely extract INFO filter mask if present
+                    # Safely extract renamed IMPINFO filter mask
                     info_mask = np.ones(len(length), dtype=bool)
-                    if 'variants/INFO' in chunk:
-                        info_scores = chunk['variants/INFO']
+                    if 'variants/IMPINFO' in chunk:
+                        info_scores = chunk['variants/IMPINFO']
                         info_scores = info_scores[:, 0] if info_scores.ndim > 1 else info_scores
                         info_mask = np.nan_to_num(info_scores, nan=0.0) >= 0.5
 
