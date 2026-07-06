@@ -245,6 +245,10 @@ task PlotResults {
     command <<<
         set -euox pipefail
 
+        # Write file paths to list files to prevent "Argument list too long" errors
+        cat ~{write_lines(rsquare_grp_files)} > rsquare_files.list
+        cat ~{write_lines(error_spl_files)} > error_files.list
+
         cat << 'EOF' > plot_script.py
         import sys
         import os
@@ -252,10 +256,16 @@ task PlotResults {
         import matplotlib.pyplot as plt
         import seaborn as sns
 
-        rsquare_files = sys.argv[1].split(',')
-        error_files = sys.argv[2].split(',')
+        # Read files from the written lists
+        with open(sys.argv[1], 'r') as f:
+            rsquare_files = [line.strip() for line in f if line.strip()]
+            
+        with open(sys.argv[2], 'r') as f:
+            error_files = [line.strip() for line in f if line.strip()]
+
         panel_name = sys.argv[3]
         imputed_name = sys.argv[4]
+        output_prefix = sys.argv[5]
 
         # 1. Load Dosage R2 Data
         r2_vs_af_df_values = []
@@ -352,8 +362,8 @@ task PlotResults {
                     length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[0, 50)', 'SV_INS': '[50, inf)'}[length_bin]
                     ax[i].set_xlabel(f'\n\n{length_bin_label}', fontsize=12)
 
-            plt.savefig(f'{sys.argv[5]}.{trh_bin}.r2.png', bbox_inches='tight')
-            plt.savefig(f'{sys.argv[5]}.{trh_bin}.r2.pdf', bbox_inches='tight')
+            plt.savefig(f'{output_prefix}.{trh_bin}.r2.png', bbox_inches='tight')
+            plt.savefig(f'{output_prefix}.{trh_bin}.r2.pdf', bbox_inches='tight')
             plt.close()
 
         # 5. Generate Error Plots
@@ -383,12 +393,12 @@ task PlotResults {
                 plt.legend(loc='lower center', fontsize=8)
             
             plt.tight_layout()
-            plt.savefig(f'{sys.argv[5]}.{trh_bin}.nrd.png', bbox_inches='tight')
-            plt.savefig(f'{sys.argv[5]}.{trh_bin}.nrd.pdf', bbox_inches='tight')
+            plt.savefig(f'{output_prefix}.{trh_bin}.nrd.png', bbox_inches='tight')
+            plt.savefig(f'{output_prefix}.{trh_bin}.nrd.pdf', bbox_inches='tight')
             plt.close()
         EOF
 
-        python3 plot_script.py "~{sep=',' rsquare_grp_files}" "~{sep=',' error_spl_files}" "~{panel_name}" "~{imputed_name}" "~{output_prefix}"
+        python3 plot_script.py rsquare_files.list error_files.list "~{panel_name}" "~{imputed_name}" "~{output_prefix}"
     >>>
 
     output {
