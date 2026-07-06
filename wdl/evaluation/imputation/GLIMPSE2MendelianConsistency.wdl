@@ -43,7 +43,9 @@ workflow MendelianConsistency {
 
         # Generate Per-Chromosome Plots
         call PlotMendelianMetrics as PlotMetricsPerChrom { input:
-            pkl_files = [CalculateMendelianMetrics.results_pkl],
+            unfiltered_pkls = [CalculateMendelianMetrics.unfiltered_pkl],
+            filtered_pkls = [CalculateMendelianMetrics.filtered_pkl],
+            info05_pkls = [CalculateMendelianMetrics.info05_pkl],
             pedigree = pedigree,
             output_prefix = output_prefix + "." + idx
         }
@@ -51,17 +53,19 @@ workflow MendelianConsistency {
 
     # Generate Aggregate Plots
     call PlotMendelianMetrics as PlotMetricsAggregate { input:
-        pkl_files = CalculateMendelianMetrics.results_pkl,
+        unfiltered_pkls = CalculateMendelianMetrics.unfiltered_pkl,
+        filtered_pkls = CalculateMendelianMetrics.filtered_pkl,
+        info05_pkls = CalculateMendelianMetrics.info05_pkl,
         pedigree = pedigree,
         output_prefix = output_prefix + ".aggregate"
     }
 
     output {
-        Array[File] mendelian_aggregate_plots_pdf = [PlotMetricsAggregate.trio_plot_inTRH_pdf, PlotMetricsAggregate.trio_plot_outTRH_pdf, PlotMetricsAggregate.locus_plot_inTRH_pdf, PlotMetricsAggregate.locus_plot_outTRH_pdf]
-        Array[File] mendelian_aggregate_plots_png = [PlotMetricsAggregate.trio_plot_inTRH_png, PlotMetricsAggregate.trio_plot_outTRH_png, PlotMetricsAggregate.locus_plot_inTRH_png, PlotMetricsAggregate.locus_plot_outTRH_png]
+        Array[File] aggregate_plots_pdf = [PlotMetricsAggregate.trio_plot_inTRH_pdf, PlotMetricsAggregate.trio_plot_outTRH_pdf, PlotMetricsAggregate.locus_plot_inTRH_pdf, PlotMetricsAggregate.locus_plot_outTRH_pdf]
+        Array[File] aggregate_plots_png = [PlotMetricsAggregate.trio_plot_inTRH_png, PlotMetricsAggregate.trio_plot_outTRH_png, PlotMetricsAggregate.locus_plot_inTRH_png, PlotMetricsAggregate.locus_plot_outTRH_png]
         
-        Array[File] mendelian_per_chrom_plots_pdf = flatten([PlotMetricsPerChrom.trio_plot_inTRH_pdf, PlotMetricsPerChrom.trio_plot_outTRH_pdf, PlotMetricsPerChrom.locus_plot_inTRH_pdf, PlotMetricsPerChrom.locus_plot_outTRH_pdf])
-        Array[File] mendelian_per_chrom_plots_png = flatten([PlotMetricsPerChrom.trio_plot_inTRH_png, PlotMetricsPerChrom.trio_plot_outTRH_png, PlotMetricsPerChrom.locus_plot_inTRH_png, PlotMetricsPerChrom.locus_plot_outTRH_png])
+        Array[File] per_chrom_plots_pdf = flatten([PlotMetricsPerChrom.trio_plot_inTRH_pdf, PlotMetricsPerChrom.trio_plot_outTRH_pdf, PlotMetricsPerChrom.locus_plot_inTRH_pdf, PlotMetricsPerChrom.locus_plot_outTRH_pdf])
+        Array[File] per_chrom_plots_png = flatten([PlotMetricsPerChrom.trio_plot_inTRH_png, PlotMetricsPerChrom.trio_plot_outTRH_png, PlotMetricsPerChrom.locus_plot_inTRH_png, PlotMetricsPerChrom.locus_plot_outTRH_png])
     }
 }
 
@@ -154,7 +158,6 @@ task CalculateMendelianMetrics {
         import sys
         import time
         import subprocess
-        import pickle
         from datetime import timedelta
         import warnings
 
@@ -195,6 +198,7 @@ task CalculateMendelianMetrics {
                 'variants/ALT', 
                 'variants/AF', 
                 'variants/TRH',
+                'variants/INFO',
                 'variants/altlen',
                 'variants/is_snp'
             ]
@@ -235,7 +239,7 @@ task CalculateMendelianMetrics {
                     len_bins = np.full(len(length), 'UNKNOWN', dtype=object)
                     len_bins[is_snp] = 'SNP'
                     len_bins[(50 <= length)] = '[50, inf)'
-                    len_bins[(0 <= length) & (length < 50) & ~is_snp] = '[0, 50)'   # unlike Phase 1, include non-SNP substitutions
+                    len_bins[(0 <= length) & (length < 50) & ~is_snp] = '[0, 50)'
                     len_bins[(-50 < length) & (length <= -1)] = '(-50, -1]'
                     len_bins[(length <= -50)] = '(-inf, -50]'
                     
@@ -249,6 +253,13 @@ task CalculateMendelianMetrics {
                     
                     trhs = chunk['variants/TRH']
                     trhs = (trhs[:, 0] if trhs.ndim > 1 else trhs).astype(bool)
+
+                    # Safely extract INFO filter mask if present
+                    info_mask = np.ones(len(length), dtype=bool)
+                    if 'variants/INFO' in chunk:
+                        info_scores = chunk['variants/INFO']
+                        info_scores = info_scores[:, 0] if info_scores.ndim > 1 else info_scores
+                        info_mask = np.nan_to_num(info_scores, nan=0.0) >= 0.5
 
                     GT_base = chunk['calldata/GT']
                     
@@ -274,17 +285,26 @@ task CalculateMendelianMetrics {
                     is_hom_ref_base = (P0 == 0) & (P1 == 0) & (F0 == 0) & (F1 == 0) & (M0 == 0) & (M1 == 0)
                     has_missing_base = (P0 == -1) | (P1 == -1) | (F0 == -1) | (F1 == -1) | (M0 == -1) | (M1 == -1)
 
-                    for min_gp in [0.0, 0.9]:
-                        if min_gp > 0:
-                            p_mask = ~np.greater(max_gp[:, proband_idx], min_gp)
-                            f_mask = ~np.greater(max_gp[:, father_idx], min_gp)
-                            m_mask = ~np.greater(max_gp[:, mother_idx], min_gp)
+                    for filter_condition in ['unfiltered', 'GP09', 'INFO05']:
+                        if filter_condition == 'GP09':
+                            p_mask = ~np.greater(max_gp[:, proband_idx], 0.9)
+                            f_mask = ~np.greater(max_gp[:, father_idx], 0.9)
+                            m_mask = ~np.greater(max_gp[:, mother_idx], 0.9)
                             has_missing = has_missing_base | p_mask | f_mask | m_mask
+                            variant_mask = np.ones(len(length), dtype=bool)
+                        elif filter_condition == 'INFO05':
+                            has_missing = has_missing_base
+                            variant_mask = info_mask
                         else:
                             has_missing = has_missing_base
+                            variant_mask = np.ones(len(length), dtype=bool)
                         
                         non_hom_ref = ~is_hom_ref_base & ~has_missing
                         errors = is_error_base & non_hom_ref
+                        
+                        # Apply variant-level mask to ignore subsets of variants completely
+                        non_hom_ref = non_hom_ref & variant_mask[:, np.newaxis]
+                        errors = errors & variant_mask[:, np.newaxis]
                         
                         locus_errors = errors.sum(axis=1)
                         locus_nhr = non_hom_ref.sum(axis=1)
@@ -295,7 +315,7 @@ task CalculateMendelianMetrics {
                         for key, indices in groups.groups.items():
                             if 'UNKNOWN' in key: continue
                                 
-                            full_key = (*key, min_gp)
+                            full_key = (*key, filter_condition)
                             if full_key not in agg_results:
                                 agg_results[full_key] = {
                                     'errors_per_trio': np.zeros(num_trios, dtype=int),
@@ -320,6 +340,32 @@ task CalculateMendelianMetrics {
             total_elapsed = str(timedelta(seconds=int(time.time() - start_time)))
             print(f"\nFinished processing {total_records:,} records in {total_elapsed}.")
             return agg_results
+
+        def save_pickles(agg_results, output_prefix):
+            rows_unfilt, rows_gp09, rows_info05 = [], [], []
+            for key, res in agg_results.items():
+                af_bin, len_bin, in_trh, filter_condition = key
+                row = {
+                    'AF_BIN': af_bin,
+                    'LENGTH_BIN': len_bin,
+                    'IN_TRH': in_trh,
+                    'ERROR_VT': res['errors_per_trio'],
+                    'NON_HOM_REF_VT': res['nhr_per_trio'],
+                    'LOCUS_RATES': res['locus_rates'],
+                    'NUM_LOCI': res['n_loci']
+                }
+                if filter_condition == 'unfiltered': rows_unfilt.append(row)
+                elif filter_condition == 'GP09': rows_gp09.append(row)
+                elif filter_condition == 'INFO05': rows_info05.append(row)
+            
+            cols = ['AF_BIN', 'LENGTH_BIN', 'IN_TRH', 'ERROR_VT', 'NON_HOM_REF_VT', 'LOCUS_RATES', 'NUM_LOCI']
+            df_unfilt = pd.DataFrame(rows_unfilt) if rows_unfilt else pd.DataFrame(columns=cols)
+            df_gp09 = pd.DataFrame(rows_gp09) if rows_gp09 else pd.DataFrame(columns=cols)
+            df_info05 = pd.DataFrame(rows_info05) if rows_info05 else pd.DataFrame(columns=cols)
+            
+            df_unfilt.to_pickle(f"{output_prefix}-unfiltered.pkl")
+            df_gp09.to_pickle(f"{output_prefix}-filtered-0.9.pkl")
+            df_info05.to_pickle(f"{output_prefix}-filtered-info0.5.pkl")
 
         def main(args=None):
             parser = argparse.ArgumentParser()
@@ -347,10 +393,7 @@ task CalculateMendelianMetrics {
             agg_results = process_vcf_in_chunks(
                 args.input_path, trios, subset_samples, args.chunk_size, num_trios
             )
-            
-            export_data = {'num_trios': num_trios, 'agg_results': agg_results}
-            with open(f"{args.output_prefix}.pkl", "wb") as f:
-                pickle.dump(export_data, f)
+            save_pickles(agg_results, args.output_prefix)
 
         if __name__ == "__main__":
             main()
@@ -358,7 +401,9 @@ task CalculateMendelianMetrics {
     >>>
 
     output {
-        File results_pkl = "~{output_prefix}.pkl"
+        File unfiltered_pkl = "~{output_prefix}-unfiltered.pkl"
+        File filtered_pkl = "~{output_prefix}-filtered-0.9.pkl"
+        File info05_pkl = "~{output_prefix}-filtered-info0.5.pkl"
     }
 
     #########################
@@ -386,52 +431,64 @@ task CalculateMendelianMetrics {
 
 task PlotMendelianMetrics {
     input {
-        Array[File] pkl_files
+        Array[File] unfiltered_pkls
+        Array[File] filtered_pkls
+        Array[File] info05_pkls
         File pedigree
         String output_prefix
 
         RuntimeAttr? runtime_attr_override
     }
     
-    Int disk_gb = 10 + ceil(size(pkl_files, "GiB"))
+    Int disk_gb = 10 + ceil(size(unfiltered_pkls, "GiB") + size(filtered_pkls, "GiB") + size(info05_pkls, "GiB"))
     
     command <<<
         set -euxo pipefail
         
-        conda install -y -c bioconda -c conda-forge pandas numpy "matplotlib<=3.10" seaborn
+        conda install -y -c bioconda -c conda-forge pandas numpy matplotlib seaborn
         
-        python - "~{sep=',' pkl_files}" "~{output_prefix}" <<-'EOF'
+        python - "~{sep=',' unfiltered_pkls}" "~{sep=',' filtered_pkls}" "~{sep=',' info05_pkls}" "~{pedigree}" "~{output_prefix}" <<-'EOF'
         import sys
         import pandas as pd
         import numpy as np
         import matplotlib.pyplot as plt
         import seaborn as sns
         import warnings
-        import pickle
 
-        pkl_paths = [f for f in sys.argv[1].split(',') if f.strip()]
-        output_prefix = sys.argv[2]
+        unfiltered_files = [f for f in sys.argv[1].split(',') if f.strip()]
+        filtered_files = [f for f in sys.argv[2].split(',') if f.strip()]
+        info05_files = [f for f in sys.argv[3].split(',') if f.strip()]
+        pedigree_path = sys.argv[4]
+        output_prefix = sys.argv[5]
 
-        agg_results = {}
-        num_trios = 0
-        
-        for f in pkl_paths:
-            with open(f, 'rb') as fp:
-                data = pickle.load(fp)
-                if num_trios == 0: num_trios = data['num_trios']
-                
-                for key, res in data['agg_results'].items():
-                    if key not in agg_results:
-                        agg_results[key] = {
-                            'errors_per_trio': np.zeros(num_trios, dtype=int),
-                            'nhr_per_trio': np.zeros(num_trios, dtype=int),
-                            'locus_rates': [],
-                            'n_loci': 0
-                        }
-                    agg_results[key]['errors_per_trio'] += res['errors_per_trio']
-                    agg_results[key]['nhr_per_trio'] += res['nhr_per_trio']
-                    agg_results[key]['locus_rates'].extend(res['locus_rates'])
-                    agg_results[key]['n_loci'] += res['n_loci']
+        test_df = pd.read_pickle(unfiltered_files[0]) if unfiltered_files else pd.DataFrame()
+        num_trios = len(test_df.iloc[0]['ERROR_VT']) if not test_df.empty else 0
+
+        def aggregate_pkls(file_list, min_gp):
+            combined_rows = []
+            for f in file_list:
+                df = pd.read_pickle(f)
+                if df.empty: continue
+                combined_rows.extend(df.to_dict('records'))
+            
+            if not combined_rows: return {}
+            combined_df = pd.DataFrame(combined_rows)
+            
+            agg_results = {}
+            for key, group in combined_df.groupby(['AF_BIN', 'LENGTH_BIN', 'IN_TRH']):
+                agg_results[(*key, min_gp)] = {
+                    'errors_per_trio': np.sum(group['ERROR_VT'].values, axis=0),
+                    'nhr_per_trio': np.sum(group['NON_HOM_REF_VT'].values, axis=0),
+                    'locus_rates': [rate for rates in group['LOCUS_RATES'] for rate in rates],
+                    'n_loci': group['NUM_LOCI'].sum()
+                }
+            return agg_results
+
+        agg_results = {
+            **aggregate_pkls(unfiltered_files, 'unfiltered'), 
+            **aggregate_pkls(filtered_files, 'GP09'),
+            **aggregate_pkls(info05_files, 'INFO05')
+        }
 
         def generate_plots(agg_results, num_trios, output_prefix):
             print("Generating plots...")
@@ -450,8 +507,8 @@ task PlotMendelianMetrics {
                     for i, af_bin_label in enumerate(af_bin_labels):
                         plt_df_values = []
                         for j, length_bin_label in enumerate(length_bin_labels):
-                            for g, min_tar_gp in enumerate([0.0, 0.9]):
-                                key = (af_bin_label, length_bin_label, in_trh, min_tar_gp)
+                            for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
+                                key = (af_bin_label, length_bin_label, in_trh, filter_condition)
                                 if key in agg_results:
                                     res = agg_results[key]
                                     errs = res['errors_per_trio']
@@ -460,8 +517,17 @@ task PlotMendelianMetrics {
                                     error_rates_per_trio = np.divide(errs, nhr, out=np.full(num_trios, np.nan), where=(nhr > 0))
                                     mean_num_non_hom_ref = nhr.mean()
                                     
-                                    min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
-                                    len_text = g * '\n' + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$' + ('\n\n\n' + length_bin_label if g == 1 else '')
+                                    if filter_condition == 'unfiltered':
+                                        min_tar_gp_label = 'unfiltered'
+                                    elif filter_condition == 'GP09':
+                                        min_tar_gp_label = 'GP > 0.9'
+                                    else:
+                                        min_tar_gp_label = 'INFO > 0.5'
+                                    
+                                    spacing = '\n' * (g + 1)
+                                    len_text = spacing + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$'
+                                    if g == 2:
+                                        len_text += '\n\n' + length_bin_label
                                     
                                     plt_df_values.extend(
                                         [[min_tar_gp_label, len_text, error_rates_per_trio[t]]
@@ -470,8 +536,9 @@ task PlotMendelianMetrics {
                                         
                         if plt_df_values:
                             plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
-                            sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=i==2)
-                            
+                            hue_order = ['unfiltered', 'GP > 0.9', 'INFO > 0.5']
+                            sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', hue_order=hue_order, ax=ax[i], legend=i==2)
+
                             ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
                             ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n')
                                              + f'{af_bin_label}\n\n' + ('Mendelian error rate per trio' if i == 1 else ''))
@@ -488,8 +555,8 @@ task PlotMendelianMetrics {
                                 ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                     
                     plt.tight_layout()
-                    plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.png")
-                    plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.pdf")
+                    plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.png", bbox_inches='tight')
+                    plt.savefig(f"{output_prefix}.trio.{'inTRH' if in_trh else 'outTRH'}.pdf", bbox_inches='tight')
                     plt.close()
 
                 # 2. Per-Locus Boxplot
@@ -501,16 +568,26 @@ task PlotMendelianMetrics {
                     for i, af_bin_label in enumerate(af_bin_labels):
                         plt_df_values = []
                         for j, length_bin_label in enumerate(length_bin_labels):
-                            for g, min_tar_gp in enumerate([0.0, 0.9]):
-                                key = (af_bin_label, length_bin_label, in_trh, min_tar_gp)
+                            for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
+                                key = (af_bin_label, length_bin_label, in_trh, filter_condition)
                                 if key in agg_results:
                                     res = agg_results[key]
                                     error_rates_per_locus = res['locus_rates']
                                     num_loci = len(error_rates_per_locus)
                                     
                                     mean_num_non_hom_ref_trios = res['nhr_per_trio'].sum() / max(num_loci, 1)
-                                    min_tar_gp_label = 'unfiltered' if min_tar_gp == 0 else f'GP > {min_tar_gp}'
-                                    len_text = g * '\n\n' + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}' + f'\n$N_{{l}}={num_loci}$' + ('\n\n\n\n' + length_bin_label if g == 1 else '')
+                                    
+                                    if filter_condition == 'unfiltered':
+                                        min_tar_gp_label = 'unfiltered'
+                                    elif filter_condition == 'GP09':
+                                        min_tar_gp_label = 'GP > 0.9'
+                                    else:
+                                        min_tar_gp_label = 'INFO > 0.5'
+                                    
+                                    spacing = '\n' * (g + 1)
+                                    len_text = spacing + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}\n$N_{{l}}={num_loci}$'
+                                    if g == 2:
+                                        len_text += '\n\n' + length_bin_label
 
                                     plt_df_values.extend(
                                         [[min_tar_gp_label, len_text, rate] for rate in error_rates_per_locus]
@@ -518,8 +595,9 @@ task PlotMendelianMetrics {
 
                         if plt_df_values:
                             plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
-                            sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', ax=ax[i], legend=i==2)
-                            
+                            hue_order = ['unfiltered', 'GP > 0.9', 'INFO > 0.5']
+                            sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', hue_order=hue_order, ax=ax[i], legend=i==2)
+
                             ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
                             ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n')
                                              + f'{af_bin_label}\n\n' + ('Mendelian error rate per locus' if i == 1 else ''))
@@ -536,8 +614,8 @@ task PlotMendelianMetrics {
                                 ax[i].legend(handles=handles, labels=labels, loc='upper center', fontsize=8)
                     
                     plt.tight_layout()
-                    plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.png")
-                    plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.pdf")
+                    plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.png", bbox_inches='tight')
+                    plt.savefig(f"{output_prefix}.locus.{'inTRH' if in_trh else 'outTRH'}.pdf", bbox_inches='tight')
                     plt.close()
 
         generate_plots(agg_results, num_trios, output_prefix)

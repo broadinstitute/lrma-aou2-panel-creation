@@ -119,7 +119,6 @@ task AnnotateImputed {
         File annotated_vcf_idx = "~{output_prefix}.imputed.annotated.bcf.csi"
     }
 
-    #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
         mem_gb:             8,
@@ -177,6 +176,7 @@ task FilterAndConcordance {
 
         echo "Filtering with: $TRH_EXP & $LEN_EXP"
 
+        # 1. Unfiltered and GP>0.9 Evaluations
         bcftools view ~{annotated_bcf} \
             -i "$TRH_EXP & $LEN_EXP" \
             --threads $(nproc) \
@@ -196,6 +196,24 @@ task FilterAndConcordance {
             --input ~{output_prefix}.concordance-input.txt \
             --threads $(nproc) \
             --output ~{output_prefix}.concordance-result
+
+        # 2. INFO>0.5 Evaluations
+        bcftools view ~{output_prefix}.bcf \
+            -i 'INFO/INFO>0.5' \
+            --threads $(nproc) \
+            --write-index=csi -Ob -o ~{output_prefix}.INFO05.bcf
+
+        echo "~{region} ~{panel_vcf} ~{panel_vcf} ~{output_prefix}.INFO05.bcf" > ~{output_prefix}.INFO05.concordance-input.txt
+
+        ./GLIMPSE2_concordance_static \
+            --min-tar-gp 0.0 \
+            --gt-val \
+            --use-alt-af \
+            --out-r2-per-site \
+            --bins 0.00001 0.00002 0.00005 0.0001 0.0002 0.0005 0.001 0.002 0.005 0.01 0.02 0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 0.95 0.99 0.995 0.999 1.0 \
+            --input ~{output_prefix}.INFO05.concordance-input.txt \
+            --threads $(nproc) \
+            --output ~{output_prefix}.INFO05.concordance-result
     >>>
 
     output {
@@ -206,7 +224,6 @@ task FilterAndConcordance {
         Array[File] error_cal_files = glob("*.error.cal.txt.gz")
     }
 
-    #########################
     RuntimeAttr default_attr = object {
         cpu_cores:          4,
         mem_gb:             32,
@@ -276,26 +293,35 @@ task PlotResults {
             
             parts = filename.split('_GPfilt_')
             prefix_parts = parts[0].split('.')
-            length_bin = prefix_parts[-2]
-            trh_bin = prefix_parts[-3]
+            is_info05 = 'INFO05' in prefix_parts
+            
+            if is_info05:
+                length_bin = prefix_parts[-3]
+                trh_bin = prefix_parts[-4]
+                label_type = 'INFO05'
+            else:
+                length_bin = prefix_parts[-2]
+                trh_bin = prefix_parts[-3]
+                label_type = 'NORMAL'
+                
             min_tar_gp = float(parts[1].split('.rsquare')[0])
 
             df = pd.read_csv(filepath, sep=' ', comment='#', names=['AF_BIN_INDEX', 'AF_BIN_COUNT', 'AF_BIN_MEAN', 'R2_GT', 'R2_DS'])
             for _, row in df.iterrows():
                 if row['AF_BIN_COUNT'] > 0:
                     r2_vs_af_df_values.append([
-                        trh_bin, length_bin, min_tar_gp, 
+                        trh_bin, length_bin, min_tar_gp, label_type,
                         int(row['AF_BIN_INDEX']), row['AF_BIN_COUNT'], row['AF_BIN_MEAN'], row['R2_DS']
                     ])
 
-        r2_vs_af_df = pd.DataFrame(r2_vs_af_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_INDEX', 'AF_BIN_COUNT', 'AF_BIN_MEAN', 'R2_DS'])
+        r2_vs_af_df = pd.DataFrame(r2_vs_af_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'LABEL_TYPE', 'AF_BIN_INDEX', 'AF_BIN_COUNT', 'AF_BIN_MEAN', 'R2_DS'])
         
         # Statistically aggregate across regions using a weighted average
         if not r2_vs_af_df.empty:
             r2_vs_af_df['WEIGHTED_R2'] = r2_vs_af_df['R2_DS'] * r2_vs_af_df['AF_BIN_COUNT']
             r2_vs_af_df['WEIGHTED_AF'] = r2_vs_af_df['AF_BIN_MEAN'] * r2_vs_af_df['AF_BIN_COUNT']
             
-            r2_vs_af_df = r2_vs_af_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_INDEX']).agg({
+            r2_vs_af_df = r2_vs_af_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'LABEL_TYPE', 'AF_BIN_INDEX']).agg({
                 'AF_BIN_COUNT': 'sum',
                 'WEIGHTED_R2': 'sum',
                 'WEIGHTED_AF': 'sum'
@@ -313,8 +339,17 @@ task PlotResults {
             
             parts = filename.split('_GPfilt_')
             prefix_parts = parts[0].split('.')
-            length_bin = prefix_parts[-2]
-            trh_bin = prefix_parts[-3]
+            is_info05 = 'INFO05' in prefix_parts
+            
+            if is_info05:
+                length_bin = prefix_parts[-3]
+                trh_bin = prefix_parts[-4]
+                label_type = 'INFO05'
+            else:
+                length_bin = prefix_parts[-2]
+                trh_bin = prefix_parts[-3]
+                label_type = 'NORMAL'
+                
             min_tar_gp = float(parts[1].split('.error')[0])
 
             cols = 'GCsV id sample_name #val_gt_RR #val_gt_RA #val_gt_AA #filtered_gp RR_hom_matches RA_het_matches AA_hom_matches RR_hom_mismatches RA_het_mismatches AA_hom_mismatches RR_hom_mismatches_rate_percent RA_het_mismatches_rate_percent AA_hom_mimatches non_reference_discordanc_rate_percent best_gt_rsquared imputed_ds_rsquared'.split(' ')
@@ -328,17 +363,17 @@ task PlotResults {
                 nrd = float(row['non_reference_discordanc_rate_percent'])
                 
                 sample_df_values.append([
-                    trh_bin, length_bin, min_tar_gp, row['sample_name'], 
+                    trh_bin, length_bin, min_tar_gp, label_type, row['sample_name'], 
                     n_nonref, nrd
                 ])
 
-        sample_df = pd.DataFrame(sample_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name', 'N_NONREF', 'NRD'])
+        sample_df = pd.DataFrame(sample_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'LABEL_TYPE', 'sample_name', 'N_NONREF', 'NRD'])
         
         # Statistically aggregate across regions using a weighted average
         if not sample_df.empty:
             sample_df['WEIGHTED_NRD'] = sample_df['NRD'] * sample_df['N_NONREF']
             
-            sample_df = sample_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name']).agg({
+            sample_df = sample_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'LABEL_TYPE', 'sample_name']).agg({
                 'N_NONREF': 'sum',
                 'WEIGHTED_NRD': 'sum'
             }).reset_index()
@@ -360,16 +395,22 @@ task PlotResults {
             fig, ax = plt.subplots(1, 5, figsize=(10, 2))
             for i, length_bin in enumerate(['SV_DEL', 'DEL', 'SNP', 'INS', 'SV_INS']):
                 ax2 = ax[i].twinx()
-                for min_tar_gp in [0.0, 0.9]:
-                    label = 'unfiltered' if min_tar_gp == 0.0 else f'GP > {min_tar_gp}'
+                for label_type, min_tar_gp in [('NORMAL', 0.0), ('NORMAL', 0.9), ('INFO05', 0.0)]:
+                    if label_type == 'INFO05':
+                        label = 'INFO > 0.5'
+                        ls_val = 'dashed'
+                    else:
+                        label = 'unfiltered' if min_tar_gp == 0.0 else f'GP > {min_tar_gp}'
+                        ls_val = 'solid' if min_tar_gp == 0.0 else 'dotted'
+                        
                     if not r2_vs_af_df.empty:
-                        x = (r2_vs_af_df['TRH_BIN'] == trh_bin) & (r2_vs_af_df['LENGTH_BIN'] == length_bin) & (r2_vs_af_df['MIN_TAR_GP'] == min_tar_gp)
+                        x = (r2_vs_af_df['TRH_BIN'] == trh_bin) & (r2_vs_af_df['LENGTH_BIN'] == length_bin) & (r2_vs_af_df['MIN_TAR_GP'] == min_tar_gp) & (r2_vs_af_df['LABEL_TYPE'] == label_type)
                         
                         if not r2_vs_af_df[x].empty:
                             ax[i].plot(r2_vs_af_df[x]['AF_BIN_MEAN'], r2_vs_af_df[x]['R2_DS'], label=label, 
-                                       ls={'unfiltered': 'solid', 'GP > 0.9': 'dotted'}[label], color='C0')
+                                       ls=ls_val, color='C0')
                             ax2.plot(r2_vs_af_df[x]['AF_BIN_MEAN'], r2_vs_af_df[x]['AF_BIN_COUNT'], label=label, 
-                                     ls={'unfiltered': 'solid', 'GP > 0.9': 'dotted'}[label], color='C1')
+                                     ls=ls_val, color='C1')
 
                 ax[i].set_xscale('log')
                 ax[i].set_xlim([1E-4, 1])
@@ -411,10 +452,14 @@ task PlotResults {
             plt_df_values = []
             for length_bin in ['SV_DEL', 'DEL', 'SNP', 'INS', 'SV_INS']:
                 length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[0, 50)', 'SV_INS': '[50, inf)'}[length_bin]
-                for min_tar_gp in [0.0, 0.9]:
-                    min_tar_gp_label = 'unfiltered' if min_tar_gp == 0.0 else f'GP > {min_tar_gp}'
+                for label_type, min_tar_gp in [('NORMAL', 0.0), ('NORMAL', 0.9), ('INFO05', 0.0)]:
+                    if label_type == 'INFO05':
+                        min_tar_gp_label = 'INFO > 0.5'
+                    else:
+                        min_tar_gp_label = 'unfiltered' if min_tar_gp == 0.0 else f'GP > {min_tar_gp}'
+                        
                     if not sample_df.empty:
-                        x = (sample_df['TRH_BIN'] == trh_bin) & (sample_df['LENGTH_BIN'] == length_bin) & (sample_df['MIN_TAR_GP'] == min_tar_gp)
+                        x = (sample_df['TRH_BIN'] == trh_bin) & (sample_df['LENGTH_BIN'] == length_bin) & (sample_df['MIN_TAR_GP'] == min_tar_gp) & (sample_df['LABEL_TYPE'] == label_type)
                         bin_df = sample_df[x]
                         
                         for s in range(bin_df.shape[0]):
@@ -422,11 +467,22 @@ task PlotResults {
 
             if plt_df_values:
                 plt_df = pd.DataFrame(plt_df_values, columns=['LENGTH_BIN_TEXT', 'MIN_TAR_GP_TEXT', 'non_reference_discordanc_rate_percent'])
-                sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='non_reference_discordanc_rate_percent', hue='MIN_TAR_GP_TEXT', ax=ax)
+                hue_order = ['unfiltered', 'GP > 0.9', 'INFO > 0.5']
+                sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='non_reference_discordanc_rate_percent', hue='MIN_TAR_GP_TEXT', hue_order=hue_order, ax=ax)
+                
+                # Apply dashed borders to INFO>0.5 boxes (the last third of drawn patches)
+                for j, box in enumerate(ax.patches):
+                    if j >= 10:
+                        box.set_linestyle('dashed')
+                        
                 ax.set_xlabel('ALT length - REF length (bp)', fontsize=8)
                 ax.set_ylabel('non-reference concordance rate', fontsize=8)
                 ax.set_ylim([0, 1.01])
-                plt.legend(loc='lower center', fontsize=8)
+                
+                handles, labels = ax.get_legend_handles_labels()
+                if len(handles) > 2:
+                    handles[2].set_linestyle('dashed')
+                ax.legend(handles=handles, labels=labels, loc='lower center', fontsize=8)
             
             plt.tight_layout()
             plt.savefig(f'{output_prefix}.{trh_bin}.nrd.png', bbox_inches='tight')
