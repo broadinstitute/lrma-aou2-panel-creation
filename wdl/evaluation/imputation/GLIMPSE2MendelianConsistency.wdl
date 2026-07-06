@@ -147,11 +147,10 @@ task CalculateMendelianMetrics {
 
         conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy pyarrow
 
-        # Safely rename the GLIMPSE2 'INFO' tag to 'IMPINFO' to bypass scikit-allel keyword collisions
+        # Create mapping file to safely rename the GLIMPSE2 'INFO' tag on-the-fly 
         echo 'INFO/INFO INFO/IMPINFO' > rename.txt
-        bcftools annotate --threads $(nproc) --rename-annots rename.txt -Ob -o safe.bcf ~{annotated_vcf}
 
-        python - --input_path safe.bcf \
+        python - --input_path ~{annotated_vcf} \
                  --ped_path ~{pedigree} \
                  --output_prefix ~{output_prefix} \
                  --chunk_size ~{chunk_size} <<-'EOF'
@@ -212,7 +211,9 @@ task CalculateMendelianMetrics {
             total_records = 0
             
             trio_samples_list = ",".join(subset_samples)
-            bcftools_pipeline = f"bcftools view --threads 4 -Ov -s {trio_samples_list} {input_path}"
+            
+            # Subsets samples and uncompresses (-Ou) -> Renames tag and streams uncompressed text (-Ov)
+            bcftools_pipeline = f"bcftools view --threads 2 -Ou -s {trio_samples_list} {input_path} | bcftools annotate --threads 2 --rename-annots rename.txt -Ov"
             
             proc = subprocess.Popen(bcftools_pipeline, shell=True, stdout=subprocess.PIPE)
             vcf_stream = proc.stdout
