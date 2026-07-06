@@ -61,11 +61,11 @@ workflow MendelianConsistency {
     }
 
     output {
-        Array[File] aggregate_plots_pdf = [PlotMetricsAggregate.trio_plot_inTRH_pdf, PlotMetricsAggregate.trio_plot_outTRH_pdf, PlotMetricsAggregate.locus_plot_inTRH_pdf, PlotMetricsAggregate.locus_plot_outTRH_pdf]
-        Array[File] aggregate_plots_png = [PlotMetricsAggregate.trio_plot_inTRH_png, PlotMetricsAggregate.trio_plot_outTRH_png, PlotMetricsAggregate.locus_plot_inTRH_png, PlotMetricsAggregate.locus_plot_outTRH_png]
+        Array[File] mendelian_aggregate_plots_pdf = [PlotMetricsAggregate.trio_plot_inTRH_pdf, PlotMetricsAggregate.trio_plot_outTRH_pdf, PlotMetricsAggregate.locus_plot_inTRH_pdf, PlotMetricsAggregate.locus_plot_outTRH_pdf]
+        Array[File] mendelian_aggregate_plots_png = [PlotMetricsAggregate.trio_plot_inTRH_png, PlotMetricsAggregate.trio_plot_outTRH_png, PlotMetricsAggregate.locus_plot_inTRH_png, PlotMetricsAggregate.locus_plot_outTRH_png]
         
-        Array[File] per_chrom_plots_pdf = flatten([PlotMetricsPerChrom.trio_plot_inTRH_pdf, PlotMetricsPerChrom.trio_plot_outTRH_pdf, PlotMetricsPerChrom.locus_plot_inTRH_pdf, PlotMetricsPerChrom.locus_plot_outTRH_pdf])
-        Array[File] per_chrom_plots_png = flatten([PlotMetricsPerChrom.trio_plot_inTRH_png, PlotMetricsPerChrom.trio_plot_outTRH_png, PlotMetricsPerChrom.locus_plot_inTRH_png, PlotMetricsPerChrom.locus_plot_outTRH_png])
+        Array[File] mendelian_per_chrom_plots_pdf = flatten([PlotMetricsPerChrom.trio_plot_inTRH_pdf, PlotMetricsPerChrom.trio_plot_outTRH_pdf, PlotMetricsPerChrom.locus_plot_inTRH_pdf, PlotMetricsPerChrom.locus_plot_outTRH_pdf])
+        Array[File] mendelian_per_chrom_plots_png = flatten([PlotMetricsPerChrom.trio_plot_inTRH_png, PlotMetricsPerChrom.trio_plot_outTRH_png, PlotMetricsPerChrom.locus_plot_inTRH_png, PlotMetricsPerChrom.locus_plot_outTRH_png])
     }
 }
 
