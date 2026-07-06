@@ -145,7 +145,7 @@ task CalculateMendelianMetrics {
     command <<<
         set -euxo pipefail
 
-        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy
+        conda install -y -c bioconda -c conda-forge pandas numpy "matplotlib<=3.10" seaborn
 
         python - --input_path ~{annotated_vcf} \
                  --ped_path ~{pedigree} \
