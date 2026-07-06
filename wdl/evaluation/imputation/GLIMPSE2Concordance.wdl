@@ -252,6 +252,7 @@ task PlotResults {
         cat << 'EOF' > plot_script.py
         import sys
         import os
+        import numpy as np
         import pandas as pd
         import matplotlib.pyplot as plt
         import seaborn as sns
@@ -282,13 +283,27 @@ task PlotResults {
             df = pd.read_csv(filepath, sep=' ', comment='#', names=['AF_BIN_INDEX', 'AF_BIN_COUNT', 'AF_BIN_MEAN', 'R2_GT', 'R2_DS'])
             for _, row in df.iterrows():
                 if row['AF_BIN_COUNT'] > 0:
-                    r2_vs_af_df_values.append([trh_bin, length_bin, min_tar_gp, row['AF_BIN_COUNT'], row['AF_BIN_MEAN'], row['R2_DS']])
+                    r2_vs_af_df_values.append([
+                        trh_bin, length_bin, min_tar_gp, 
+                        int(row['AF_BIN_INDEX']), row['AF_BIN_COUNT'], row['AF_BIN_MEAN'], row['R2_DS']
+                    ])
 
-        r2_vs_af_df = pd.DataFrame(r2_vs_af_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_COUNT', 'AF_BIN_MEAN', 'R2_DS'])
+        r2_vs_af_df = pd.DataFrame(r2_vs_af_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_INDEX', 'AF_BIN_COUNT', 'AF_BIN_MEAN', 'R2_DS'])
         
-        # Aggregate across regions if combined arrays are passed
+        # Statistically aggregate across regions using a weighted average
         if not r2_vs_af_df.empty:
-            r2_vs_af_df = r2_vs_af_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_MEAN']).agg({'AF_BIN_COUNT': 'sum', 'R2_DS': 'mean'}).reset_index()
+            r2_vs_af_df['WEIGHTED_R2'] = r2_vs_af_df['R2_DS'] * r2_vs_af_df['AF_BIN_COUNT']
+            r2_vs_af_df['WEIGHTED_AF'] = r2_vs_af_df['AF_BIN_MEAN'] * r2_vs_af_df['AF_BIN_COUNT']
+            
+            r2_vs_af_df = r2_vs_af_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'AF_BIN_INDEX']).agg({
+                'AF_BIN_COUNT': 'sum',
+                'WEIGHTED_R2': 'sum',
+                'WEIGHTED_AF': 'sum'
+            }).reset_index()
+            
+            # Recalculate true means from the aggregated weights
+            r2_vs_af_df['R2_DS'] = r2_vs_af_df['WEIGHTED_R2'] / r2_vs_af_df['AF_BIN_COUNT']
+            r2_vs_af_df['AF_BIN_MEAN'] = r2_vs_af_df['WEIGHTED_AF'] / r2_vs_af_df['AF_BIN_COUNT']
 
         # 2. Load Error/Concordance Rate Data
         sample_df_values = []
@@ -307,13 +322,34 @@ task PlotResults {
             
             for _, row in df.iterrows():
                 if row['GCsV'] != 'GCsV': continue
-                sample_df_values.append([trh_bin, length_bin, min_tar_gp, row['sample_name'], float(row['non_reference_discordanc_rate_percent']), float(row['imputed_ds_rsquared'])])
+                
+                # We need the number of non-reference variants to weight the error rate correctly
+                n_nonref = float(row['#val_gt_RA']) + float(row['#val_gt_AA'])
+                nrd = float(row['non_reference_discordanc_rate_percent'])
+                
+                sample_df_values.append([
+                    trh_bin, length_bin, min_tar_gp, row['sample_name'], 
+                    n_nonref, nrd
+                ])
 
-        sample_df = pd.DataFrame(sample_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name', 'non_reference_discordanc_rate_percent', 'imputed_ds_rsquared'])
+        sample_df = pd.DataFrame(sample_df_values, columns=['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name', 'N_NONREF', 'NRD'])
         
-        # Average across regions for the same sample if combined arrays are passed
+        # Statistically aggregate across regions using a weighted average
         if not sample_df.empty:
-            sample_df = sample_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name']).mean().reset_index()
+            sample_df['WEIGHTED_NRD'] = sample_df['NRD'] * sample_df['N_NONREF']
+            
+            sample_df = sample_df.groupby(['TRH_BIN', 'LENGTH_BIN', 'MIN_TAR_GP', 'sample_name']).agg({
+                'N_NONREF': 'sum',
+                'WEIGHTED_NRD': 'sum'
+            }).reset_index()
+            
+            # Recalculate true discordance rate, handling division by zero for sparse samples
+            sample_df['non_reference_discordanc_rate_percent'] = np.where(
+                sample_df['N_NONREF'] > 0, 
+                sample_df['WEIGHTED_NRD'] / sample_df['N_NONREF'], 
+                np.nan
+            )
+            sample_df = sample_df.dropna(subset=['non_reference_discordanc_rate_percent'])
 
         # 3. Calculate metrics for title
         num_samples = sample_df['sample_name'].nunique() if not sample_df.empty else 0
