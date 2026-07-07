@@ -147,8 +147,11 @@ task CalculateMendelianMetrics {
 
         conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy pyarrow
 
-        # Create mapping file to safely rename the GLIMPSE2 'INFO' tag on-the-fly 
-        echo 'INFO/INFO INFO/IMPINFO' > rename.txt
+        # Create mapping file to safely rename the GLIMPSE2 'INFO' tag on-the-fly.
+        # NOTE: --rename-annots takes "old_name new_name"; the new name must be BARE
+        # (no INFO/ prefix), otherwise the resulting tag ID is malformed and cannot be
+        # read back as variants/IMPINFO by scikit-allel.
+        echo 'INFO/INFO IMPINFO' > rename.txt
 
         python - --input_path ~{annotated_vcf} \
                  --ped_path ~{pedigree} \
@@ -260,12 +263,19 @@ task CalculateMendelianMetrics {
                     trhs = chunk['variants/TRH']
                     trhs = (trhs[:, 0] if trhs.ndim > 1 else trhs).astype(bool)
 
-                    # Safely extract renamed IMPINFO filter mask
-                    info_mask = np.ones(len(length), dtype=bool)
-                    if 'variants/IMPINFO' in chunk:
-                        info_scores = chunk['variants/IMPINFO']
-                        info_scores = info_scores[:, 0] if info_scores.ndim > 1 else info_scores
-                        info_mask = np.nan_to_num(info_scores, nan=0.0) >= 0.5
+                    # Extract renamed IMPINFO filter mask.
+                    # Fail loudly if the field is missing rather than silently defaulting
+                    # to all-pass (which would make INFO05 == unfiltered) or all-fail
+                    # (which would silently drop the entire INFO series from the plots).
+                    if 'variants/IMPINFO' not in chunk:
+                        raise RuntimeError(
+                            "IMPINFO field not found after rename. Check that rename.txt "
+                            "produced a bare 'IMPINFO' tag and that the imputed VCF carries "
+                            "a GLIMPSE2 INFO score (see: bcftools query -f '%INFO/INFO\\n')."
+                        )
+                    info_scores = chunk['variants/IMPINFO']
+                    info_scores = info_scores[:, 0] if info_scores.ndim > 1 else info_scores
+                    info_mask = np.nan_to_num(info_scores, nan=0.0) >= 0.5
 
                     GT_base = chunk['calldata/GT']
                     
