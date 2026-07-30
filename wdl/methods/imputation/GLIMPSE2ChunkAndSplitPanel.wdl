@@ -68,7 +68,7 @@ workflow GLIMPSE2ChunkAndSplitPanel {
 
     output {
         File chunked_panel_json = CoercePairsToMap.out_map_json
-        Array[File] panel_chunks_tsvs = GLIMPSE2Chunk.chunks_tsvs
+        Array[File] panel_chunks_tsvs = GLIMPSE2Chunk.chunks_tsv
         Map[String, ChunkedPanelChromosome] chunked_panel = read_json(CoercePairsToMap.out_map_json)
     }
 }
