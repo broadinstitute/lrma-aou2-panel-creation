@@ -53,7 +53,6 @@ workflow GLIMPSE2ChunkAndSplitPanel {
         }
 
         ChunkedPanelChromosome chunked_panel_chromosome = object {
-            chunks_tsv: GLIMPSE2Chunk.chunks_tsv,
             input_regions: input_regions,
             output_regions: output_regions,
             panel_split_chunk_bins: ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin
@@ -85,7 +84,6 @@ struct RuntimeAttr {
 }
 
 struct ChunkedPanelChromosome {
-    String chunks_tsv
     Array[String] input_regions
     Array[String] output_regions
     Array[String] panel_split_chunk_bins
@@ -122,7 +120,6 @@ task GLIMPSE2Chunk {
     >>>
 
     output {
-        File chunks_tsv = "~{output_prefix}.chunks.tsv"
         File input_regions = "~{output_prefix}.input-regions.tsv"
         File output_regions = "~{output_prefix}.output-regions.tsv"
     }
