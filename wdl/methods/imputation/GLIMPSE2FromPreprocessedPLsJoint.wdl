@@ -24,6 +24,15 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # the comment beside it said 2 -- and 24 GiB is sized against a peak measured at 2.
         Int ligate_threads = 2
 
+        # LARGEST REMAINING COST LEVER, and it is not in this file. cpuPlatform is unset, so
+        # GcpBatchMachineConstraints maps these tasks to N1CustomMachineType -- the oldest and
+        # most expensive family. N2D is ~14% cheaper per vCPU and per GB: ~$2.26 per batch,
+        # ~$760 across 200 batches, for one runtime line. It is not wired in because
+        # setMinCpuPlatform RESTRICTS placement to hosts with that CPU, and at the measured
+        # 41-72% preemption rates losing placement breadth could cost more than 14% saves. To
+        # test: add `cpuPlatform: "AMD Rome"` to a task's runtime block, run one chromosome and
+        # compare preemption rate and cost against N1.
+        #
         # The largest remaining lever on SSD quota, exposed as an input so testing it costs an
         # override rather than a WDL edit. At 30 a batch reserves ~31.4 TB (work + boot) and
         # ~2.6 batches fit an 82 TB quota; at 20 that is ~26.1 TB and ~3.1 batches -- 5.2 TB
@@ -394,6 +403,19 @@ task GLIMPSE2Phase {
 
         String docker
 
+        # phase_threads = 4 is cost-OPTIMAL, not merely the value that was measured. Fitting
+        # wall time against L on the six fresh chr20 shards gives wall = 415 + 0.00267*L s, so
+        # ~415 s per shard is thread-independent (localization, panel load, reheader, boot) and
+        # the rest scales with threads. Costing the whole batch with that model, including the
+        # persistent disk that spot does not discount:
+        #     threads 2 -> 9 GiB / 2 cpu, ~2551 s   +$1.23/batch   (cpu saving eaten by disk
+        #                                                           charged over 1.7x the wall)
+        #     threads 4 -> 15 GiB / 4 cpu, ~1483 s   baseline
+        #     threads 8 -> 28 GiB / 8 cpu,  ~949 s   +$2.11/batch
+        # Both directions are worse. Going down looks attractive on the hourly rate -- cpu is
+        # 67% of it and halving threads halves both cpu and the memory term -- but disk bills
+        # per hour regardless of spot, so a 1.7x longer task gives the saving back.
+        #
         # Typed, not text in extra_phase_args, because the memory request is computed from
         # them: a caller replacing that string would otherwise drop --Kpbwt 1000, get this
         # build's default of 2000, and double the matrix while the request stayed put.
