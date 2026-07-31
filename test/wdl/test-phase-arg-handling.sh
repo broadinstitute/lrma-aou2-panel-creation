@@ -388,6 +388,16 @@ print('%s %s' % m.wdl_model())" 2>/dev/null)
         bad "harvester reads the sizing model from the WDL" "harvester=[$HARVEST_MODEL] wdl=[$WDL_CONST.0 $WDL_COEFF]"
     fi
 
+    # A comment asserting the opposite of the code is worse than no comment, and one survived
+    # a revert once already. Check the ligate thread narrative matches the value.
+    LIG_T=$(awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -oE 'Int ligate_threads = [0-9]+' | grep -oE '[0-9]+$' | head -1)
+    if awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -q 'Raised 2 -> 4'; then
+        [ "$LIG_T" = "4" ] && ok "ligate thread comment matches the value" \
+            || bad "ligate thread comment matches the value" "comment says raised to 4, value is $LIG_T"
+    else
+        ok "ligate thread comment matches the value ($LIG_T)"
+    fi
+
     # The counting task serialises the chromosome; it must not be preemptible.
     if awk '/task CountPanelVariantsPerShard/,/^}/' "$WDL" | grep -qE 'preemptible_tries:\s*0,'; then
         ok "CountPanelVariantsPerShard is non-preemptible"
