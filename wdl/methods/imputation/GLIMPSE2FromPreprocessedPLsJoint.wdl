@@ -33,21 +33,12 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # 30 GB is unknown and this keeps us out of it. The experiment is one chromosome with
         # this set to 20, comparing localization time in the phase logs against that 57 s.
         Int phase_disk_floor_gb = 30
-        # NOTE: GLIMPSE2 is not deterministic under multithreading, and pinning threads makes
-        # the thread COUNT reproducible, not the output. chr22 was run twice on identical
-        # inputs and parameters:
-        #   site level     AF identical at 11.2% of sites, AF r = 0.999982,
-        #                  max |dAF| = 0.0247, INFO r = 0.990
-        #   genotype level 0 of 250 samples had an identical non-ref count; median absolute
-        #                  difference 0.16%, max 0.66%; no missing GTs in either run
-        # Agreement in distribution, never bit-for-bit. This belongs in a methods section and
-        # sets the floor for any Terra-vs-VWB comparison: a difference inside ~0.7% per sample
-        # is indistinguishable from rerunning the same pipeline twice.
-        #
-        # One caveat on that floor: the two chr22 runs also differed in preemptible_tries
-        # (0 vs 10), so checkpoint-restart is confounded with thread scheduling as a source of
-        # divergence. It bounds the combined effect, which is what a cross-platform comparison
-        # would face anyway, rather than isolating either one.
+        # GLIMPSE2 is not deterministic under multithreading; pinning threads fixes the
+        # thread COUNT, not the output. chr22 run twice on identical inputs: 0 of 250 samples
+        # had an identical non-ref genotype count, median difference 0.16%, max 0.66%, no
+        # missing GTs; at site level AF identical at 11.2% of sites, AF r = 0.999982. That is
+        # the floor for a Terra-vs-VWB comparison. Those runs also differed in
+        # preemptible_tries, so checkpoint-restart is confounded with thread scheduling.
 
         String output_prefix
 
@@ -66,28 +57,13 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # the run config rather than to this file.
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2@sha256:c3d64c5af3b8e789bcda94451931f09073d3a8750fc7375a8d44246d193e8a21"
 
-        # Byte-identical to Cromwell's own ZonesDefaultValue: this RESTORES the stock four
-        # zones, which the VWB backend overrode to pin us-central1-a (71% of 502 attempts were
-        # preempted there). ASK VWB FIRST -- pinning may be a data-locality or compliance
-        # decision, not an oversight. Set to "us-central1-a" to restore the pin.
-        # ZonesValidation accepts String and Array[String] alike, so the form is style only.
+        # Cromwell's own ZonesDefaultValue, restoring the stock four zones that the VWB
+        # backend overrode to pin us-central1-a. MEASURED INERT: with these set, phase and
+        # count shards still reported allowedLocations us-central1-a, so a task-level value
+        # does not override the backend -- widening the pool is a backend change. Ask VWB
+        # before overriding; the pin may be deliberate. Set to "us-central1-a" to restore it.
         # Values must lie in the backend's Batch job region. Does not reach the imported
-        # ConcatVcfs call, which takes no zones argument.
-        # MEASURED 2026-07-31, and the answer is no: with these four zones set, a submitted
-        # job still reported
-        #     allowedLocations: ['regions/us-central1', 'zones/us-central1-a']
-        # so on the VWB backend a task-level zones does NOT override the configured
-        # allowedLocations. This attribute is therefore inert here. Kept because it is correct
-        # on backends that do honour it and it documents the intent, but widening the spot pool
-        # on VWB requires a backend config change, not a WDL change -- raise it with them
-        # alongside checkpointingInterval.
-        #
-        # This matters more than the cost: measured preemption ran 41-50% (run1, 4cpu/16G) and
-        # 63-72% (run2, 8cpu/40G) in the first hours of each run, decaying to ~17-21% later.
-        # run2 had only 150 shards yet preempted harder than run1's 523, so machine shape and
-        # clock both matter -- but 500+ shards of one shape against a single zone plausibly
-        # congests that zone itself. Until the backend allows more zones, staggering
-        # submissions is the only lever available from this side.
+        # ConcatVcfs call.
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
 
@@ -420,26 +396,20 @@ task GLIMPSE2Phase {
 
         String docker
 
-        # phase_threads = 4 is cost-OPTIMAL, not merely the value that was measured. Fitting
-        # wall time against L on the six fresh chr20 shards gives wall = 415 + 0.00267*L s, so
-        # ~415 s per shard is thread-independent (localization, panel load, reheader, boot) and
-        # the rest scales with threads. Costing the whole batch with that model, including the
-        # persistent disk that spot does not discount:
-        #     threads 2 -> 9 GiB / 2 cpu, ~2551 s   +$1.23/batch   (cpu saving eaten by disk
-        #                                                           charged over 1.7x the wall)
-        #     threads 4 -> 15 GiB / 4 cpu, ~1483 s   baseline
-        #     threads 8 -> 28 GiB / 8 cpu,  ~949 s   +$2.11/batch
-        # Both directions are worse. Going down looks attractive on the hourly rate -- cpu is
-        # 67% of it and halving threads halves both cpu and the memory term -- but disk bills
-        # per hour regardless of spot, so a 1.7x longer task gives the saving back.
-        #
         # Typed, not text in extra_phase_args, because the memory request is computed from
-        # them: a caller replacing that string would otherwise drop --Kpbwt 1000, get this
-        # build's default of 2000, and double the matrix while the request stayed put.
-        # threads is pinned rather than $(nproc) because the matrix is per-thread, which under
-        # $(nproc) makes memory depend on cpu while the N1 ratio makes cpu depend on memory --
-        # unsolvable above L ~= 1.6M. cpu_cores may therefore exceed threads: ratio headroom,
-        # not parallelism.
+        # them. A caller replacing that string drops --Kpbwt 1000, gets this build's default
+        # of 2000, and doubles the matrix while the request stays put. Threads are pinned
+        # rather than $(nproc) because the matrix is per-thread: under $(nproc) memory depends
+        # on cpu while the N1 ratio makes cpu depend on memory, unsolvable above L ~= 1.6M.
+        # cpu_cores may exceed threads -- ratio headroom, not parallelism.
+        #
+        # 4 is the measured configuration, not a proven optimum. Modelling wall as
+        # 415 + 0.00267*L s makes 8 threads clearly worse (+$2.11/batch) and 2 threads
+        # marginally worse (+$1.23) -- but that assumes the parallel part scales perfectly,
+        # which the memory axis demonstrably does not. It flips to cheaper if 4-thread
+        # efficiency is below ~92% of 2-thread. Worth one chromosome at phase_threads=2
+        # before treating 4 as settled; it also gives a 2 cpu / 9 GiB shape, which places
+        # better on spot.
         Int phase_threads = 4
         Int phase_kpbwt = 1000
 
@@ -458,74 +428,31 @@ task GLIMPSE2Phase {
         RuntimeAttr? runtime_attr_override
     }
 
-    # FITTED FROM MEASURED PEAK RSS, superseding the earlier source-derived bound.
+    # Fitted from measured peak RSS over 11 instrumented shards:
+    #     peak_GiB = 0.42 + 2.17e-5 * L        (4 threads, Kpbwt 1000, r2 ~ 0.99)
+    # i.e. 5.82 bytes per site per thread per state. The source-derived 4.0 -- from
+    # imputation_hmm.cpp allocating Alpha as polymorphic_sites * modK floats -- was never a
+    # bound: it counted one matrix and the process allocates more. Requesting 8.0 gives ~64%
+    # utilisation across the range:
+    #     L =   400,379 -> 15 GiB / 4 cpu   (peak  9.32)
+    #     L = 1,005,104 -> 35 GiB / 6 cpu   (peak 22.44)
+    #     L = 1,346,888 -> 46 GiB / 8 cpu   (projected 29.61)
+    # Per-shard sizing makes fixing the OOMs free: ~$18.4/batch against $18.7 for the old
+    # OOM-prone flat 16 GiB and $40.6 for a flat worst-case 46 GiB. Compute only -- disk adds
+    # ~$3.90/batch and is not spot-discounted.
     #
-    # That bound was 4 bytes per site per thread per state, from imputation_hmm.cpp allocating
-    # Alpha as polymorphic_sites * modK floats. It was never actually a bound: it counted one
-    # matrix, and the process allocates more than Alpha. Eight instrumented chr20 shards give
-    #     peak_GiB = 0.37 + 2.17e-5 * L        (threads 4, Kpbwt 1000)
-    # i.e. 5.83 bytes per site per thread per state -- the old slope was 46% short. It had not
-    # bitten only because the +8 GiB intercept was generous while the true fixed cost is
-    # ~0.37 GiB, and those two errors cancel at small L and stop cancelling as L grows:
-    # measured utilisation ran 55% at L=331k to 90% at L=1.005M, monotonically. Extrapolated,
-    # chr11 s9 would have sat at 95% of request and chr7 s12 at 99%, against a hard cgroup
-    # limit.
+    # Two caveats. All 11 points are at threads=4 and Kpbwt=1000 and the formula multiplies
+    # by both, so neither scaling is measured; the thread one is demonstrably not linear,
+    # since linear predicts 58.8 GiB for chr7 s12 at 8 threads and it succeeded on 40. And
+    # cgroup memory.peak counts page cache, so this bounds demand rather than measuring it.
     #
-    # CAVEAT on the scaling: all eleven measurements are at phase_threads=4 and
-    # phase_kpbwt=1000. The formula multiplies by both, i.e. assumes the matrix term is linear
-    # in each, and NEITHER scaling has been measured. Evidence says the thread one is not
-    # linear: the 40 GiB / 8 cpu rerun ran --thread $(nproc) = 8, under which linear scaling
-    # predicts 58.8 GiB for chr7 s12 and 49.1 for chr11 s9 -- both above 40 -- yet chr7, the
-    # largest shard in the genome, succeeded. So the assumption over-predicts at 8 threads,
-    # which is safe here but means anyone changing phase_threads is extrapolating on an
-    # untested axis. Re-fit before trusting a non-default thread count; the instrumentation
-    # reports threads on every line precisely so that fit is possible.
-    #
-    # CAVEAT on the fit: cgroup memory.peak counts page cache as well as anonymous memory,
-    # and these shards read 9-17 GB of input. The kernel reclaims cache before OOM-killing, so
-    # part of the measured peak is reclaimable and the true allocation slope is below 5.82.
-    # Sizing on what the cgroup accounts is the safe direction -- it is also what the OOM
-    # killer sees -- but it means this is an upper bound on demand, not a measurement of it.
-    # Anyone tightening these numbers should separate anon from cache first (memory.stat)
-    # rather than trusting the slope.
-    #
-    # 8.0 with a 2 GiB constant gives ~64% utilisation flat across the range, never
-    # under-provisions any measured shard, and costs about $18.6 per batch against $18.4 for
-    # the under-sloped version -- so the correction is nearly free.
-    #   L =   400,379 -> 15 GiB / 4 cpu   (measured peak  9.32, 62%)
-    #   L = 1,005,104 -> 35 GiB / 6 cpu   (measured peak 22.44, 64%)
-    #   L = 1,346,888 -> 46 GiB / 8 cpu   (projected     29.61, 64%)
-    #
-    # Sizing per shard is what makes fixing the OOMs free: phase costs $18.4/batch against
-    # $18.7 for the old OOM-prone 4/16 shape, and $40.6 for a flat worst-case 8/40.
-    #
-    # All figures in this block are COMPUTE-ONLY. Persistent disk adds ~$3.90 per batch and is
-    # not spot-discounted, taking the true total to ~$20.05. Differences between shapes at
-    # equal wall time are unaffected because disk cancels; absolute totals are not.
-    #
-    # LARGEST REMAINING DOLLAR LEVER, and it is not in this file. (Distinct from
-    # phase_disk_floor_gb, which is the largest SSD-QUOTA lever -- that one buys concurrency,
-    # this one buys money.) cpuPlatform is unset, so
-    # GcpBatchMachineConstraints maps these tasks to N1CustomMachineType -- the oldest and
-    # most expensive family. N2D is ~14% cheaper per vCPU and per GB: ~$2.26 per batch,
-    # ~$760 across 200 batches, for one runtime line.
-    #
-    # It CANNOT be exposed as an optional input the way phase_disk_floor_gb is, and that is
-    # a property of Cromwell rather than a choice. RuntimeAttributesValidation.validate
-    # keys off presence -- values.get(key) match { case Some(v) => ...; case None =>
-    # validateNone } -- so an attribute is either in the runtime block or it is not.
-    # cpuPlatform is StringRuntimeAttributesValidation(...).optional, which handles ABSENT
-    # cleanly, but a runtime key wired to a String input is always PRESENT, and an empty
-    # string validates fine here and then reaches Batch as minCpuPlatform="". Testing N2D
-    # therefore means editing the runtime block, not overriding an input.
-    #
-    # Not wired in by default because setMinCpuPlatform RESTRICTS placement to hosts with
-    # that CPU, and at the measured 41-72% preemption rates losing placement breadth could
-    # cost more than 14% saves. To test: add `cpuPlatform: "AMD Rome"` to a task's runtime
-    # block, run one chromosome, compare preemption rate and cost against N1.
-    #
-    # Parenthesised to force Float promotion first: as integers, phase_kpbwt * n_variants is
-    # 2.7e9 at Kpbwt 2000, past Int32. Do not reorder.
+    # Largest untaken dollar lever, not in this file: cpuPlatform is unset, so these tasks
+    # land on N1CustomMachineType. N2D is ~14% cheaper (~$2.26/batch). It cannot be an
+    # optional input -- Cromwell's validate keys off attribute presence, so a runtime key
+    # wired to a String is always present and an empty string reaches Batch as
+    # minCpuPlatform="". Testing it means editing the runtime block. Not default because
+    # setMinCpuPlatform restricts placement, which at 41-72% preemption may cost more than
+    # it saves.
     Int final_mem_gb  = 2 + ceil((((8.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
     # N1 allows <= 6.5 GB/cpu and rounds any cpu count but 1 up to even; doing both here keeps
     # the requested shape visible instead of letting Cromwell adjust it silently.
@@ -556,24 +483,12 @@ task GLIMPSE2Phase {
         disk_gb:            disk_size_gb,
         boot_disk_gb:       0,
         use_ssd:            true,
-        # 10 spot attempts, and the measurement says spot is worth it. Over the instrumented
-        # chr20 run: 415 successful VM-minutes against 286 wasted across 32 preemptions, a 41%
-        # waste fraction, i.e. 1.69x the VM-time of a clean run.
-        #
-        # That comes to ~0.58x the cost of running the same work non-preemptible. NOT 0.51x:
-        # spot discounts vCPU and memory to 30% of list, but persistent disk bills the same
-        # either way, and the wasted attempts pay for their disk too. On a 4 cpu / 15 GiB shard
-        # with 30 GB of working disk and a 30 GB boot disk, compute is $0.1996/hr on demand
-        # against $0.0599 spot, while disk is $0.0140/hr regardless:
+        # Spot is worth it, measured: 415 successful VM-minutes against 286 wasted over 32
+        # preemptions (1.69x VM-time) still costs ~0.58x on-demand. Not 0.51x -- spot
+        # discounts vCPU and memory to 30% but disk bills the same either way and the wasted
+        # attempts pay for their disk:
         #     1.69 * (0.0599 + 0.0140) / (0.1996 + 0.0140) = 0.58
-        # A compute-only calculation gives 0.507 and understates the true cost by about a
-        # sixth. Avoiding checkpoint writes on demand recovers a further 0.8% (15 s of writes
-        # on a ~1873 s shard), which is inside the rounding. Still a clear win for spot.
-        #
-        # Checkpointing is doing real work
-        # here: 5 of 11 shards resumed, and resumed shards averaged 954 s against 1873 s fresh,
-        # for 15 s of total checkpoint-write overhead. An earlier note in this branch claimed
-        # resumes never fired; that was wrong.
+        # Checkpointing works: 5 of 11 shards resumed, averaging 954 s against 1873 s fresh.
         preemptible_tries:  10,
         max_retries:        1,
         docker:             docker

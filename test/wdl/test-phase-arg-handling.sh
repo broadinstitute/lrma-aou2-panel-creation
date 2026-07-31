@@ -395,15 +395,6 @@ PASSTHRU
     then ok "workflow and task defaults agree for every passed-through input"
     else bad "workflow and task defaults agree for every passed-through input" "the workflow value wins"; fi
 
-    # Check the ligate thread narrative matches the value.
-    LIG_T=$(awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -oE 'Int ligate_threads = [0-9]+' | grep -oE '[0-9]+$' | head -1)
-    if awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -q 'Raised 2 -> 4'; then
-        [ "$LIG_T" = "4" ] && ok "ligate thread comment matches the value" \
-            || bad "ligate thread comment matches the value" "comment says raised to 4, value is $LIG_T"
-    else
-        ok "ligate thread comment matches the value ($LIG_T)"
-    fi
-
     # Structural, so a task added later cannot silently miss either fix. Every task with a
     # runtime block must re-derive cpu from effective memory (or a partial runtime_attr_override
     # breaches the N1 ratio) and must install the EXIT-trap instrumentation (or it reports
@@ -432,8 +423,8 @@ if bad:
     print("      " + "; ".join(bad))
 sys.exit(1 if bad else 0)
 AUDIT
-    then ok "every task re-derives cpu and installs instrumentation"
-    else bad "every task re-derives cpu and installs instrumentation" "see above"; fi
+    then ok "every task: eff_cpu, instrumentation, boot_disk default and wiring"
+    else bad "every task: eff_cpu, instrumentation, boot_disk default and wiring" "see above"; fi
 
     # The counting task's concurrency limiter must not count the instrumentation sampler,
     # which is also a background job of that shell. Counting it caps concurrency at PAR-1, and
