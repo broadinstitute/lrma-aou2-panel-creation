@@ -110,7 +110,7 @@ done
 expect_contains "preserved: --threads 4 (not --thread)" "--threads 4 --main 10" "--threads 4"
 
 # ---------------------------------------------------------------------------
-# Per-shard sizing: mem = 8 + ceil(4 * threads * Kpbwt * L / 1e9), cpu = even(max(threads,
+# Per-shard sizing: mem = 2 + ceil(8 * threads * Kpbwt * L / 1e9), cpu = even(max(threads,
 # ceil(mem/6.5))). Must clear the observed OOM boundary, stay under the N1 6.5 GB/cpu limit,
 # and stay even.
 # ---------------------------------------------------------------------------
@@ -120,7 +120,7 @@ sizing() {  # kpbwt threads L -> "mem cpu"
     python3 -c '
 import math, sys
 kp, t, L = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-mem = 8 + math.ceil(4.0 * t * kp * L / 1e9)
+mem = 2 + math.ceil(8.0 * t * kp * L / 1e9)
 r = math.ceil(mem / 6.5)
 u = r if r > t else t
 print(mem, u + (u % 2))' "$1" "$2" "$3"
@@ -144,6 +144,43 @@ chr11_s9 1122361 OOMed_at_16 17
 chr7_s12 1346888 OOMed_at_16 17
 CASES
 
+# Real measured peaks from the instrumented chr20 run. The request must exceed each peak
+# with margin; at <=75% we would be one bad extrapolation from an OOM. This is the assertion
+# that would have caught the original 4.0 coefficient, which reached 90% at L=1M.
+while read -r L peak; do
+    read -r mem cpu <<<"$(sizing 1000 4 "$L")"
+    util=$(python3 -c "print(int(100*$peak/$mem))")
+    if [ "$util" -le 75 ]; then
+        ok "measured L=$L peak=${peak} GiB fits ${mem} GiB (${util}%)"
+    else
+        bad "measured L=$L peak=${peak} GiB fits ${mem} GiB" "${util}% of request -- too tight"
+    fi
+done <<'MEASURED'
+331325 7.71
+374957 8.45
+379508 8.43
+399495 9.44
+400379 9.32
+503463 11.20
+593895 12.57
+1005104 22.44
+MEASURED
+
+# Extrapolated to the densest shards in the genome, using the fitted peak model.
+while read -r name L; do
+    read -r mem cpu <<<"$(sizing 1000 4 "$L")"
+    util=$(python3 -c "print(int(100*(0.373+2.1708e-5*$L)/$mem))")
+    if [ "$util" -le 75 ]; then
+        ok "$name (L=$L) projects to ${util}% of ${mem} GiB"
+    else
+        bad "$name (L=$L)" "projects to ${util}% of ${mem} GiB"
+    fi
+done <<'EXTRAP'
+chr2_s17 967196
+chr11_s9 1122361
+chr7_s12 1346888
+EXTRAP
+
 # Ratio limit and even cpu across the parameter space, including odd thread counts.
 for combo in "1000 4 400000" "1000 4 1346888" "1000 8 1346888" "2000 4 1346888" \
              "500 4 400000" "1000 5 900000" "1000 1 400000" "1000 3 700000" "1000 4 100000"; do
@@ -162,9 +199,9 @@ done
 read -r m1 _ <<<"$(sizing 1000 4 1000000)"
 read -r m2 _ <<<"$(sizing 2000 4 1000000)"
 read -r m3 _ <<<"$(sizing 1000 8 1000000)"
-[ $((m2 - 8)) -eq $(( (m1 - 8) * 2 )) ] && ok "Kpbwt 1000->2000 doubles the matrix term" \
+[ $((m2 - 2)) -eq $(( (m1 - 2) * 2 )) ] && ok "Kpbwt 1000->2000 doubles the matrix term" \
     || bad "Kpbwt scaling" "$m1 -> $m2"
-[ $((m3 - 8)) -eq $(( (m1 - 8) * 2 )) ] && ok "threads 4->8 doubles the matrix term" \
+[ $((m3 - 2)) -eq $(( (m1 - 2) * 2 )) ] && ok "threads 4->8 doubles the matrix term" \
     || bad "thread scaling" "$m1 -> $m3"
 
 # Per-shard sizing must not cost more than the flat worst-case bound it replaces.
@@ -220,10 +257,10 @@ if [ -f "$WDL" ]; then
     fi
 
     # The memory expression must keep Float promotion first; reordering overflows Int32.
-    if grep -qF 'ceil((((4.0 * phase_threads) * phase_kpbwt) * n_variants)' "$WDL"; then
+    if grep -qF 'ceil((((8.0 * phase_threads) * phase_kpbwt) * n_variants)' "$WDL"; then
         ok "memory expression promotes to Float before multiplying"
     else
-        bad "memory expression promotes to Float before multiplying" "expression reordered"
+        bad "memory expression promotes to Float before multiplying" "expression reordered or coefficient changed"
     fi
 
     # Instrumentation must be trap-based and on stderr, or it vanishes exactly when needed.

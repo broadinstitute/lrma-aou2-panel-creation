@@ -270,7 +270,8 @@ task CountPanelVariantsPerShard {
         # aborts the script, so an end-of-script report would miss every OOM -- the only runs
         # worth measuring. Must be stderr: Cromwell delocalizes it for FAILED tasks, File
         # outputs do not exist. Guarded throughout; cannot fail the task it measures.
-        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+        # $1 may be the literal "max" (cgroup v2, no limit); emit NA rather than 0.00.
+        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '$1 ~ /^[0-9]+$/ {printf "%.2f", $1/1073741824; ok=1} END{if(!ok) printf "NA"}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
         _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
         _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
         _instr_cur()   { _instr_gib /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes; }
@@ -370,22 +371,31 @@ task GLIMPSE2Phase {
         RuntimeAttr? runtime_attr_override
     }
 
-    # imputation_hmm.cpp allocates Alpha as polymorphic_sites * modK floats, modK = n_states
-    # rounded to a multiple of 8 and bounded by Kpbwt, so the matrix costs at most
-    # 4 bytes * L * Kpbwt per thread. UPPER BOUND, not a fit: n_states is often well below
-    # Kpbwt and logged L counts all panel sites.
+    # FITTED FROM MEASURED PEAK RSS, superseding the earlier source-derived bound.
     #
-    # Against the observed 16 GiB pass/fail boundary at 4 threads / Kpbwt 1000:
-    #   L =   657,784 -> 19 GiB  (passed at 16, marginally)
-    #   L =   965,039 -> 24 GiB  (OOMed at 16)
-    #   L = 1,346,888 -> 30 GiB  (OOMed at 16)
-    # Typical L ~= 400k -> 15 GiB / 4 cpu.
+    # That bound was 4 bytes per site per thread per state, from imputation_hmm.cpp allocating
+    # Alpha as polymorphic_sites * modK floats. It was never actually a bound: it counted one
+    # matrix, and the process allocates more than Alpha. Eight instrumented chr20 shards give
+    #     peak_GiB = 0.37 + 2.17e-5 * L        (threads 4, Kpbwt 1000)
+    # i.e. 5.83 bytes per site per thread per state -- the old slope was 46% short. It had not
+    # bitten only because the +8 GiB intercept was generous while the true fixed cost is
+    # ~0.37 GiB, and those two errors cancel at small L and stop cancelling as L grows:
+    # measured utilisation ran 55% at L=331k to 90% at L=1.005M, monotonically. Extrapolated,
+    # chr11 s9 would have sat at 95% of request and chr7 s12 at 99%, against a hard cgroup
+    # limit.
+    #
+    # 8.0 with a 2 GiB constant gives ~64% utilisation flat across the range, never
+    # under-provisions any measured shard, and costs about $18.6 per batch against $18.4 for
+    # the under-sloped version -- so the correction is nearly free.
+    #   L =   400,379 -> 15 GiB / 4 cpu   (measured peak  9.32, 62%)
+    #   L = 1,005,104 -> 35 GiB / 6 cpu   (measured peak 22.44, 64%)
+    #   L = 1,346,888 -> 46 GiB / 8 cpu   (projected     29.61, 64%)
     #
     # Sizing per shard is what makes fixing the OOMs free: phase costs $18.4/batch against
     # $18.7 for the old OOM-prone 4/16 shape, and $40.6 for a flat worst-case 8/40.
     # Parenthesised to force Float promotion first: as integers, phase_kpbwt * n_variants is
     # 2.7e9 at Kpbwt 2000, past Int32. Do not reorder.
-    Int final_mem_gb  = 8 + ceil((((4.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
+    Int final_mem_gb  = 2 + ceil((((8.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
     # N1 allows <= 6.5 GB/cpu and rounds any cpu count but 1 up to even; doing both here keeps
     # the requested shape visible instead of letting Cromwell adjust it silently.
     Int ratio_min_cpu = ceil(final_mem_gb / 6.5)
@@ -429,7 +439,8 @@ task GLIMPSE2Phase {
         # aborts the script, so an end-of-script report would miss every OOM -- the only runs
         # worth measuring. Must be stderr: Cromwell delocalizes it for FAILED tasks, File
         # outputs do not exist. Guarded throughout; cannot fail the task it measures.
-        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+        # $1 may be the literal "max" (cgroup v2, no limit); emit NA rather than 0.00.
+        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '$1 ~ /^[0-9]+$/ {printf "%.2f", $1/1073741824; ok=1} END{if(!ok) printf "NA"}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
         _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
         _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
         _instr_cur()   { _instr_gib /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes; }
@@ -585,7 +596,8 @@ task GLIMPSE2Ligate {
         # aborts the script, so an end-of-script report would miss every OOM -- the only runs
         # worth measuring. Must be stderr: Cromwell delocalizes it for FAILED tasks, File
         # outputs do not exist. Guarded throughout; cannot fail the task it measures.
-        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+        # $1 may be the literal "max" (cgroup v2, no limit); emit NA rather than 0.00.
+        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '$1 ~ /^[0-9]+$/ {printf "%.2f", $1/1073741824; ok=1} END{if(!ok) printf "NA"}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
         _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
         _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
         _instr_cur()   { _instr_gib /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes; }
@@ -688,7 +700,8 @@ task PopAndMarginalizeCollisions {
         # aborts the script, so an end-of-script report would miss every OOM -- the only runs
         # worth measuring. Must be stderr: Cromwell delocalizes it for FAILED tasks, File
         # outputs do not exist. Guarded throughout; cannot fail the task it measures.
-        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+        # $1 may be the literal "max" (cgroup v2, no limit); emit NA rather than 0.00.
+        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '$1 ~ /^[0-9]+$/ {printf "%.2f", $1/1073741824; ok=1} END{if(!ok) printf "NA"}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
         _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
         _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
         _instr_cur()   { _instr_gib /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes; }
