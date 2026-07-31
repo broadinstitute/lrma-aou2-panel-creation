@@ -330,6 +330,20 @@ else
     bad "harvest-resources.py present and executable" "$HARVEST"
 fi
 
+# ---------------------------------------------------------------------------
+# Static checks on the real command blocks. Everything above tests a mirror of the WDL's
+# shell; this parses the WDL itself, which is the only way to catch a call to a function
+# that does not exist in that block.
+# ---------------------------------------------------------------------------
+echo
+echo "WDL command blocks"
+CHECKER="$(dirname "$0")/check-command-blocks.py"
+if python3 "$CHECKER" "$WDL"; then
+    ok "command blocks: defined-before-called, syntax, stderr"
+else
+    bad "command blocks: defined-before-called, syntax, stderr" "see above"
+fi
+
 echo
 echo "-------------------------------------------"
 printf 'passed: %d   failed: %d\n' "$pass" "$fail"
