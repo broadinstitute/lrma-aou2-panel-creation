@@ -214,6 +214,7 @@ task GLIMPSE2Phase {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        zones:                  ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
         checkpointFile:         "checkpoint.bin"
     }
 }
@@ -268,6 +269,7 @@ task GLIMPSE2Ligate {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        zones:                  ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
     }
 }
 
@@ -343,6 +345,7 @@ task PopAndMarginalizeCollisions {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        zones:                  ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
     }
 }
 
@@ -389,5 +392,6 @@ task RemapSampleNames {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        zones:                  ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
     }
 }
