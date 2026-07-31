@@ -268,6 +268,13 @@ ORDER
         bad "df usage is POSIX-portable" "GNU-only -BG present"
     fi
 
+    # Container images must be pinned by digest, not by tag: GCR tags are mutable.
+    if grep -oE '"[a-z0-9.-]+/[^"]*"' "$WDL" | grep -E 'gcr\.io' | grep -qv '@sha256:'; then
+        bad "all container images pinned by digest" "$(grep -oE '"[a-z0-9.-]+/[^"]*"' "$WDL" | grep 'gcr\.io' | grep -v '@sha256:' | head -1)"
+    else
+        ok "all container images pinned by digest"
+    fi
+
     # The counting task serialises the chromosome; it must not be preemptible.
     if awk '/task CountPanelVariantsPerShard/,/^}/' "$WDL" | grep -qE 'preemptible_tries:\s*0,'; then
         ok "CountPanelVariantsPerShard is non-preemptible"

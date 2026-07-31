@@ -31,7 +31,14 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         File? pop_glimpse2_cargo_toml
         File? pop_glimpse2_binary
 
-        String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
+        # Pinned by digest, not tag: tags in GCR are mutable, so a repush would silently
+        # change what runs. This digest is tag 1.0.0-2cee597-1778869818 as of 2026-07-31.
+        # Enables checkpointing; note it contains bcftools/htslib 1.16.
+        #
+        # NB the staged input CSVs override this with :tfenne-opt, which IS a mutable tag --
+        # pinning it there matters more than pinning the default here, and that is a change to
+        # the run config rather than to this file.
+        String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2@sha256:c3d64c5af3b8e789bcda94451931f09073d3a8750fc7375a8d44246d193e8a21"
 
         # Byte-identical to Cromwell's own ZonesDefaultValue: this RESTORES the stock four
         # zones, which the VWB backend overrode to pin us-central1-a (71% of 502 attempts were
@@ -661,7 +668,7 @@ task PopAndMarginalizeCollisions {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust@sha256:0f25c4091c49d8eb0c3d8bcdb45e7680a093e0a691e74ccec2d3743758a7d22c"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     # runtime_attr_override applies field by field, so overriding only mem_gb would keep a cpu
@@ -771,7 +778,7 @@ task RemapSampleNames {
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
-        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools:0.1.23"
+        docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools@sha256:f820f1708624242c9b35912be83446d502d36ddadfe0f3ccac6492591314454c"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
