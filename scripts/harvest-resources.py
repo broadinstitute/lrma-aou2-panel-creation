@@ -51,17 +51,24 @@ def num(rec, key):
 def summarise(task, recs):
     peaks, ratios, walls = [], [], []
     for r in recs:
-        peak, req = num(r, "peak_rss_bytes"), num(r, "requested_mem_gib")
+        peak, req = num(r, "peak_rss_gib"), num(r, "requested_mem_gib")
         w = num(r, "wall_s")
         if w is not None:
             walls.append(w)
         if peak is None:
             continue
-        peaks.append(peak / GIB)
+        peaks.append(peak)
         if req:
-            ratios.append(peak / GIB / req)
+            ratios.append(peak / req)
 
+    killed = [r for r in recs if r.get("rc") == "137"]
     print(f"\n=== {task}  ({len(recs)} tasks, {len(peaks)} with peak RSS) ===")
+    if killed:
+        print(f"  *** {len(killed)} task(s) exited rc=137 (SIGKILL/OOM). These are the rows that")
+        print(f"      matter most -- peak here is what the kernel killed the task at:")
+        for r in killed[:5]:
+            print(f"      requested {r.get('requested_mem_gib','?')} GiB, limit {r.get('limit_gib','?')},"
+                  f" peak {r.get('peak_rss_gib','?')} GiB, region {r.get('region','-')}")
     if not peaks:
         print("  no peak RSS captured -- cgroup unreadable in this environment")
     else:
@@ -94,11 +101,11 @@ def check_phase_model(recs):
     """
     pts = []
     for r in recs:
-        peak, L = num(r, "peak_rss_bytes"), num(r, "n_variants")
+        peak, L = num(r, "peak_rss_gib"), num(r, "n_variants")
         t, kp = num(r, "threads"), num(r, "kpbwt")
         if None in (peak, L, t, kp) or L * t * kp == 0:
             continue
-        pts.append(((peak - 8 * 1e9) / (L * t * kp), L, peak))
+        pts.append((((peak * GIB) - 8 * 1e9) / (L * t * kp), L, peak))
     if not pts:
         return
     coeffs = sorted(c for c, _, _ in pts)

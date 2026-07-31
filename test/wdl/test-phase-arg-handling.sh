@@ -37,6 +37,7 @@ build_cmd() {
     for OPT in thread Kpbwt; do
         if echo "$EXTRA_PHASE_ARGS" | grep -qE "(^|[[:space:]])--${OPT}([[:space:]]|=|$)"; then
             EXTRA_PHASE_ARGS=$(echo "$EXTRA_PHASE_ARGS" \
+                | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]+|=)-?[0-9]+/ /g" \
                 | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]+|=)[^-[:space:]][^[:space:]]*/ /g" \
                 | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]|=|$)/ /g")
         fi
@@ -88,6 +89,12 @@ expect_single "bcftools-style --threads left alone"     4 1000 "--threads 4 --ma
 expect_single "valueless trailing --thread"             4 1000 "--main 10 --thread"
 expect_single "reordered (--Kpbwt first, --thread last)" 4 1000 "--Kpbwt 2000 --main 10 --thread 16"
 expect_single "empty extra_phase_args"                  4 1000 ""
+expect_single "negative value (--thread -1)"            4 1000 "--thread -1 --main 10"
+
+# A stripped negative value must not leave "-1" behind as a stray positional argument.
+ORPHAN=$(build_cmd 4 1000 "--thread -1 --main 10")
+case "$ORPHAN" in *" -1"*) bad "no orphan token from --thread -1" "$ORPHAN";;
+                  *) ok "no orphan token from --thread -1";; esac
 
 echo
 echo "Invalid sizing parameters fail fast rather than reaching GLIMPSE2"
@@ -219,6 +226,28 @@ if [ -f "$WDL" ]; then
         bad "memory expression promotes to Float before multiplying" "expression reordered"
     fi
 
+    # Instrumentation must be trap-based and on stderr, or it vanishes exactly when needed.
+    if [ "$(grep -c 'trap _instr_report EXIT' "$WDL")" -eq 3 ]; then
+        ok "all three measured tasks install an EXIT trap"
+    else
+        bad "all three measured tasks install an EXIT trap" "found $(grep -c 'trap _instr_report EXIT' "$WDL")"
+    fi
+    if grep -q 'wall_s=\$((SECONDS-_INSTR_T0))" >&2' "$WDL"; then
+        ok "resource lines are written to stderr"
+    else
+        bad "resource lines are written to stderr" "redirect changed"
+    fi
+    if grep -qF 's/(^|[[:space:]])--${OPT}([[:space:]]+|=)-?[0-9]+/ /g' "$WDL"; then
+        ok "WDL strips signed numeric option values"
+    else
+        bad "WDL strips signed numeric option values" "signed-value sed pattern missing"
+    fi
+    if [ "$(grep -c 'Int eff_cpu       = select_first(\[runtime_attr.cpu_cores' "$WDL")" -eq 3 ]; then
+        ok "cpu is re-derived from effective memory in all three tasks"
+    else
+        bad "cpu is re-derived from effective memory in all three tasks" "partial override coupling not enforced"
+    fi
+
     # The counting task serialises the chromosome; it must not be preemptible.
     if awk '/task CountPanelVariantsPerShard/,/^}/' "$WDL" | grep -qE 'preemptible_tries:\s*0,'; then
         ok "CountPanelVariantsPerShard is non-preemptible"
@@ -237,40 +266,48 @@ echo
 echo "Resource reporting"
 HARVEST="$(dirname "$0")/../../scripts/harvest-resources.py"
 
-# The reporter runs under `set -euxo pipefail` inside the task. If any guard is wrong it
-# takes the whole shard down after the science has already been computed.
-RR_OUT=$(
-  bash -c '
-    set -euxo pipefail
-    RESOURCE_T0=$SECONDS
-    report_resources() {
-        set +e
-        RR_PEAK=""; RR_SRC="unavailable"
-        if [ -r /sys/fs/cgroup/memory.peak ]; then
-            RR_PEAK=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null); RR_SRC="cgroup-v2"
-        elif [ -r /sys/fs/cgroup/memory/memory.max_usage_in_bytes ]; then
-            RR_PEAK=$(cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null); RR_SRC="cgroup-v1"
-        fi
-        RR_DISK=$(df -P -BG . 2>/dev/null | awk "NR==2{gsub(/G/,\"\",\$3); gsub(/G/,\"\",\$2); print \$3\" \"\$2}")
-        echo "[RESOURCE] $1 peak_rss_bytes=${RR_PEAK:-NA} peak_rss_source=${RR_SRC}" \
-             "disk_used_gb=$(echo "${RR_DISK:-NA NA}" | cut -d" " -f1)" \
-             "disk_total_gb=$(echo "${RR_DISK:-NA NA}" | cut -d" " -f2)" \
-             "wall_s=$((SECONDS-RESOURCE_T0))"
-        set -e
-    }
-    report_resources "task=GLIMPSE2Phase n_variants=965039 requested_mem_gib=24"
-    echo SURVIVED
-  ' 2>/dev/null
-)
-case "$RR_OUT" in *SURVIVED*) ok "reporter survives set -euo pipefail";;
-                  *) bad "reporter survives set -euo pipefail" "$RR_OUT";; esac
-case "$RR_OUT" in *"[RESOURCE] task=GLIMPSE2Phase"*peak_rss_source=*wall_s=*)
-    ok "reporter emits a complete [RESOURCE] line";;
-  *) bad "reporter emits a complete [RESOURCE] line" "$RR_OUT";; esac
+# The instrumentation must report even when the measured child is SIGKILLed, because that
+# is the case worth measuring. An end-of-script report does not: set -e aborts first.
+INSTR_BODY='
+_instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk "{printf \"%.2f\", \$1/1073741824}" "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+_instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
+_instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
+_INSTR_T0=$SECONDS
+_INSTR_SAMPLER=""
+_instr_report() {
+    _rc=$?
+    set +e +x
+    [ -n "$_INSTR_SAMPLER" ] && kill "$_INSTR_SAMPLER" 2>/dev/null
+    echo "[RESOURCE] task=T rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) wall_s=$((SECONDS-_INSTR_T0))" >&2
+}
+trap _instr_report EXIT
+'
+KILLED=$(bash -c "set -euxo pipefail; $INSTR_BODY bash -c 'kill -9 \$\$'; echo SHOULD_NOT_RUN" 2>&1 >/dev/null | grep '\[RESOURCE\]')
+case "$KILLED" in *"rc=137"*) ok "instrumentation reports after a SIGKILL (rc=137)";;
+                  *) bad "instrumentation reports after a SIGKILL (rc=137)" "$KILLED";; esac
+case "$KILLED" in *SHOULD_NOT_RUN*) bad "trap does not resurrect the aborted script" "$KILLED";;
+                  *) ok "trap does not resurrect the aborted script";; esac
+
+OKRUN=$(bash -c "set -euxo pipefail; $INSTR_BODY true" 2>&1 >/dev/null | grep '\[RESOURCE\]')
+case "$OKRUN" in *"rc=0"*peak_rss_gib=*limit_gib=*wall_s=*) ok "instrumentation reports a complete line on success";;
+                 *) bad "instrumentation reports a complete line on success" "$OKRUN";; esac
+
+# It must go to stderr: Cromwell delocalizes stderr for FAILED tasks, File outputs do not exist.
+STDOUT_ONLY=$(bash -c "set -euxo pipefail; $INSTR_BODY true" 2>/dev/null | grep -c '\[RESOURCE\]' || true)
+[ "$STDOUT_ONLY" -eq 0 ] && ok "instrumentation writes to stderr, not stdout" \
+    || bad "instrumentation writes to stderr, not stdout" "found $STDOUT_ONLY line(s) on stdout"
+
+# cgroup byte->GiB conversion, and graceful degradation when cgroup is absent
+CGDIR=$(mktemp -d); echo 34359738368 > "$CGDIR/peak"
+CONV=$(bash -c '_instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk "{printf \"%.2f\", \$1/1073741824}" "$f" 2>/dev/null && return 0; fi; done; printf NA; }; _instr_gib '"$CGDIR"'/peak')
+[ "$CONV" = "32.00" ] && ok "cgroup bytes convert to GiB correctly" || bad "cgroup bytes convert to GiB correctly" "got $CONV"
+MISS=$(bash -c '_instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk "{printf \"%.2f\", \$1/1073741824}" "$f" 2>/dev/null && return 0; fi; done; printf NA; }; _instr_gib /nope /nada')
+[ "$MISS" = "NA" ] && ok "degrades to NA when cgroup is unreadable" || bad "degrades to NA when cgroup is unreadable" "got $MISS"
+rm -rf "$CGDIR"
 
 if [ -x "$HARVEST" ]; then
     # under-request must be flagged: a shard that used more than it asked for
-    OVER='[RESOURCE] task=GLIMPSE2Phase n_variants=1346888 requested_mem_gib=30 requested_cpu=6 threads=4 kpbwt=1000 peak_rss_bytes=34000000000 peak_rss_source=cgroup-v2 wall_s=1'
+    OVER='[RESOURCE] task=GLIMPSE2Phase n_variants=1346888 requested_mem_gib=30 requested_cpu=6 threads=4 kpbwt=1000 peak_rss_gib=31.66 peak_rss_source=cgroup-v2 wall_s=1'
     echo "$OVER" | "$HARVEST" 2>/dev/null | grep -q "OVER REQUEST" \
         && ok "harvester flags an under-sized request" \
         || bad "harvester flags an under-sized request" "no OVER REQUEST warning"
@@ -279,13 +316,13 @@ if [ -x "$HARVEST" ]; then
         || bad "harvester flags a breached memory bound" "no bound warning"
 
     # over-provisioning must be flagged too, or the data never drives sizing down
-    UNDER='[RESOURCE] task=GLIMPSE2Ligate n_shards=24 requested_mem_gib=32 requested_cpu=6 peak_rss_bytes=2000000000 peak_rss_source=cgroup-v2 wall_s=1'
+    UNDER='[RESOURCE] task=GLIMPSE2Ligate n_shards=24 requested_mem_gib=32 requested_cpu=6 peak_rss_gib=1.86 peak_rss_source=cgroup-v2 wall_s=1'
     echo "$UNDER" | "$HARVEST" 2>/dev/null | grep -q "OVER-PROVISIONED" \
         && ok "harvester flags over-provisioning" \
         || bad "harvester flags over-provisioning" "no OVER-PROVISIONED warning"
 
     # must tolerate raw logs and missing measurements rather than crashing
-    printf 'unrelated log line\n[RESOURCE] task=X peak_rss_bytes=NA peak_rss_source=unavailable wall_s=3\n' \
+    printf 'unrelated log line\n[RESOURCE] task=X peak_rss_gib=NA peak_rss_source=unavailable wall_s=3\n' \
         | "$HARVEST" >/dev/null 2>&1 \
         && ok "harvester tolerates noise and NA measurements" \
         || bad "harvester tolerates noise and NA measurements" "non-zero exit"

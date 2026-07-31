@@ -56,10 +56,18 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # it back to an array believing the string form is legacy, and do not assume the
         # reverse either.
         #
-        # UNVERIFIED: whether a task-level zones actually overrides the backend's
-        # allowedLocations, which was observed pinned to
-        # ['regions/us-central1', 'zones/us-central1-a']. It may override, merge, or be
-        # ignored. Read allocationPolicy.location after one chromosome before trusting it.
+        # IMPORTANT -- this value is byte-identical to Cromwell's own ZonesDefaultValue:
+        #     private val ZonesDefaultValue =
+        #         WomString("us-central1-a us-central1-b us-central1-c us-central1-f")
+        # so this is not introducing four-zone scheduling. It is RESTORING the stock default
+        # that the VWB backend overrode via configDefaultWomValue, since the observed policy
+        # was allowedLocations: ['regions/us-central1', 'zones/us-central1-a'].
+        #
+        # That someone deliberately pinned this workspace to a single zone is a reason to ask
+        # before overriding it, not merely a performance detail: it could be a data-locality
+        # or compliance decision. A task-level attribute does outrank a config default, so
+        # this should take effect -- which is exactly why it should be raised with VWB first.
+        # Set zones to "us-central1-a" to restore the pinned behaviour without editing this.
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
 
@@ -272,14 +280,15 @@ task CountPanelVariantsPerShard {
         # because a miscount silently mis-sizes a shard rather than failing. If this ever
         # becomes a bottleneck on the larger chromosomes, a single `bcftools query -f '%POS\n'`
         # piped into an interval-bucketing awk is the drop-in replacement.
+        REGIONS_FILE=~{write_lines(input_regions)}
         : > counts.txt
         while read -r REGION; do
             bcftools view --no-version -H -r "$REGION" --regions-overlap 0 \
                 ~{panel_bubble_split_sites_only_vcf} | wc -l >> counts.txt
-        done < ~{write_lines(input_regions)}
+        done < "$REGIONS_FILE"
 
         # Fail loudly rather than silently mis-sizing shards if a region yielded nothing.
-        EXPECTED=$(wc -l < ~{write_lines(input_regions)})
+        EXPECTED=$(wc -l < "$REGIONS_FILE")
         ACTUAL=$(wc -l < counts.txt)
         if [ "$ACTUAL" -ne "$EXPECTED" ]; then
             echo "ERROR: counted $ACTUAL regions, expected $EXPECTED." >&2
@@ -287,7 +296,7 @@ task CountPanelVariantsPerShard {
         fi
         if grep -qx '0' counts.txt; then
             echo "ERROR: at least one input region contains no panel variants." >&2
-            paste -d' ' ~{write_lines(input_regions)} counts.txt >&2
+            paste -d' ' "$REGIONS_FILE" counts.txt >&2
             exit 1
         fi
 
@@ -443,6 +452,41 @@ task GLIMPSE2Phase {
     command <<<
         set -euxo pipefail
 
+        # ---- resource instrumentation (best effort; must survive an OOM kill) -------------
+        # Two deliberate choices, both load-bearing:
+        #
+        #  * Emitted from an EXIT trap, not the end of the script. Under `set -e` a SIGKILLed
+        #    child aborts the command, so an end-of-script report captures nothing from
+        #    precisely the runs worth measuring. The shell outlives the killed child -- which
+        #    is why "line 32: 16 Killed" appears in these logs at all -- so the trap fires and
+        #    still reports the peak that caused the kill.
+        #  * Written to stderr, not stdout. Cromwell delocalizes stderr for FAILED tasks;
+        #    File outputs are not produced at all when a task fails.
+        #
+        # Every read is guarded and the trap disables errexit, so instrumentation can never
+        # fail the task it measures.
+        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+        _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
+        _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
+        _instr_cur()   { _instr_gib /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes; }
+        _INSTR_T0=$SECONDS
+        _INSTR_SAMPLER=""
+        _instr_report() {
+            _rc=$?
+            set +e +x
+            [ -n "$_INSTR_SAMPLER" ] && kill "$_INSTR_SAMPLER" 2>/dev/null
+            _du=$(df -P -BG . 2>/dev/null | awk 'NR==2{gsub(/G/,"",$3); gsub(/G/,"",$2); print $3" "$2}')
+            echo "[RESOURCE] task=GLIMPSE2Phase region=~{input_region} n_variants=~{n_variants} requested_mem_gib=~{final_mem_gb} requested_cpu=~{final_cpu} threads=~{phase_threads} kpbwt=~{phase_kpbwt} rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
+        }
+        trap _instr_report EXIT
+        # Coarse time series so a spike can be located against the tool's own progress markers
+        # (GLIMPSE2 prints Cnk/Buf lines as it advances). One stderr line per 10 s.
+        ( set +x; while :; do
+            echo "[RESOURCE-TS] t=$((SECONDS-_INSTR_T0)) rss_gib=$(_instr_cur)" >&2
+            sleep 10
+          done ) & _INSTR_SAMPLER=$!
+
+
         # ---- resource reporting (best effort; never fails the task) -----------------------
         # Every memory figure in this file is a bound or an empirical cap: no peak RSS has ever
         # been collected anywhere in this pipeline, three different models of the ligate OOM
@@ -506,7 +550,13 @@ task GLIMPSE2Phase {
                 # leaving that behind would reintroduce the duplicate this block exists to
                 # prevent. The second removes a valueless leftover (e.g. a trailing "--thread"),
                 # which would otherwise survive as a bare duplicate.
+                # Three passes. The first takes a signed numeric value, so "--thread -1"
+                # does not leave a stray "-1" behind for GLIMPSE2 to read as a positional.
+                # The second takes any value not starting with '-' -- it must match more than
+                # [0-9]+, because the historical default used "--thread $(nproc)". The third
+                # removes a valueless leftover such as a trailing "--thread".
                 EXTRA_PHASE_ARGS=$(echo "$EXTRA_PHASE_ARGS" \
+                    | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]+|=)-?[0-9]+/ /g" \
                     | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]+|=)[^-[:space:]][^[:space:]]*/ /g" \
                     | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]|=|$)/ /g")
             fi
@@ -560,9 +610,19 @@ kpbwt=~{phase_kpbwt} resumed=$RESUMED"
         docker:             docker
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    # runtime_attr_override is applied field by field, so a caller who overrides only mem_gb
+    # would otherwise keep a cpu_cores computed for the DEFAULT memory -- e.g. mem_gb 64 with
+    # the default 4 cpu is 16 GB/cpu, far past the N1 limit, and Cromwell would silently widen
+    # the CPU count. That is the exact hidden adjustment the sizing arithmetic exists to
+    # prevent, so the ratio is re-derived here from whatever memory actually won, and an
+    # explicit cpu_cores override still takes precedence over the derivation.
+    Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_unrounded = if eff_ratio_cpu > phase_threads then eff_ratio_cpu else phase_threads
+    Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
     runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        cpu:                    eff_cpu
+        memory:                 eff_mem_gb + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
@@ -590,6 +650,41 @@ task GLIMPSE2Ligate {
 
     command <<<
         set -euox pipefail
+
+        # ---- resource instrumentation (best effort; must survive an OOM kill) -------------
+        # Two deliberate choices, both load-bearing:
+        #
+        #  * Emitted from an EXIT trap, not the end of the script. Under `set -e` a SIGKILLed
+        #    child aborts the command, so an end-of-script report captures nothing from
+        #    precisely the runs worth measuring. The shell outlives the killed child -- which
+        #    is why "line 32: 16 Killed" appears in these logs at all -- so the trap fires and
+        #    still reports the peak that caused the kill.
+        #  * Written to stderr, not stdout. Cromwell delocalizes stderr for FAILED tasks;
+        #    File outputs are not produced at all when a task fails.
+        #
+        # Every read is guarded and the trap disables errexit, so instrumentation can never
+        # fail the task it measures.
+        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+        _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
+        _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
+        _instr_cur()   { _instr_gib /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes; }
+        _INSTR_T0=$SECONDS
+        _INSTR_SAMPLER=""
+        _instr_report() {
+            _rc=$?
+            set +e +x
+            [ -n "$_INSTR_SAMPLER" ] && kill "$_INSTR_SAMPLER" 2>/dev/null
+            _du=$(df -P -BG . 2>/dev/null | awk 'NR==2{gsub(/G/,"",$3); gsub(/G/,"",$2); print $3" "$2}')
+            echo "[RESOURCE] task=GLIMPSE2Ligate n_shards=~{length(phased_vcfs)} requested_mem_gib=32 requested_cpu=6 threads=2 rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
+        }
+        trap _instr_report EXIT
+        # Coarse time series so a spike can be located against the tool's own progress markers
+        # (GLIMPSE2 prints Cnk/Buf lines as it advances). One stderr line per 10 s.
+        ( set +x; while :; do
+            echo "[RESOURCE-TS] t=$((SECONDS-_INSTR_T0)) rss_gib=$(_instr_cur)" >&2
+            sleep 10
+          done ) & _INSTR_SAMPLER=$!
+
 
         # Threads pinned rather than $(nproc): bcf_sr_set_threads creates a thread pool, so
         # letting the thread count follow cpu_cores would grow memory alongside the widening
@@ -659,9 +754,19 @@ task GLIMPSE2Ligate {
         docker:             docker
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    # runtime_attr_override is applied field by field, so a caller who overrides only mem_gb
+    # would otherwise keep a cpu_cores computed for the DEFAULT memory -- e.g. mem_gb 64 with
+    # the default 4 cpu is 16 GB/cpu, far past the N1 limit, and Cromwell would silently widen
+    # the CPU count. That is the exact hidden adjustment the sizing arithmetic exists to
+    # prevent, so the ratio is re-derived here from whatever memory actually won, and an
+    # explicit cpu_cores override still takes precedence over the derivation.
+    Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2
+    Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
     runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        cpu:                    eff_cpu
+        memory:                 eff_mem_gb + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
@@ -698,6 +803,41 @@ task PopAndMarginalizeCollisions {
 
     command <<<
         set -euox pipefail
+
+        # ---- resource instrumentation (best effort; must survive an OOM kill) -------------
+        # Two deliberate choices, both load-bearing:
+        #
+        #  * Emitted from an EXIT trap, not the end of the script. Under `set -e` a SIGKILLed
+        #    child aborts the command, so an end-of-script report captures nothing from
+        #    precisely the runs worth measuring. The shell outlives the killed child -- which
+        #    is why "line 32: 16 Killed" appears in these logs at all -- so the trap fires and
+        #    still reports the peak that caused the kill.
+        #  * Written to stderr, not stdout. Cromwell delocalizes stderr for FAILED tasks;
+        #    File outputs are not produced at all when a task fails.
+        #
+        # Every read is guarded and the trap disables errexit, so instrumentation can never
+        # fail the task it measures.
+        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+        _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
+        _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
+        _instr_cur()   { _instr_gib /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes; }
+        _INSTR_T0=$SECONDS
+        _INSTR_SAMPLER=""
+        _instr_report() {
+            _rc=$?
+            set +e +x
+            [ -n "$_INSTR_SAMPLER" ] && kill "$_INSTR_SAMPLER" 2>/dev/null
+            _du=$(df -P -BG . 2>/dev/null | awk 'NR==2{gsub(/G/,"",$3); gsub(/G/,"",$2); print $3" "$2}')
+            echo "[RESOURCE] task=PopAndMarginalizeCollisions region=~{region} requested_mem_gib=12 requested_cpu=2 rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
+        }
+        trap _instr_report EXIT
+        # Coarse time series so a spike can be located against the tool's own progress markers
+        # (GLIMPSE2 prints Cnk/Buf lines as it advances). One stderr line per 10 s.
+        ( set +x; while :; do
+            echo "[RESOURCE-TS] t=$((SECONDS-_INSTR_T0)) rss_gib=$(_instr_cur)" >&2
+            sleep 10
+          done ) & _INSTR_SAMPLER=$!
+
 
         if [ -n "~{pop_glimpse2_binary}" ]; then
             POP_BIN="~{pop_glimpse2_binary}"
@@ -755,9 +895,19 @@ task PopAndMarginalizeCollisions {
         docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    # runtime_attr_override is applied field by field, so a caller who overrides only mem_gb
+    # would otherwise keep a cpu_cores computed for the DEFAULT memory -- e.g. mem_gb 64 with
+    # the default 4 cpu is 16 GB/cpu, far past the N1 limit, and Cromwell would silently widen
+    # the CPU count. That is the exact hidden adjustment the sizing arithmetic exists to
+    # prevent, so the ratio is re-derived here from whatever memory actually won, and an
+    # explicit cpu_cores override still takes precedence over the derivation.
+    Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2
+    Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
     runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        cpu:                    eff_cpu
+        memory:                 eff_mem_gb + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
