@@ -97,7 +97,11 @@ def check_phase_model(recs):
         t, kp = num(r, "threads"), num(r, "kpbwt")
         if None in (peak, L, t, kp) or L * t * kp == 0:
             continue
-        pts.append((((peak * GIB) - 8 * 1e9) / (L * t * kp), L, peak))
+        # Both terms in GiB-derived bytes. The WDL computes 8 + matrix/1e9 and hands the
+        # result to Cromwell as GiB, so its fixed term is 8 GiB and its matrix term is
+        # decimal -- a ~7% conservative bias baked into the request. Using 8 * GIB here keeps
+        # the recovered coefficient from inheriting that skew as a false bound breach.
+        pts.append((((peak * GIB) - 8 * GIB) / (L * t * kp), L, peak))
     if not pts:
         return
     coeffs = sorted(c for c, _, _ in pts)

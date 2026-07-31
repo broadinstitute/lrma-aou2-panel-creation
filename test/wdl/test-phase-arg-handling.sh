@@ -227,10 +227,10 @@ if [ -f "$WDL" ]; then
     fi
 
     # Instrumentation must be trap-based and on stderr, or it vanishes exactly when needed.
-    if [ "$(grep -c 'trap _instr_report EXIT' "$WDL")" -eq 3 ]; then
-        ok "all three measured tasks install an EXIT trap"
+    if [ "$(grep -c 'trap _instr_report EXIT' "$WDL")" -eq 4 ]; then
+        ok "all four measured tasks install an EXIT trap"
     else
-        bad "all three measured tasks install an EXIT trap" "found $(grep -c 'trap _instr_report EXIT' "$WDL")"
+        bad "all four measured tasks install an EXIT trap" "found $(grep -c 'trap _instr_report EXIT' "$WDL")"
     fi
     if grep -q 'wall_s=\$((SECONDS-_INSTR_T0))" >&2' "$WDL"; then
         ok "resource lines are written to stderr"
@@ -242,10 +242,30 @@ if [ -f "$WDL" ]; then
     else
         bad "WDL strips signed numeric option values" "signed-value sed pattern missing"
     fi
-    if [ "$(grep -c 'Int eff_cpu       = select_first(\[runtime_attr.cpu_cores' "$WDL")" -eq 3 ]; then
-        ok "cpu is re-derived from effective memory in all three tasks"
+    if [ "$(grep -c 'Int eff_cpu       = select_first(\[runtime_attr.cpu_cores' "$WDL")" -eq 4 ]; then
+        ok "cpu is re-derived from effective memory in all four tasks"
     else
-        bad "cpu is re-derived from effective memory in all three tasks" "partial override coupling not enforced"
+        bad "cpu is re-derived from effective memory in all four tasks" "partial override coupling not enforced"
+    fi
+
+    # eff_* must be declared before the command block that references them.
+    if python3 - "$WDL" <<'ORDER'
+import re,sys
+s=open(sys.argv[1]).read(); bad=[]
+for m in re.finditer(r'task (\w+) \{', s):
+    seg=s[m.end():]; nx=re.search(r'\ntask ',seg); seg=seg[:nx.start()] if nx else seg
+    d=seg.find('Float eff_mem_gb'); c=seg.find('command <<<')
+    if d>=0 and c>=0 and d>c: bad.append(m.group(1))
+sys.exit(1 if bad else 0)
+ORDER
+    then ok "eff_* declared before the command block in every task"
+    else bad "eff_* declared before the command block in every task" "forward reference"; fi
+
+    # df must be POSIX, not GNU-only: -BG does not exist on busybox.
+    if grep -q 'df -Pk .' "$WDL" && ! grep -q 'df -P -BG' "$WDL"; then
+        ok "df usage is POSIX-portable"
+    else
+        bad "df usage is POSIX-portable" "GNU-only -BG present"
     fi
 
     # The counting task serialises the chromosome; it must not be preemptible.
