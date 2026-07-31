@@ -15,17 +15,16 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 
         String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --main 10 --burnin 5 --err-imp 1E-3"
 
-        # Workflow-level, not call-qualified: the phase memory request is computed from both.
+        # Workflow-level, because the phase memory request is computed from both.
         Int phase_threads = 4
         Int phase_kpbwt = 1000
-        # MUST match the GLIMPSE2Ligate task default. The workflow passes this through, so the
-        # task default never applies and this value is the one that runs. A revert once changed
-        # the task default to 2 and left this at 4, so ligate would have run 4 threads while
-        # the comment beside it said 2 -- and 24 GiB is sized against a peak measured at 2.
+        # MUST match the GLIMPSE2Ligate task default. The workflow passes this through, so
+        # this value is the one that runs and the task default is inert. 24 GiB is sized
+        # against a peak measured at 2 threads.
         Int ligate_threads = 2
 
         # The largest remaining lever on SSD quota, exposed as an input so testing it costs an
-        # override rather than a WDL edit. At 30 a batch reserves ~31.4 TB (work + boot) and
+        # override. At 30 a batch reserves ~31.4 TB (work + boot) and
         # ~2.6 batches fit an 82 TB quota; at 20 that is ~26.1 TB and ~3.1 batches -- 5.2 TB
         # per batch, roughly 35x what per-chromosome PL slicing would have saved. Not lowered
         # by default because the reason for the floor is unmeasured: localization was only ever
@@ -48,7 +47,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # This is the floor for any cross-platform comparison. A Terra-vs-VWB NRD near 4.7%
         # means the two agree as well as one pipeline agrees with itself. Note those two runs
         # also differed in preemptible_tries, so checkpoint-restart is confounded with thread
-        # scheduling; it bounds the combined effect rather than isolating either.
+        # scheduling; it bounds the combined effect.
 
         String output_prefix
 
@@ -58,13 +57,13 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         File? pop_glimpse2_cargo_toml
         File? pop_glimpse2_binary
 
-        # Pinned by digest, not tag: tags in GCR are mutable, so a repush would silently
+        # Pinned by digest. GCR tags are mutable, so a repush would silently
         # change what runs. This digest is tag 1.0.0-2cee597-1778869818 as of 2026-07-31.
         # Enables checkpointing; note it contains bcftools/htslib 1.16.
         #
         # NB the staged input CSVs override this with :tfenne-opt, which IS a mutable tag --
         # pinning it there matters more than pinning the default here, and that is a change to
-        # the run config rather than to this file.
+        # the run config.
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2@sha256:c3d64c5af3b8e789bcda94451931f09073d3a8750fc7375a8d44246d193e8a21"
 
         # Cromwell's own ZonesDefaultValue, restoring the stock four zones that the VWB
@@ -198,7 +197,7 @@ struct RuntimeAttr {
     Float? mem_gb
     Int? cpu_cores
     Int? disk_gb
-    # EXTRA boot disk on top of the backend default, not an absolute size, and 0 is correct.
+    # EXTRA boot disk added to the backend default, so 0 is correct.
     # From BootDiskSizeValidation in Cromwell 91:
     #     override protected def staticDefaultOption: Option[WomInteger] = Option(WomInteger(0))
     #     case WomInteger(value) => (value + defaultBootDiskSize).validNel
@@ -208,9 +207,7 @@ struct RuntimeAttr {
     # (30 GB), against 38148 (40 GB) before -- 10 GB per shard, ~5.2 TB per batch.
     #
     # Passing 0 explicitly rather than omitting the attribute keeps this override usable by a
-    # caller running a larger custom Docker image, at identical default behaviour. An earlier
-    # revision omitted it and left this field a silent no-op because the 0 path was unverified;
-    # it is verified now.
+    # caller running a larger custom Docker image, at identical default behaviour.
     Int? boot_disk_gb
     Boolean? use_ssd
     Int? preemptible_tries
@@ -261,7 +258,7 @@ task CountPanelVariantsPerShard {
 
 
     #########################
-    # 8 GiB rather than the 4 this ran on: the measured 2.49 GiB peak was a single reader and
+    # 8 GiB, up from 4: the measured 2.49 GiB peak was a single reader and
     # the loop now runs eff_cpu of them concurrently. Memory at that concurrency is unmeasured
     # -- the readers stream and should share page cache, so 8 is expected to be generous, and
     # the instrumentation will say if it is not.
@@ -319,12 +316,12 @@ task CountPanelVariantsPerShard {
             sleep 10
           done ) & _INSTR_SAMPLER=$!
 
-        # Indexed read per region rather than one bucketed stream: the regions overlap, so
-        # this reads ~1.5x the file rather than once per region, and a miscount mis-sizes a
+        # Indexed read per region. The regions overlap, so this reads ~1.5x the file total,
+        # and a miscount mis-sizes a
         # shard silently. Run in parallel because every phase shard for this chromosome blocks
         # on this task -- chr20's 7 regions took 65 s and chr2 has 47, so serial execution
         # would put ~7 minutes on the critical path of every chromosome. Parallel is also
-        # cheaper, not merely faster: cpu bills linearly but the memory reservation is charged
+        # cheaper as well as faster: cpu bills linearly but the memory reservation is charged
         # for the whole wall time, so finishing 4x sooner on 4x the cores costs slightly less.
         #
         # Counts go to per-index files and are assembled in order afterwards, because parallel
@@ -355,7 +352,7 @@ task CountPanelVariantsPerShard {
         done < indexed_regions.txt
         wait
 
-        # awk rather than wc -l: wc pads its output with spaces on some platforms, which would
+        # awk, because wc -l pads its output with spaces on some platforms, which would
         # break the numeric checks below.
         EXPECTED=$(awk 'END{print NR+0}' "$REGIONS_FILE")
         : > counts.txt
@@ -406,17 +403,17 @@ task GLIMPSE2Phase {
 
         String docker
 
-        # Typed, not text in extra_phase_args, because the memory request is computed from
+        # Typed inputs, because the memory request is computed from
         # them. A caller replacing that string drops --Kpbwt 1000, gets this build's default
         # of 2000, and doubles the matrix while the request stays put. Threads are pinned
         # rather than $(nproc) because the matrix is per-thread: under $(nproc) memory depends
         # on cpu while the N1 ratio makes cpu depend on memory, unsolvable above L ~= 1.6M.
         # cpu_cores may exceed threads -- ratio headroom, not parallelism.
         #
-        # 4 is the measured configuration, not a proven optimum. Modelling wall as
+        # 4 is the measured configuration. Modelling wall as
         # 415 + 0.00267*L s makes 8 threads clearly worse (+$2.11/batch) and 2 threads
         # marginally worse (+$1.23) -- but that assumes the parallel part scales perfectly,
-        # which the memory axis demonstrably does not. It flips to cheaper if 4-thread
+        # which the memory axis does not. It flips to cheaper if 4-thread
         # efficiency is below ~92% of 2-thread. Worth one chromosome at phase_threads=2
         # before treating 4 as settled; it also gives a 2 cpu / 9 GiB shape, which places
         # better on spot.
@@ -428,8 +425,7 @@ task GLIMPSE2Phase {
         Int phase_disk_floor_gb = 30
 
         # Panel variants in this shard's input region -- GLIMPSE2's L. Required, and supplied
-        # by CountPanelVariantsPerShard in the same run rather than read from a resource file,
-        # so it cannot be stale or paired with the wrong shard.
+        # by CountPanelVariantsPerShard in the same run, so it is bound to the shard it describes.
         Int n_variants
 
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
@@ -441,26 +437,25 @@ task GLIMPSE2Phase {
     # Fitted from measured peak RSS over 11 instrumented shards:
     #     peak_GiB = 0.42 + 2.17e-5 * L        (4 threads, Kpbwt 1000, r2 ~ 0.99)
     # i.e. 5.82 bytes per site per thread per state. The source-derived 4.0 -- from
-    # imputation_hmm.cpp allocating Alpha as polymorphic_sites * modK floats -- was never a
-    # bound: it counted one matrix and the process allocates more. Requesting 8.0 gives ~64%
+    # imputation_hmm.cpp allocating Alpha as polymorphic_sites * modK floats -- counts only that
+    # one matrix; the process allocates more. Requesting 8.0 gives ~64%
     # utilisation across the range:
     #     L =   400,379 -> 15 GiB / 4 cpu   (peak  9.32)
     #     L = 1,005,104 -> 35 GiB / 6 cpu   (peak 22.44)
     #     L = 1,346,888 -> 46 GiB / 8 cpu   (projected 29.61)
-    # Per-shard sizing does not save memory against the old flat 16 GiB -- it redistributes
-    # it. 490 shards get less, 33 get more, and the total is 3538 GiB-hours against 3552, a
+    # Per-shard sizing redistributes memory rather than saving it against the old flat 16. 490 shards get less, 33 get more, and the total is 3538 GiB-hours against 3552, a
     # 0.4% difference. Phase compute is $13.68/batch either way (+$0.09). What it does buy is
     # the freedom to size the dense shards correctly at all: a flat request safe for chr7 s12
     # would be 46 GiB / 8 cpu everywhere, $31.32/batch, so per-shard is $17.65 cheaper than
     # the only flat alternative that does not OOM.
     #
-    # So the OOM fix is free, not cheap. The batch does get cheaper -- about $1.35 -- but that
-    # is disk (50 -> 30 GB working, 40 -> 30 boot), not memory.
+    # So the OOM fix is free. The batch does get ~$1.35 cheaper, and that comes from disk
+    # (50 -> 30 GB working, 40 -> 30 boot).
     #
     # Two caveats. All 11 points are at threads=4 and Kpbwt=1000 and the formula multiplies
-    # by both, so neither scaling is measured; the thread one is demonstrably not linear,
+    # by both, so neither scaling is measured. The thread one is sublinear:
     # since linear predicts 58.8 GiB for chr7 s12 at 8 threads and it succeeded on 40. And
-    # cgroup memory.peak counts page cache, so this bounds demand rather than measuring it.
+    # cgroup memory.peak counts page cache, so this is an upper bound on demand.
     #
     # Largest untaken dollar lever, not in this file: cpuPlatform is unset, so these tasks
     # land on N1CustomMachineType. N2D is ~14% cheaper (~$2.26/batch). It cannot be an
@@ -480,7 +475,7 @@ task GLIMPSE2Phase {
     #
     # Peak is not just the inputs: Cromwell's checkpoint sync keeps two copies (cp to -tmp) and
     # reheader writes the output twice, so chr7 s12 peaks ~16 GB against 32 provisioned.
-    # The 30 GB floor is now exercised rather than assumed. Every chr20 shard ran on it (df
+    # The 30 GB floor is exercised. Every chr20 shard ran on it (df
     # reports 29 GB usable) and the worst used 17 GB -- 59%, on the L=1,005,104 shard -- with
     # wall times in the normal 842-3152 s range, so the floor is neither wasteful nor a
     # throughput cliff at this size. What remains untested is smaller: localization was only
@@ -638,15 +633,12 @@ task GLIMPSE2Ligate {
         # Typed, and used as the cpu floor below, so threads can never exceed the cores the
         # task is given. Hardcoding the floor at 2 while the command asked for 4 threads meant
         # an override of mem_gb to 12 produced eff_cpu 2 running --thread 4 -- oversubscribed.
-        # phase avoids this by flooring on phase_threads; ligate now does the same.
+        # phase floors on phase_threads for the same reason.
         #
-        # Left at 2, not raised to 4. The 12.39 GiB peak this task is sized against was
-        # measured at 2 threads, and bcf_sr_set_threads allocates per-thread decompression
-        # buffers, so 4 threads is a different configuration than the one that was measured.
-        # An earlier revision did raise it, reasoning that ~1 GiB per extra thread would fit
-        # in the headroom -- but that is a derived estimate, and every derived estimate in this
-        # file has been wrong (phase by 46% on slope, ligate by 4.5x on coefficient). Raise it
-        # once a 4-thread peak exists; the instrumentation will report one.
+        # 2, matching the configuration the 12.39 GiB peak was measured under.
+        # bcf_sr_set_threads allocates per-thread decompression buffers, so a different thread
+        # count needs a fresh peak before the 24 GiB request applies. The instrumentation
+        # reports one on every run.
         Int ligate_threads = 2
 
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
@@ -667,11 +659,9 @@ task GLIMPSE2Ligate {
     #
     # Two anchors from that series (L_isec 117,072 -> 10.01 GiB, 744,316 -> 12.39) give
     #     peak_GiB ~= 9.57 + 3.79e-6 * L_isec        (~4.0 KB per intersecting site)
-    # An earlier version of this comment declared BOTH proposed mechanisms dead. That was half
-    # wrong: seam size is real, but at ~4 KB/site on a ~9.6 GiB baseline, not the 18 KB/site on
-    # a 1.5 GiB baseline first claimed -- right variable, wrong intercept and coefficient, the
-    # same failure as the phase formula. What is genuinely dead is max-records-per-coordinate:
-    # chr20 peaked at 10,465 records and FAILED while chr22 peaked at 9,937 and PASSED.
+    # Seam size drives it, at ~4 KB per intersecting site on a ~9.6 GiB baseline.
+    # Max-records-per-coordinate does not: chr20 peaked at 10,465 records and failed while
+    # chr22 peaked at 9,937 and passed.
     #
     # The spike is TRANSIENT -- roughly 20 s of the 618 s run, back to ~10.5 GiB immediately
     # after. That is why reading ligater_algorithm.cpp for a structure that grows across the
@@ -706,7 +696,7 @@ task GLIMPSE2Ligate {
     # measured to preempt harder (63-72% on 8cpu/40G against 41-50% on 4cpu/16G), so the
     # narrower shape should place more easily on spot.
     #
-    # Caveat as with phase: memory.peak includes page cache, so part of 12.39 is reclaimable.
+    # memory.peak includes page cache, so part of 12.39 GiB is reclaimable.
     RuntimeAttr default_attr = object {
         cpu_cores:          4,
         mem_gb:             24,
@@ -818,19 +808,14 @@ task PopAndMarginalizeCollisions {
     }
 
     # Measured on chr20: 2 GB used of the 16 this produced. Trimmed 3x -> 2x, which still
-    # leaves ~5x the observed high-water. Worth doing only because pop scatters ~523 times per
-    # batch, so 2 GB per task is ~1 TB of the SSD quota that bounds how many batches run at once.
+    # leaves ~5x the observed high-water. Pop scatters ~523 times per batch, so 2 GB per task
+    # is ~1 TB of the SSD quota that bounds how many batches run at once.
     Int disk_gb = 10 + 2 * ceil(size([posteriors_vcf, panel_bubble_split_sites_only_vcf, panel_id_split_vcf_gz], "GB"))
 
 
     #########################
-    # 8 GiB / 2 cpu, from measurement. This task was previously left at 12 GiB on the grounds
-    # that nothing was known about it either way; eleven instrumented chr20 shards now put the
-    # worst peak at 4.68 GiB, 39% of that request.
-    #
-    # An earlier revision proposed RAISING this to 24 GiB because chr2 and chr20 had never
-    # reached the stage. That was refused for lack of evidence, and the refusal was right for
-    # the wrong reason -- the evidence, once collected, points the other way.
+    # 8 GiB / 2 cpu, from measurement: eleven instrumented chr20 shards put the worst peak at
+    # 4.68 GiB.
     #
     # 8 GiB is 1.7x the worst measured peak, the same margin used for ligate and phase. It
     # matters more here than anywhere else in the file because pop_regions defaults to
@@ -852,7 +837,7 @@ task PopAndMarginalizeCollisions {
         # costs 0.51-0.77, because falling through to on-demand is the expensive outcome. The
         # price of the extra attempts is wall-clock, and pop restarts cheaply -- 226-475 s
         # measured, no checkpoint to lose. Above ~70% preemption the ordering reverses and
-        # fewer tries would win, so this is not worth pushing higher.
+        # fewer tries would win, so 4 is the ceiling.
         preemptible_tries:  4,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust@sha256:0f25c4091c49d8eb0c3d8bcdb45e7680a093e0a691e74ccec2d3743758a7d22c"
