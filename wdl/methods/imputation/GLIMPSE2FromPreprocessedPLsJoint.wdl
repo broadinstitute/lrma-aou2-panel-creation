@@ -384,6 +384,14 @@ task GLIMPSE2Phase {
     # chr11 s9 would have sat at 95% of request and chr7 s12 at 99%, against a hard cgroup
     # limit.
     #
+    # CAVEAT on the fit: cgroup memory.peak counts page cache as well as anonymous memory,
+    # and these shards read 9-17 GB of input. The kernel reclaims cache before OOM-killing, so
+    # part of the measured peak is reclaimable and the true allocation slope is below 5.82.
+    # Sizing on what the cgroup accounts is the safe direction -- it is also what the OOM
+    # killer sees -- but it means this is an upper bound on demand, not a measurement of it.
+    # Anyone tightening these numbers should separate anon from cache first (memory.stat)
+    # rather than trusting the slope.
+    #
     # 8.0 with a 2 GiB constant gives ~64% utilisation flat across the range, never
     # under-provisions any measured shard, and costs about $18.6 per batch against $18.4 for
     # the under-sloped version -- so the correction is nearly free.
