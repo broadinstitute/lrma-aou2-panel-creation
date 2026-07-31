@@ -437,9 +437,15 @@ task GLIMPSE2Phase {
     #     L =   400,379 -> 15 GiB / 4 cpu   (peak  9.32)
     #     L = 1,005,104 -> 35 GiB / 6 cpu   (peak 22.44)
     #     L = 1,346,888 -> 46 GiB / 8 cpu   (projected 29.61)
-    # Per-shard sizing makes fixing the OOMs free: ~$18.4/batch against $18.7 for the old
-    # OOM-prone flat 16 GiB and $40.6 for a flat worst-case 46 GiB. Compute only -- disk adds
-    # ~$3.90/batch and is not spot-discounted.
+    # Per-shard sizing does not save memory against the old flat 16 GiB -- it redistributes
+    # it. 490 shards get less, 33 get more, and the total is 3538 GiB-hours against 3552, a
+    # 0.4% difference. Phase compute is $13.68/batch either way (+$0.09). What it does buy is
+    # the freedom to size the dense shards correctly at all: a flat request safe for chr7 s12
+    # would be 46 GiB / 8 cpu everywhere, $31.32/batch, so per-shard is $17.65 cheaper than
+    # the only flat alternative that does not OOM.
+    #
+    # So the OOM fix is free, not cheap. The batch does get cheaper -- about $1.35 -- but that
+    # is disk (50 -> 30 GB working, 40 -> 30 boot), not memory.
     #
     # Two caveats. All 11 points are at threads=4 and Kpbwt=1000 and the formula multiplies
     # by both, so neither scaling is measured; the thread one is demonstrably not linear,
