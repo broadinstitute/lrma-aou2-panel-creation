@@ -13,7 +13,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         File genetic_maps_tsv
         File chunked_panel_json
 
-        String extra_phase_args = "--thread $(nproc) --impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
+        String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
         String output_prefix
 
         # inputs for PopAndMarginalizeCollisions
@@ -32,6 +32,14 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     Array[String] input_regions = chunked_panel[chromosome].input_regions
     Array[String] output_regions = chunked_panel[chromosome].output_regions
     Array[File] panel_split_chunk_bins = chunked_panel[chromosome].panel_split_chunk_bins
+
+    # Empty unless the panel JSON supplies n_variants. The length is checked against the shard
+    # count rather than trusted, so a stale or partial array degrades to static sizing instead
+    # of silently pairing shards with the wrong L.
+    Array[Int] panel_n_variants = if defined(chunked_panel[chromosome].n_variants)
+                                  then select_first([chunked_panel[chromosome].n_variants])
+                                  else []
+    Boolean use_dynamic_phase_mem = length(panel_n_variants) == length(output_regions)
 
     Map[String, PopAndMarginalizePanelResourcesChromosome] pop_glimpse2_panel_resources = read_json(pop_glimpse2_panel_resources_json)
     File panel_bubble_split_sites_only_vcf = pop_glimpse2_panel_resources[chromosome].panel_bubble_split_sites_only_vcf
@@ -52,6 +60,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
                 genetic_map = genetic_map,
                 output_prefix = output_prefix + ".shard-" + k + ".glimpse2.phased",
                 extra_phase_args = extra_phase_args,
+                n_variants = if use_dynamic_phase_mem then panel_n_variants[k] else 0,
                 docker = glimpse2_docker
         }
     }
@@ -137,6 +146,19 @@ struct ChunkedPanelChromosome {
     Array[String] input_regions
     Array[String] output_regions
     Array[String] panel_split_chunk_bins
+
+    # Optional, and absent from the panel JSONs shipped so far -- when it is missing every
+    # shard falls back to static sizing, so existing inputs keep working unchanged.
+    #
+    # One entry per shard, parallel to input_regions: the number of panel variants in that
+    # shard's *input* region (the buffered region, column 3 of chunks.tsv). This is exactly
+    # GLIMPSE2's reported L. Note it is NOT column 7 of chunks.tsv, which counts a different
+    # region and disagrees badly -- 403,101 vs an actual L of 965,039 for chr20 shard 4.
+    #
+    # Counting the sites-only panel BCF over each input region reproduced GLIMPSE2's L exactly
+    # on all three shards checked (chr22 s0 = 657,784; chr20 s4 = 965,039; chr7 s12 =
+    # 1,346,888), so this can be generated offline from resources already staged, with no VMs.
+    Array[Int]? n_variants
 }
 
 struct PopAndMarginalizePanelResourcesChromosome {
@@ -157,12 +179,41 @@ task GLIMPSE2Phase {
         String output_region
         File genetic_map
         String output_prefix
-        String? extra_phase_args = "--thread $(nproc) --impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
+        String? extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
 
         String docker
 
+        # Pinned rather than $(nproc). The forward matrix is allocated per thread, so with
+        # --thread $(nproc) the memory requirement is a function of cpu_cores, while the N1
+        # ratio limit makes cpu_cores a function of the memory requirement. Solving that
+        # coupling for a shard of L variants (mem ~= 5.5 + 4*T*L/1e6, cpu >= mem/6.5) gives
+        #   cpu * (6.5 - 4*L/1e6) >= 5.5
+        # which has no solution above L ~= 1.6M and is already marginal at the genome-wide
+        # max of L = 1.35M. Pinning T decouples the two and makes the sizing below well-posed.
+        # It is also why cpu_cores below may exceed phase_threads: the extra cores buy ratio
+        # headroom, not parallelism.
+        Int phase_threads = 4
+
+        # Number of variants (GLIMPSE2's L) in this shard's *input* region, if known.
+        # 0 means unknown and selects the static fallback sizing. See the workflow-level
+        # n_variants note on ChunkedPanelChromosome.
+        Int n_variants = 0
+
         RuntimeAttr? runtime_attr_override
     }
+
+    # Memory model, from phase/src/models/imputation_hmm.cpp:
+    #   Alpha.resize(polymorphic_sites.size() * modK)   // float, modK = 1000 at --Kpbwt 1000
+    # => 4 KB per site per thread, i.e. 4 GB per 1e6 sites per thread, plus ~5.5 GB fixed.
+    # The +8 rather than +5.5 is deliberate headroom: the fit comes from a handful of points
+    # near a noisy threshold and no peak RSS has actually been measured.
+    Int auto_mem_gb   = 8 + ceil(4.0 * phase_threads * n_variants / 1000000.0)
+    Int final_mem_gb  = if n_variants > 0 then auto_mem_gb else 40
+    # N1 allows at most 6.5 GB per cpu (GcpBatchCustomMachineType.scala) and rounds odd cpu
+    # counts up to even. Doing it here keeps the requested shape visible instead of letting
+    # Cromwell silently adjust it.
+    Int ratio_min_cpu = ceil(final_mem_gb / 6.5)
+    Int final_cpu     = if ratio_min_cpu > phase_threads then ratio_min_cpu + (ratio_min_cpu % 2) else phase_threads
 
     # Sized from the actual inputs rather than a flat 50 GB. Peak observed usage is ~12.6 GB
     # (panel bin + PL VCF + output + ~1.4 GB checkpoint), so 1.5x the localized inputs plus
@@ -183,6 +234,7 @@ task GLIMPSE2Phase {
         cmd="/bin/GLIMPSE2_phase \
                 --input-gl ~{input_vcf} \
                 -R ~{panel_split_chunk_bin} \
+                --thread ~{phase_threads} \
                 ~{extra_phase_args} \
                 --output ~{output_prefix}.raw.bcf \
                 --checkpoint-file-out checkpoint.bin"
@@ -209,8 +261,8 @@ task GLIMPSE2Phase {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          8,
-        mem_gb:             40,
+        cpu_cores:          final_cpu,
+        mem_gb:             final_mem_gb,
         disk_gb:            disk_size_gb,
         use_ssd:            true,
         preemptible_tries:  10,
