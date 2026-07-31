@@ -218,11 +218,18 @@ python3 -c "import sys; sys.exit(0 if $POP_MEM/$POP_CPU <= 6.5 else 1)" \
     || bad "pop shape ${POP_MEM}/${POP_CPU}" "exceeds 6.5 GB/cpu"
 
 # Threading must not exceed the cpu the task pays for, or the threads contend.
-LIG_TH=$(awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -oE 'GLIMPSE2_ligate.*--thread [0-9]+' | grep -oE '[0-9]+$')
+LIG_TH=$(awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -oE 'Int ligate_threads = [0-9]+' | grep -oE '[0-9]+$' | head -1)
 if [ "$LIG_TH" -le "$LIG_CPU" ]; then
-    ok "ligate threads ($LIG_TH) <= cpu ($LIG_CPU)"
+    ok "ligate threads ($LIG_TH) <= cpu ($LIG_CPU) at the default"
 else
     bad "ligate threads ($LIG_TH) <= cpu ($LIG_CPU)" "oversubscribed"
+fi
+# ...and under a memory override, which the default check cannot see. The cpu floor must be
+# the thread count, not a hardcoded 2, or overriding mem_gb down oversubscribes the threads.
+if awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -q 'eff_ratio_cpu > ligate_threads'; then
+    ok "ligate cpu floors on ligate_threads, so overrides cannot oversubscribe"
+else
+    bad "ligate cpu floors on ligate_threads" "floor is hardcoded; mem_gb override can oversubscribe"
 fi
 
 # Ratio limit and even cpu across the parameter space, including odd thread counts.
@@ -249,17 +256,23 @@ read -r m3 _ <<<"$(sizing 1000 8 1000000)"
     || bad "thread scaling" "$m1 -> $m3"
 
 # Per-shard sizing must not cost more than the flat worst-case bound it replaces.
-python3 - <<'COST'
-import math
+python3 - "$WDL" <<'COST'
+import math, re, sys
 CPU, MEM, SPOT = 0.0332, 0.00445, 0.30
+# Read the sizing constants out of the WDL rather than restating them: this block validated a
+# formula the WDL had already moved off once, and printed a stale cost table while every other
+# assertion around it read the live value.
+m = re.search(r"Int final_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
+              r"ceil\(\(\(\((\d+(?:\.\d+)?)\s*\*\s*phase_threads\)", open(sys.argv[1]).read())
+CONST, COEFF = (float(m.group(1)), float(m.group(2))) if m else (2.0, 8.0)
 def size(L, t=4, kp=1000):
-    m = 8 + math.ceil(4.0 * t * kp * L / 1e9)
+    m = CONST + math.ceil(COEFF * t * kp * L / 1e9)
     r = math.ceil(m / 6.5); u = r if r > t else t
     return m, u + (u % 2)
 def cost(n, cpu, gb, mins): return n * (cpu*CPU + gb*MEM) * (mins/60) * SPOT
 Ls = [400000]*490 + [657784,765770,965039,1005104,1122361,1346888] + [600000]*27
 dyn = sum(cost(1, c, m, 35) for m, c in (size(L) for L in Ls))
-flat = cost(len(Ls), 8, 40, 35)
+flat = cost(len(Ls), 8, 40, 35)   # the worst-case bound this replaced
 print("  \033[32mPASS\033[0m  per-shard $%.1f < flat worst-case $%.1f per batch" % (dyn, flat)
       if dyn < flat else "  \033[31mFAIL\033[0m  per-shard $%.1f >= flat $%.1f" % (dyn, flat))
 COST

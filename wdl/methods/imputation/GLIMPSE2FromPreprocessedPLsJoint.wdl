@@ -18,6 +18,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # Workflow-level, not call-qualified: the phase memory request is computed from both.
         Int phase_threads = 4
         Int phase_kpbwt = 1000
+        Int ligate_threads = 4
         # NOTE: GLIMPSE2 is not deterministic under multithreading. chr22 run twice with
         # identical parameters gave identical AF at only 11.2% of sites (AF r = 0.999982,
         # max |dAF| = 0.0247, INFO r = 0.990) -- agreement in distribution, not bit-for-bit.
@@ -118,6 +119,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             phased_vcfs = ChunkedGLIMPSE2Phase.phased_vcf,
             phased_vcf_idxs = ChunkedGLIMPSE2Phase.phased_vcf_idx,
             output_prefix = output_prefix + ".glimpse2.bubble",
+            ligate_threads = ligate_threads,
             zones = zones,
             docker = glimpse2_docker
     }
@@ -564,6 +566,12 @@ task GLIMPSE2Ligate {
 
         String docker
 
+        # Typed, and used as the cpu floor below, so threads can never exceed the cores the
+        # task is given. Hardcoding the floor at 2 while the command asked for 4 threads meant
+        # an override of mem_gb to 12 produced eff_cpu 2 running --thread 4 -- oversubscribed.
+        # phase avoids this by flooring on phase_threads; ligate now does the same.
+        Int ligate_threads = 4
+
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
 
 
@@ -600,11 +608,21 @@ task GLIMPSE2Ligate {
     # all sit within half a gigabyte of the old limit -- which is why chr10 passed, chr2 failed,
     # and chr7 needed three attempts.
     #
-    # 24 GiB is 1.9x the measured peak. Applying the model to every chromosome's worst seam
-    # (computed from chunks.tsv against the sites BCF, a method that reproduces chr2's 596,913,
-    # chr20's 744,316 and chr7's 1,023,060 exactly) puts the genome max at chr7: 13.45 GiB, or
-    # 56% of this request. No chromosome exceeds 56%. chr1 is the one gap -- the position file
-    # used for that sweep was truncated, so its worst seam is unknown rather than zero.
+    # 24 GiB is 1.9x the ONE measured peak. That measurement is the basis for the number; the
+    # model below is a secondary check and should not be read as genome-wide coverage.
+    #
+    # Applying it to every chromosome's worst seam (computed from chunks.tsv against the sites
+    # BCF -- a method that reproduces chr2's 596,913, chr20's 744,316 and chr7's 1,023,060
+    # exactly) puts the projected maximum at chr7, 13.45 GiB, 56% of this request. But that is
+    # a two-point fit from a single chromosome extrapolated to twenty-one others, and one
+    # circulating figure puts chr2 nearer 16 GiB. This model would under-predict that by ~39%.
+    # 24 GiB still covers 16 at 68%, which is why the request is sized on the measurement plus
+    # margin rather than on the fit. Treat any projection here as indicative until a second
+    # chromosome reports a peak; chr2 and chr11 are the next to run and will settle it.
+    #
+    # chr1 is a separate gap: the position file used for that sweep held 370,261 entries
+    # against the 10,112,850 records chr1 actually imputed, so it was truncated and chr1's
+    # worst seam is unknown rather than zero.
     #
     # Down from 32, which measured 39% utilised. The reason to shrink is not
     # the $0.28 per batch: 24/4 is a materially smaller VM than 32/6, and wider shapes were
@@ -627,7 +645,7 @@ task GLIMPSE2Ligate {
     # Cromwell). Re-derive from whichever memory won; an explicit cpu_cores still wins.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
     Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
-    Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2
+    Int eff_unrounded = if eff_ratio_cpu > ligate_threads then eff_ratio_cpu else ligate_threads
     Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
     command <<<
         set -euox pipefail
@@ -649,7 +667,7 @@ task GLIMPSE2Ligate {
             [ -n "$_INSTR_SAMPLER" ] && kill "$_INSTR_SAMPLER" 2>/dev/null
             # -Pk is POSIX; -BG is GNU-only and absent on busybox. 1K blocks -> GiB in awk.
             _du=$(df -Pk . 2>/dev/null | awk 'NR==2{printf "%.0f %.0f", $3/1048576, $2/1048576}')
-            echo "[RESOURCE] task=GLIMPSE2Ligate n_shards=~{length(phased_vcfs)} requested_mem_gib=~{eff_mem_gb} requested_cpu=~{eff_cpu} threads=2 rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
+            echo "[RESOURCE] task=GLIMPSE2Ligate n_shards=~{length(phased_vcfs)} requested_mem_gib=~{eff_mem_gb} requested_cpu=~{eff_cpu} threads=~{ligate_threads} rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
         }
         trap _instr_report EXIT
         # 10 s time series, so a spike can be located against GLIMPSE2's Cnk/Buf markers.
@@ -666,7 +684,7 @@ task GLIMPSE2Ligate {
         # GiB spare. Matching the 4 cpu the task already pays for shortens the 618 s run,
         # and a shorter task is preempted less often -- which for a chromosome-critical task
         # with preemptible_tries 2 is worth more than the cores are.
-        /bin/GLIMPSE2_ligate --input ~{write_lines(phased_vcfs)} --output ~{output_prefix}.bcf --thread 4
+        /bin/GLIMPSE2_ligate --input ~{write_lines(phased_vcfs)} --output ~{output_prefix}.bcf --thread ~{ligate_threads}
 
         # the index generated by ligate appears to be corrupt for both bcf and vcf.gz output (possibly due to https://github.com/samtools/htslib/issues/1740), so we regenerate with bcftools
         bcftools index -f ~{output_prefix}.bcf
