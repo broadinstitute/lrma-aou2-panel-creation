@@ -428,6 +428,13 @@ task GLIMPSE2Phase {
         mem_gb:             final_mem_gb,
         disk_gb:            disk_size_gb,
         use_ssd:            true,
+        # 10 spot attempts, and the measurement says spot is worth it. Over the instrumented
+        # chr20 run: 415 successful VM-minutes against 286 wasted across 32 preemptions, a 41%
+        # waste fraction -- which still comes to 0.51x the cost of running the same work
+        # non-preemptible, because spot is 30% of on-demand. Checkpointing is doing real work
+        # here: 5 of 11 shards resumed, and resumed shards averaged 954 s against 1873 s fresh,
+        # for 15 s of total checkpoint-write overhead. An earlier note in this branch claimed
+        # resumes never fired; that was wrong.
         preemptible_tries:  10,
         max_retries:        1,
         docker:             docker
@@ -593,8 +600,13 @@ task GLIMPSE2Ligate {
     # all sit within half a gigabyte of the old limit -- which is why chr10 passed, chr2 failed,
     # and chr7 needed three attempts.
     #
-    # 24 GiB is 1.9x the measured peak and 1.8x the projected genome max (chr7's 1,023,060-site
-    # seam, ~13.5 GiB). Down from 32, which measured 39% utilised. The reason to shrink is not
+    # 24 GiB is 1.9x the measured peak. Applying the model to every chromosome's worst seam
+    # (computed from chunks.tsv against the sites BCF, a method that reproduces chr2's 596,913,
+    # chr20's 744,316 and chr7's 1,023,060 exactly) puts the genome max at chr7: 13.45 GiB, or
+    # 56% of this request. No chromosome exceeds 56%. chr1 is the one gap -- the position file
+    # used for that sweep was truncated, so its worst seam is unknown rather than zero.
+    #
+    # Down from 32, which measured 39% utilised. The reason to shrink is not
     # the $0.28 per batch: 24/4 is a materially smaller VM than 32/6, and wider shapes were
     # measured to preempt harder (63-72% on 8cpu/40G against 41-50% on 4cpu/16G), so the
     # narrower shape should place more easily on spot.
