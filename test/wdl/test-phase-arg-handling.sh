@@ -419,7 +419,13 @@ for m in re.finditer(r"task (\w+) \{", s):
     if "runtime {" not in seg:
         continue
     missing = [n for n, ok in (("eff_cpu", "Int eff_cpu" in seg),
-                               ("instrumentation", "trap _instr_report" in seg)) if not ok]
+                               ("instrumentation", "trap _instr_report" in seg),
+                               # boot_disk_gb must stay WIRED, not a silent no-op: an explicit
+                               # 0 is provably identical to omitting the attribute (Cromwell's
+                               # BootDiskSizeValidation gives 0 + 30 either way), so there is
+                               # no reason for the override to be dead.
+                               ("boot_disk default", "boot_disk_gb:       0," in seg),
+                               ("bootDiskSizeGb wired", "bootDiskSizeGb:" in seg)) if not ok]
     if missing:
         bad.append("%s (%s)" % (m.group(1), ", ".join(missing)))
 if bad:

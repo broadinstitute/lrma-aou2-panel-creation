@@ -52,10 +52,21 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # 30 GB is unknown and this keeps us out of it. The experiment is one chromosome with
         # this set to 20, comparing localization time in the phase logs against that 57 s.
         Int phase_disk_floor_gb = 30
-        # NOTE: GLIMPSE2 is not deterministic under multithreading. chr22 run twice with
-        # identical parameters gave identical AF at only 11.2% of sites (AF r = 0.999982,
-        # max |dAF| = 0.0247, INFO r = 0.990) -- agreement in distribution, not bit-for-bit.
-        # Pinning threads makes the thread COUNT reproducible, not the output.
+        # NOTE: GLIMPSE2 is not deterministic under multithreading, and pinning threads makes
+        # the thread COUNT reproducible, not the output. chr22 was run twice on identical
+        # inputs and parameters:
+        #   site level     AF identical at 11.2% of sites, AF r = 0.999982,
+        #                  max |dAF| = 0.0247, INFO r = 0.990
+        #   genotype level 0 of 250 samples had an identical non-ref count; median absolute
+        #                  difference 0.16%, max 0.66%; no missing GTs in either run
+        # Agreement in distribution, never bit-for-bit. This belongs in a methods section and
+        # sets the floor for any Terra-vs-VWB comparison: a difference inside ~0.7% per sample
+        # is indistinguishable from rerunning the same pipeline twice.
+        #
+        # One caveat on that floor: the two chr22 runs also differed in preemptible_tries
+        # (0 vs 10), so checkpoint-restart is confounded with thread scheduling as a source of
+        # divergence. It bounds the combined effect, which is what a cross-platform comparison
+        # would face anyway, rather than isolating either one.
 
         String output_prefix
 
