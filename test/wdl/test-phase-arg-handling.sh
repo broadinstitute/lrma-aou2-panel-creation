@@ -367,8 +367,35 @@ print('%s %s' % m.wdl_model())" 2>/dev/null)
         bad "harvester reads the sizing model from the WDL" "harvester=[$HARVEST_MODEL] wdl=[$WDL_CONST.0 $WDL_COEFF]"
     fi
 
-    # A comment asserting the opposite of the code is worse than no comment, and one survived
-    # a revert once already. Check the ligate thread narrative matches the value.
+    # A workflow input passed straight through to a task overrides that task's default, so the
+    # two must agree or the task default is dead and the comment beside it lies. A revert
+    # changed the ligate task default to 2 and left the workflow default at 4, which shipped a
+    # 4-thread ligate sized against a 2-thread measurement. Checked for EVERY passed-through
+    # input, not just this one, because the failure is structural rather than specific.
+    if python3 - "$WDL" <<'PASSTHRU'
+import re, sys
+s = open(sys.argv[1]).read()
+wf = s[:s.index("\nstruct RuntimeAttr")]
+decls = wf[wf.index("input {"):wf.index("\n    Map[String, String] genetic_maps_dict")]
+wf_in = dict(re.findall(r"^\s*(?:Int|Float|String|Boolean)\s+(\w+)\s*=\s*([^\n]+?)\s*$", decls, re.M))
+passed = set(re.findall(r"^\s*(\w+)\s*=\s*\1\s*,?\s*$", wf, re.M))
+bad = []
+for name in sorted(passed & set(wf_in)):
+    for m in re.finditer(r"task (\w+) \{", s):
+        seg = s[m.end():]
+        nx = re.search(r"\ntask ", seg)
+        seg = seg[:nx.start()] if nx else seg
+        t = re.search(r"^\s*(?:Int|Float|String|Boolean)\s+%s\s*=\s*([^\n]+?)\s*$" % name, seg, re.M)
+        if t and t.group(1).strip() != wf_in[name].strip():
+            bad.append("%s: workflow=%s %s=%s" % (name, wf_in[name], m.group(1), t.group(1)))
+if bad:
+    print("      " + "; ".join(bad))
+sys.exit(1 if bad else 0)
+PASSTHRU
+    then ok "workflow and task defaults agree for every passed-through input"
+    else bad "workflow and task defaults agree for every passed-through input" "the workflow value wins"; fi
+
+    # Check the ligate thread narrative matches the value.
     LIG_T=$(awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -oE 'Int ligate_threads = [0-9]+' | grep -oE '[0-9]+$' | head -1)
     if awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -q 'Raised 2 -> 4'; then
         [ "$LIG_T" = "4" ] && ok "ligate thread comment matches the value" \

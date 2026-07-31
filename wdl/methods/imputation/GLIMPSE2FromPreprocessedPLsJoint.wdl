@@ -18,7 +18,11 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # Workflow-level, not call-qualified: the phase memory request is computed from both.
         Int phase_threads = 4
         Int phase_kpbwt = 1000
-        Int ligate_threads = 4
+        # MUST match the GLIMPSE2Ligate task default. The workflow passes this through, so the
+        # task default never applies and this value is the one that runs. A revert once changed
+        # the task default to 2 and left this at 4, so ligate would have run 4 threads while
+        # the comment beside it said 2 -- and 24 GiB is sized against a peak measured at 2.
+        Int ligate_threads = 2
         # NOTE: GLIMPSE2 is not deterministic under multithreading. chr22 run twice with
         # identical parameters gave identical AF at only 11.2% of sites (AF r = 0.999982,
         # max |dAF| = 0.0247, INFO r = 0.990) -- agreement in distribution, not bit-for-bit.
