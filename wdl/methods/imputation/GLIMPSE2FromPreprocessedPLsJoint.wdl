@@ -36,9 +36,11 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     # Empty unless the panel JSON supplies n_variants. The length is checked against the shard
     # count rather than trusted, so a stale or partial array degrades to static sizing instead
     # of silently pairing shards with the wrong L.
-    Array[Int] panel_n_variants = if defined(chunked_panel[chromosome].n_variants)
-                                  then select_first([chunked_panel[chromosome].n_variants])
-                                  else []
+    # select_all + flatten rather than `if defined(...) then select_first(...) else []`: the
+    # ternary form relies on Cromwell not evaluating the untaken branch, and select_first on an
+    # absent optional throws. select_all drops the None without ever unwrapping it, yielding a
+    # 0- or 1-element Array[Array[Int]] that flattens to the values or to [].
+    Array[Int] panel_n_variants = flatten(select_all([chunked_panel[chromosome].n_variants]))
     Boolean use_dynamic_phase_mem = length(panel_n_variants) == length(output_regions)
 
     Map[String, PopAndMarginalizePanelResourcesChromosome] pop_glimpse2_panel_resources = read_json(pop_glimpse2_panel_resources_json)
@@ -215,27 +217,49 @@ task GLIMPSE2Phase {
     Int ratio_min_cpu = ceil(final_mem_gb / 6.5)
     Int final_cpu     = if ratio_min_cpu > phase_threads then ratio_min_cpu + (ratio_min_cpu % 2) else phase_threads
 
-    # Sized from the actual inputs rather than a flat 50 GB. Peak observed usage is ~12.6 GB
-    # (panel bin + PL VCF + output + ~1.4 GB checkpoint), so 1.5x the localized inputs plus
-    # 10 GB is comfortable: ~26 GB for the largest shard (chr7 s12) and ~19 GB for a typical one.
+    # Sized from the actual inputs rather than a flat 50 GB.
     #
-    # Shrinking this costs essentially no speed. Measured localization was 8.96 GiB in 57 s
-    # (161 MiB/s), roughly 7x what the documented pd-ssd scaling (0.48 MiB/s per GiB) predicts
-    # for a 50 GiB disk, so throughput here is baseline-bound rather than size-bound.
+    # Peak is NOT just the localized inputs. Cromwell's checkpoint sync copies the checkpoint
+    # before replacing it (cp checkpoint.bin checkpoint.bin-tmp), so two full copies coexist,
+    # and the reheader step writes the output a second time. For chr7 s12 that is roughly
+    #   10.65 (bin + PL VCF) + ~1.3 (output, written twice) + ~4 (1.39 GB checkpoint x2) ~= 16 GB
+    # against 26 GB provisioned -- a 1.6x margin, not the 2x the input-only view suggests.
+    #
+    # The 30 GB floor is deliberate and costs little. Localization was measured once, at 50 GiB:
+    # 8.96 GiB in 57 s (161 MiB/s), about 7x what the documented pd-ssd scaling (0.48 MiB/s per
+    # GiB) predicts. That shows per-GiB scaling is not binding *at 50 GiB*; it says nothing about
+    # the curve at 16-20 GiB. If the scaling does bite there, a 16 GiB disk would localize at
+    # ~8 MiB/s and turn a 57 s step into ~8 min, on every one of 523 shards. The floor keeps the
+    # smallest disk within striking distance of the one size actually measured until someone
+    # times a shard on a small disk; raising the risk to save 10 GB is a bad trade.
     #
     # Sam's original TODO also notes that only one shard of input_vcf is ever used; pre-splitting
     # the PL VCF per chromosome upstream would shrink this further and cut ~1.4 TB of redundant
     # localization per batch. Not done here -- it is a change to the preprocessing stage.
-    Int disk_size_gb = 10 + ceil(1.5 * (size(panel_split_chunk_bin, "GB") + size(input_vcf, "GB")))
+    Int computed_disk_gb = 10 + ceil(2.0 * (size(panel_split_chunk_bin, "GB") + size(input_vcf, "GB")))
+    Int disk_size_gb = if computed_disk_gb > 30 then computed_disk_gb else 30
 
     command <<<
         set -euxo pipefail
+
+        # The memory request is a function of phase_threads (see the sizing block above), so the
+        # thread count has to come from that one place. Existing input CSVs carry --thread inside
+        # extra_phase_args; passing both would hand GLIMPSE2 a duplicate option (boost
+        # program_options rejects those), and honouring the CSV's value instead would silently
+        # decouple threads from the memory it was sized against. So: strip any --thread from
+        # extra_phase_args, warn loudly, and always inject phase_threads.
+        EXTRA_PHASE_ARGS="~{extra_phase_args}"
+        if echo "$EXTRA_PHASE_ARGS" | grep -qE '(^|[[:space:]])--thread([[:space:]]|=)'; then
+            echo "WARNING: --thread found in extra_phase_args; overriding with phase_threads=~{phase_threads}." >&2
+            echo "WARNING: set the phase_threads input instead -- memory is sized from it." >&2
+            EXTRA_PHASE_ARGS=$(echo "$EXTRA_PHASE_ARGS" | sed -E 's/(^|[[:space:]])--thread([[:space:]]+|=)[0-9]+/ /g')
+        fi
 
         cmd="/bin/GLIMPSE2_phase \
                 --input-gl ~{input_vcf} \
                 -R ~{panel_split_chunk_bin} \
                 --thread ~{phase_threads} \
-                ~{extra_phase_args} \
+                $EXTRA_PHASE_ARGS \
                 --output ~{output_prefix}.raw.bcf \
                 --checkpoint-file-out checkpoint.bin"
 
@@ -387,8 +411,14 @@ task PopAndMarginalizeCollisions {
     }
 
     #########################
+    # NOTE: unlike phase and ligate, 24 is a round number, not a derivation. No pop task has
+    # ever OOMed and there is no memory model for this step. It is raised only because chr2 and
+    # chr20 -- the two chromosomes with the densest seams -- have never reached it, ligate
+    # having failed first, so it is untested at exactly the sizes that matter.
+    # cpu_cores is 4 rather than 2 to keep 24/4 = 6.0 under the N1 6.5 GB/cpu limit; at 2 cpu
+    # Cromwell would compute ceil(24/6.5) = 4 and silently substitute the same shape anyway.
     RuntimeAttr default_attr = object {
-        cpu_cores:          2,
+        cpu_cores:          4,
         mem_gb:             24,
         disk_gb:            disk_gb,
         use_ssd:            true,
