@@ -435,6 +435,17 @@ AUDIT
     then ok "every task re-derives cpu and installs instrumentation"
     else bad "every task re-derives cpu and installs instrumentation" "see above"; fi
 
+    # The counting task's concurrency limiter must not count the instrumentation sampler,
+    # which is also a background job of that shell. Counting it caps concurrency at PAR-1, and
+    # at PAR=1 -- reachable via a cpu_cores override -- the sampler alone satisfies the
+    # condition and the loop spins forever, hanging a non-preemptible task that every phase
+    # shard blocks on. Reproduced before fixing.
+    if grep -q 'jobs -rp | grep -vx "${_INSTR_SAMPLER:-}"' "$WDL"; then
+        ok "concurrency limiter excludes the instrumentation sampler"
+    else
+        bad "concurrency limiter excludes the instrumentation sampler" "PAR=1 would hang"
+    fi
+
     # The disk floor must stay a parameter. It is the largest remaining SSD-quota saving and
     # is gated on a measurement; hardcoding it again would put that experiment behind a WDL
     # edit rather than an input override.

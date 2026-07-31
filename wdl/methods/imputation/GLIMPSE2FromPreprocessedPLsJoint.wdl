@@ -24,25 +24,6 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # the comment beside it said 2 -- and 24 GiB is sized against a peak measured at 2.
         Int ligate_threads = 2
 
-        # LARGEST REMAINING COST LEVER, and it is not in this file. cpuPlatform is unset, so
-        # GcpBatchMachineConstraints maps these tasks to N1CustomMachineType -- the oldest and
-        # most expensive family. N2D is ~14% cheaper per vCPU and per GB: ~$2.26 per batch,
-        # ~$760 across 200 batches, for one runtime line.
-        #
-        # It CANNOT be exposed as an optional input the way phase_disk_floor_gb is, and that is
-        # a property of Cromwell rather than a choice. RuntimeAttributesValidation.validate
-        # keys off presence -- values.get(key) match { case Some(v) => ...; case None =>
-        # validateNone } -- so an attribute is either in the runtime block or it is not.
-        # cpuPlatform is StringRuntimeAttributesValidation(...).optional, which handles ABSENT
-        # cleanly, but a runtime key wired to a String input is always PRESENT, and an empty
-        # string validates fine here and then reaches Batch as minCpuPlatform="". Testing N2D
-        # therefore means editing the runtime block, not overriding an input.
-        #
-        # Not wired in by default because setMinCpuPlatform RESTRICTS placement to hosts with
-        # that CPU, and at the measured 41-72% preemption rates losing placement breadth could
-        # cost more than 14% saves. To test: add `cpuPlatform: "AMD Rome"` to a task's runtime
-        # block, run one chromosome, compare preemption rate and cost against N1.
-        #
         # The largest remaining lever on SSD quota, exposed as an input so testing it costs an
         # override rather than a WDL edit. At 30 a batch reserves ~31.4 TB (work + boot) and
         # ~2.6 batches fit an 82 TB quota; at 20 that is ~26.1 TB and ~3.1 batches -- 5.2 TB
@@ -378,7 +359,13 @@ task CountPanelVariantsPerShard {
                     ~{panel_bubble_split_sites_only_vcf} \
                     | awk 'END{print NR+0}' > "count.$IDX" && touch "ok.$IDX"
             ) &
-            while [ "$(jobs -rp | awk 'END{print NR+0}')" -ge "$PAR" ]; do sleep 1; done
+            # Exclude the instrumentation sampler, which is also a background job of this
+            # shell. Counting it caps concurrency at PAR-1, and at PAR=1 -- reachable by a
+            # cpu_cores override -- the sampler alone satisfies the condition and this loop
+            # spins forever, hanging a non-preemptible task that every phase shard waits on.
+            while [ "$(jobs -rp | grep -vx "${_INSTR_SAMPLER:-}" | awk 'END{print NR+0}')" -ge "$PAR" ]; do
+                sleep 1
+            done
         done < indexed_regions.txt
         wait
 
@@ -515,6 +502,28 @@ task GLIMPSE2Phase {
     # All figures in this block are COMPUTE-ONLY. Persistent disk adds ~$3.90 per batch and is
     # not spot-discounted, taking the true total to ~$20.05. Differences between shapes at
     # equal wall time are unaffected because disk cancels; absolute totals are not.
+    #
+    # LARGEST REMAINING DOLLAR LEVER, and it is not in this file. (Distinct from
+    # phase_disk_floor_gb, which is the largest SSD-QUOTA lever -- that one buys concurrency,
+    # this one buys money.) cpuPlatform is unset, so
+    # GcpBatchMachineConstraints maps these tasks to N1CustomMachineType -- the oldest and
+    # most expensive family. N2D is ~14% cheaper per vCPU and per GB: ~$2.26 per batch,
+    # ~$760 across 200 batches, for one runtime line.
+    #
+    # It CANNOT be exposed as an optional input the way phase_disk_floor_gb is, and that is
+    # a property of Cromwell rather than a choice. RuntimeAttributesValidation.validate
+    # keys off presence -- values.get(key) match { case Some(v) => ...; case None =>
+    # validateNone } -- so an attribute is either in the runtime block or it is not.
+    # cpuPlatform is StringRuntimeAttributesValidation(...).optional, which handles ABSENT
+    # cleanly, but a runtime key wired to a String input is always PRESENT, and an empty
+    # string validates fine here and then reaches Batch as minCpuPlatform="". Testing N2D
+    # therefore means editing the runtime block, not overriding an input.
+    #
+    # Not wired in by default because setMinCpuPlatform RESTRICTS placement to hosts with
+    # that CPU, and at the measured 41-72% preemption rates losing placement breadth could
+    # cost more than 14% saves. To test: add `cpuPlatform: "AMD Rome"` to a task's runtime
+    # block, run one chromosome, compare preemption rate and cost against N1.
+    #
     # Parenthesised to force Float promotion first: as integers, phase_kpbwt * n_variants is
     # 2.7e9 at Kpbwt 2000, past Int32. Do not reorder.
     Int final_mem_gb  = 2 + ceil((((8.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
