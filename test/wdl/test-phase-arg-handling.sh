@@ -203,6 +203,28 @@ else
     bad "ligate shape ${LIG_MEM}/${LIG_CPU} within the N1 limit" "exceeds 6.5"
 fi
 
+# Pop: measured worst peak 4.68 GiB across eleven chr20 shards. It scatters ~523 times per
+# batch, so this is the task where over-provisioning actually costs something.
+POP_MEM=$(awk '/task PopAndMarginalizeCollisions/,/runtime \{/' "$WDL" | grep -oE 'mem_gb:\s+[0-9]+' | grep -oE '[0-9]+$')
+POP_CPU=$(awk '/task PopAndMarginalizeCollisions/,/runtime \{/' "$WDL" | grep -oE 'cpu_cores:\s+[0-9]+' | grep -oE '[0-9]+$')
+pop_ratio=$(python3 -c "print(int(100*4.68/$POP_MEM))")
+if [ "$pop_ratio" -le 75 ]; then
+    ok "pop measured 4.68 GiB fits ${POP_MEM} GiB (${pop_ratio}%)"
+else
+    bad "pop measured 4.68 GiB fits ${POP_MEM} GiB" "${pop_ratio}% -- too tight"
+fi
+python3 -c "import sys; sys.exit(0 if $POP_MEM/$POP_CPU <= 6.5 else 1)" \
+    && ok "pop shape ${POP_MEM}/${POP_CPU} within the N1 6.5 GB/cpu limit" \
+    || bad "pop shape ${POP_MEM}/${POP_CPU}" "exceeds 6.5 GB/cpu"
+
+# Threading must not exceed the cpu the task pays for, or the threads contend.
+LIG_TH=$(awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -oE 'GLIMPSE2_ligate.*--thread [0-9]+' | grep -oE '[0-9]+$')
+if [ "$LIG_TH" -le "$LIG_CPU" ]; then
+    ok "ligate threads ($LIG_TH) <= cpu ($LIG_CPU)"
+else
+    bad "ligate threads ($LIG_TH) <= cpu ($LIG_CPU)" "oversubscribed"
+fi
+
 # Ratio limit and even cpu across the parameter space, including odd thread counts.
 for combo in "1000 4 400000" "1000 4 1346888" "1000 8 1346888" "2000 4 1346888" \
              "500 4 400000" "1000 5 900000" "1000 1 400000" "1000 3 700000" "1000 4 100000"; do
