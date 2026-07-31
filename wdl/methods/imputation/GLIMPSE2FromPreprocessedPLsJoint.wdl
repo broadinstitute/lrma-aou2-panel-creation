@@ -391,6 +391,16 @@ task GLIMPSE2Phase {
     # chr11 s9 would have sat at 95% of request and chr7 s12 at 99%, against a hard cgroup
     # limit.
     #
+    # CAVEAT on the scaling: all eleven measurements are at phase_threads=4 and
+    # phase_kpbwt=1000. The formula multiplies by both, i.e. assumes the matrix term is linear
+    # in each, and NEITHER scaling has been measured. Evidence says the thread one is not
+    # linear: the 40 GiB / 8 cpu rerun ran --thread $(nproc) = 8, under which linear scaling
+    # predicts 58.8 GiB for chr7 s12 and 49.1 for chr11 s9 -- both above 40 -- yet chr7, the
+    # largest shard in the genome, succeeded. So the assumption over-predicts at 8 threads,
+    # which is safe here but means anyone changing phase_threads is extrapolating on an
+    # untested axis. Re-fit before trusting a non-default thread count; the instrumentation
+    # reports threads on every line precisely so that fit is possible.
+    #
     # CAVEAT on the fit: cgroup memory.peak counts page cache as well as anonymous memory,
     # and these shards read 9-17 GB of input. The kernel reclaims cache before OOM-killing, so
     # part of the measured peak is reclaimable and the true allocation slope is below 5.82.
