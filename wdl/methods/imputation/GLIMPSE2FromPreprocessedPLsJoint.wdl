@@ -23,6 +23,16 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # the task default to 2 and left this at 4, so ligate would have run 4 threads while
         # the comment beside it said 2 -- and 24 GiB is sized against a peak measured at 2.
         Int ligate_threads = 2
+
+        # The largest remaining lever on SSD quota, exposed as an input so testing it costs an
+        # override rather than a WDL edit. At 30 a batch reserves ~31.4 TB (work + boot) and
+        # ~2.6 batches fit an 82 TB quota; at 20 that is ~26.1 TB and ~3.1 batches -- 5.2 TB
+        # per batch, roughly 35x what per-chromosome PL slicing would have saved. Not lowered
+        # by default because the reason for the floor is unmeasured: localization was only ever
+        # timed at 50 GiB (8.96 GiB in 57 s, 161 MiB/s), so the pd-ssd throughput curve below
+        # 30 GB is unknown and this keeps us out of it. The experiment is one chromosome with
+        # this set to 20, comparing localization time in the phase logs against that 57 s.
+        Int phase_disk_floor_gb = 30
         # NOTE: GLIMPSE2 is not deterministic under multithreading. chr22 run twice with
         # identical parameters gave identical AF at only 11.2% of sites (AF r = 0.999982,
         # max |dAF| = 0.0247, INFO r = 0.990) -- agreement in distribution, not bit-for-bit.
@@ -112,6 +122,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
                 extra_phase_args = extra_phase_args,
                 phase_threads = phase_threads,
                 phase_kpbwt = phase_kpbwt,
+                phase_disk_floor_gb = phase_disk_floor_gb,
                 n_variants = CountPanelVariantsPerShard.n_variants[k],
                 zones = zones,
                 docker = glimpse2_docker
@@ -246,6 +257,11 @@ task CountPanelVariantsPerShard {
 
 
     #########################
+    # 8 GiB rather than the 4 this ran on: the measured 2.49 GiB peak was a single reader and
+    # the loop now runs eff_cpu of them concurrently. Memory at that concurrency is unmeasured
+    # -- the readers stream and should share page cache, so 8 is expected to be generous, and
+    # the instrumentation will say if it is not.
+    #
     # NOT preemptible: every phase shard blocks on this, so it is a serialisation point and a
     # per-chromosome single point of failure. MEASURED on chr20 (7 regions): 65 s wall,
     # 2.49 GiB peak against 4 requested, 1 GB of disk. Cheaper and faster than the "minutes"
@@ -388,6 +404,10 @@ task GLIMPSE2Phase {
         Int phase_threads = 4
         Int phase_kpbwt = 1000
 
+        # See the workflow-level declaration: lowering this is the largest remaining SSD-quota
+        # saving, gated on a throughput measurement below 30 GB that has not been made.
+        Int phase_disk_floor_gb = 30
+
         # Panel variants in this shard's input region -- GLIMPSE2's L. Required, and supplied
         # by CountPanelVariantsPerShard in the same run rather than read from a resource file,
         # so it cannot be stale or paired with the wrong shard.
@@ -461,7 +481,7 @@ task GLIMPSE2Phase {
     # Sam's TODO stands -- only one shard of input_vcf is used, so pre-splitting it upstream
     # would cut ~1.4 TB of redundant localization per batch.
     Int computed_disk_gb = 10 + ceil(2.0 * (size(panel_split_chunk_bin, "GB") + size(input_vcf, "GB")))
-    Int disk_size_gb = if computed_disk_gb > 30 then computed_disk_gb else 30
+    Int disk_size_gb = if computed_disk_gb > phase_disk_floor_gb then computed_disk_gb else phase_disk_floor_gb
 
 
     #########################

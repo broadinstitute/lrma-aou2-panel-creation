@@ -429,6 +429,15 @@ AUDIT
     then ok "every task re-derives cpu and installs instrumentation"
     else bad "every task re-derives cpu and installs instrumentation" "see above"; fi
 
+    # The disk floor must stay a parameter. It is the largest remaining SSD-quota saving and
+    # is gated on a measurement; hardcoding it again would put that experiment behind a WDL
+    # edit rather than an input override.
+    if grep -q 'computed_disk_gb > phase_disk_floor_gb' "$WDL"; then
+        ok "phase disk floor is parameterised, not hardcoded"
+    else
+        bad "phase disk floor is parameterised" "floor inlined again"
+    fi
+
     # The counting task serialises the chromosome; it must not be preemptible.
     if awk '/task CountPanelVariantsPerShard/,/^}/' "$WDL" | grep -qE 'preemptible_tries:\s*0,'; then
         ok "CountPanelVariantsPerShard is non-preemptible"
