@@ -123,7 +123,9 @@ struct RuntimeAttr {
     Float? mem_gb
     Int? cpu_cores
     Int? disk_gb
-    Int? boot_disk_gb
+    Int? boot_disk_gb       # NOTE: no longer consumed by the tasks in this file; see the
+                            # bootDiskSizeGb note in GLIMPSE2Phase. Retained so the struct
+                            # stays compatible with the other WDLs that share it.
     Boolean? use_ssd
     Int? preemptible_tries
     Int? max_retries
@@ -162,7 +164,18 @@ task GLIMPSE2Phase {
         RuntimeAttr? runtime_attr_override
     }
 
-    Int disk_size_gb = 50        # TODO pass shard-specific or autoscaled values (for latter, note that only a shard of input_vcf is used)
+    # Sized from the actual inputs rather than a flat 50 GB. Peak observed usage is ~12.6 GB
+    # (panel bin + PL VCF + output + ~1.4 GB checkpoint), so 1.5x the localized inputs plus
+    # 10 GB is comfortable: ~26 GB for the largest shard (chr7 s12) and ~19 GB for a typical one.
+    #
+    # Shrinking this costs essentially no speed. Measured localization was 8.96 GiB in 57 s
+    # (161 MiB/s), roughly 7x what the documented pd-ssd scaling (0.48 MiB/s per GiB) predicts
+    # for a 50 GiB disk, so throughput here is baseline-bound rather than size-bound.
+    #
+    # Sam's original TODO also notes that only one shard of input_vcf is ever used; pre-splitting
+    # the PL VCF per chromosome upstream would shrink this further and cut ~1.4 TB of redundant
+    # localization per batch. Not done here -- it is a change to the preprocessing stage.
+    Int disk_size_gb = 10 + ceil(1.5 * (size(panel_split_chunk_bin, "GB") + size(input_vcf, "GB")))
 
     command <<<
         set -euxo pipefail
@@ -199,7 +212,6 @@ task GLIMPSE2Phase {
         cpu_cores:          8,
         mem_gb:             40,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  10,
         max_retries:        1,
@@ -210,7 +222,6 @@ task GLIMPSE2Phase {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -254,7 +265,6 @@ task GLIMPSE2Ligate {
         cpu_cores:          6,
         mem_gb:             32,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -265,7 +275,6 @@ task GLIMPSE2Ligate {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -330,7 +339,6 @@ task PopAndMarginalizeCollisions {
         cpu_cores:          2,
         mem_gb:             24,
         disk_gb:            disk_gb,
-        boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -341,7 +349,6 @@ task PopAndMarginalizeCollisions {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -377,7 +384,6 @@ task RemapSampleNames {
         cpu_cores:          2,
         mem_gb:             4,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       10,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -388,7 +394,6 @@ task RemapSampleNames {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
