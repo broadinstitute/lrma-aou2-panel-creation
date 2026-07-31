@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
 """
-Turn [RESOURCE] lines emitted by GLIMPSE2FromPreprocessedPLsJoint into the numbers nobody in
-this pipeline has had yet: what each task actually used, versus what it was given.
+Summarise the [RESOURCE] lines emitted by GLIMPSE2FromPreprocessedPLsJoint: what each task
+actually used versus what it was given, and whether the phase memory bound holds.
 
-Every memory figure in that WDL is a bound or an empirical cap. Phase is sized from an upper
-bound known to overshoot (n_states is frequently well below Kpbwt); ligate's 32 GiB has no
-model behind it at all, three having been proposed and refuted. This script exists so the next
-batch settles both, without a dedicated profiling run.
+    gsutil cat 'gs://<bucket>/**/stderr' | scripts/harvest-resources.py
+    scripts/harvest-resources.py logs/*.log
 
-Usage:
-    gsutil cat 'gs://<bucket>/**/stdout' | scripts/harvest-resources.py
-    scripts/harvest-resources.py cromwell-logs/*.log
-    grep -rh '\\[RESOURCE\\]' logs/ | scripts/harvest-resources.py
-
-Reads stdin when given no files. Ignores everything that is not a [RESOURCE] line, so it is
-safe to pipe raw logs at it.
+Reads stdin when given no files, and ignores non-[RESOURCE] lines.
 """
 
 import fileinput
@@ -133,8 +125,6 @@ def main():
         if task == "GLIMPSE2Phase":
             check_phase_model(rows)
 
-    print("\nLigate is the one to look at first: 32 GiB is a cap with no surviving model,"
-          "\nand a single peak from a seam that used to die at 12 GiB settles it.")
     return 0
 
 

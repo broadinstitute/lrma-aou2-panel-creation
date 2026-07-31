@@ -1,14 +1,5 @@
 version 1.0
 
-# Resource sizing and cost rationale: docs/glimpse2-cost-and-resources.md
-#
-# Short version, so it is not lost: base compute is ~11 cents/sample, which matches the Terra
-# figure and is effectively the floor. The observed 1.97 full-run-equivalents per success --
-# preempted shards restarting from zero because the checkpoint sync interval (600 s) is longer
-# than the median preemption (7 min) -- is worth more than every knob in this file combined,
-# and it is backend config, not a WDL setting. Also noted there: tasks default to the N1
-# machine family, and the levers deliberately NOT taken (thread count, batch size, Kpbwt).
-
 import "../ConcatVcfs.wdl" as ConcatVcfs
 
 workflow GLIMPSE2FromPreprocessedPLsJoint {
@@ -24,11 +15,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 
         String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --main 10 --burnin 5 --err-imp 1E-3"
 
-        # First-class workflow inputs, not buried in extra_phase_args and not left as
-        # call-qualified task inputs: GLIMPSE2Phase computes its memory request from both, so
-        # setting them must not require reaching into
-        # GLIMPSE2FromPreprocessedPLsJoint.ChunkedGLIMPSE2Phase.* -- the same fragile mechanism
-        # this file avoids elsewhere.
+        # Workflow-level, not call-qualified: the phase memory request is computed from both.
         Int phase_threads = 4
         Int phase_kpbwt = 1000
 
@@ -42,41 +29,14 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
 
-        # Widens the spot pool: the VWB backend pins allocation to us-central1-a, where 355 of
-        # 502 observed attempts (71%) were preempted on the wider phase shape. Four zones cost
-        # nothing here -- shards never communicate and in-region GCS traffic is free.
-        #
-        # HARD CONSTRAINT: these must lie inside the backend's configured Batch job region.
-        # Google is enforcing that allowedLocations match the job region (from 2026-07-31 for
-        # affected projects), so a backend configured for anything but us-central1 will reject
-        # these values. Exposed as an input rather than hardcoded so such a backend can
-        # override without editing the WDL.
-        #
-        # NOTE: this does not reach the imported ConcatVcfs.ConcatVcfs call, which takes no
-        # zones argument, so that one task still runs wherever the backend places it.
-        #
-        # Space-separated String rather than Array[String]. To be clear about why, since an
-        # earlier version of this comment gave the wrong reason: ZonesValidation accepts BOTH
-        # forms, in the same PartialFunction --
-        #     coercion = Set(WomStringType, WomArrayType(WomStringType))
-        #     case WomString(s) => s.split("\\s+").toVector.validNel
-        #     case WomArray(womType, value) if womType.memberType == WomStringType => ...
-        # so neither is safer than the other and this is purely a style choice. Do not "fix"
-        # it back to an array believing the string form is legacy, and do not assume the
-        # reverse either.
-        #
-        # IMPORTANT -- this value is byte-identical to Cromwell's own ZonesDefaultValue:
-        #     private val ZonesDefaultValue =
-        #         WomString("us-central1-a us-central1-b us-central1-c us-central1-f")
-        # so this is not introducing four-zone scheduling. It is RESTORING the stock default
-        # that the VWB backend overrode via configDefaultWomValue, since the observed policy
-        # was allowedLocations: ['regions/us-central1', 'zones/us-central1-a'].
-        #
-        # That someone deliberately pinned this workspace to a single zone is a reason to ask
-        # before overriding it, not merely a performance detail: it could be a data-locality
-        # or compliance decision. A task-level attribute does outrank a config default, so
-        # this should take effect -- which is exactly why it should be raised with VWB first.
-        # Set zones to "us-central1-a" to restore the pinned behaviour without editing this.
+        # Byte-identical to Cromwell's own ZonesDefaultValue: this RESTORES the stock four
+        # zones, which the VWB backend overrode to pin us-central1-a (71% of 502 attempts were
+        # preempted there). ASK VWB FIRST -- pinning may be a data-locality or compliance
+        # decision, not an oversight. Set to "us-central1-a" to restore the pin.
+        # ZonesValidation accepts String and Array[String] alike, so the form is style only.
+        # Values must lie in the backend's Batch job region. Does not reach the imported
+        # ConcatVcfs call, which takes no zones argument.
+        # UNVERIFIED: whether a task-level value overrides the backend's allowedLocations.
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
 
@@ -96,12 +56,9 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     Array[String] pop_regions = select_first([pop_glimpse2_panel_resources[chromosome].pop_regions, output_regions])
     
 
-    # Per-shard variant counts (GLIMPSE2's L), so phase can be sized per shard rather than
-    # every shard being sized for the worst one. Counting here rather than reading a field
-    # from chunked_panel_json is what makes this safe: the counts are derived in this run,
-    # from this chromosome's sites-only panel, over these input_regions in order, so they
-    # cannot be stale, reordered, or copied from another chromosome. A JSON field could be
-    # all three while still having the right length.
+    # Per-shard L, so phase is sized per shard rather than for the worst one. Derived in-run
+    # from this chromosome's panel over these regions in order, so it cannot be stale,
+    # reordered or cross-chromosome -- which a JSON field of the right length could all be.
     call CountPanelVariantsPerShard {
         input:
             panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
@@ -202,14 +159,10 @@ struct RuntimeAttr {
     Float? mem_gb
     Int? cpu_cores
     Int? disk_gb
-    # NOT consumed by the tasks in this file, deliberately. Cromwell adds its own 30 GB
-    # default to whatever bootDiskSizeGb is requested, so the previous value of 10 provisioned
-    # 40 GB; omitting the attribute entirely yields the 30 GB minimum and saves 10 GB across
-    # every shard. Passing an explicit 0 would express the same intent and keep this override
-    # live, but it is not established that BootDiskSizeValidation accepts 0 rather than
-    # requiring a positive int -- and that failure mode would hit every task at once. A
-    # documented no-op is the cheaper mistake. Retained in the struct so callers sharing this
-    # RuntimeAttr shape do not break; re-wire it once 0 is known to validate.
+    # NOT consumed here, deliberately. Cromwell ADDS its 30 GB default to any bootDiskSizeGb
+    # request, so the old value of 10 provisioned 40; omitting it yields the 30 GB minimum.
+    # An explicit 0 would keep this override live, but it is unverified that
+    # BootDiskSizeValidation accepts 0 -- and that would fail every task at once.
     Int? boot_disk_gb
     Boolean? use_ssd
     Int? preemptible_tries
@@ -223,24 +176,12 @@ struct ChunkedPanelChromosome {
     Array[String] output_regions
     Array[String] panel_split_chunk_bins
 
-    # NOTE: deliberately no per-shard variant count here.
-    #
-    # GLIMPSE2Phase is sized from each shard's L, but that count is produced at runtime by
-    # CountPanelVariantsPerShard rather than carried in this struct, and that is a safety
-    # decision rather than an oversight.
-    #
-    # These are unkeyed parallel arrays. A count array added here would have no binding to the
-    # shard it describes, so one that was stale but happened to have the right length would
-    # pair silently with the wrong bins -- and underprovisioned memory is the exact failure the
-    # sizing exists to prevent. A length check catches a truncated array but not a reordered
-    # one, a panel regenerated with the same shard count, or counts copied from another
-    # chromosome. It would also be dead on arrival: GLIMPSE2ChunkAndSplitPanel builds this
-    # struct from four fields and never emits a count, so the field could only ever be
-    # populated by hand-editing a generated resource.
-    #
-    # Counting at runtime removes all of that. The counts come from this chromosome's
-    # sites-only panel, over these input_regions, in order, in the same run -- correct by
-    # construction, and costing one small task per chromosome.
+    # No per-shard variant count here, deliberately. These are unkeyed parallel arrays, so a
+    # count that was stale but happened to have the right length would pair silently with the
+    # wrong bins -- and underprovisioned memory is the failure the sizing exists to prevent.
+    # It would also be dead: GLIMPSE2ChunkAndSplitPanel never emits such a field.
+    # CountPanelVariantsPerShard derives the counts at runtime instead, from this chromosome's
+    # panel over these regions in order -- correct by construction.
 }
 
 struct PopAndMarginalizePanelResourcesChromosome {
@@ -251,16 +192,10 @@ struct PopAndMarginalizePanelResourcesChromosome {
     Array[String]? pop_regions              # non-overlapping, if not provided then GLIMPSE2 chunks will be used
 }
 
-# Counts panel variants in each shard's *input* (buffered) region -- exactly GLIMPSE2's L.
-#
-# Verified against GLIMPSE2's own logged L on three shards spanning the range, matching
-# exactly: chr22 shard 0 = 657,784; chr20 shard 4 = 965,039; chr7 shard 12 = 1,346,888.
-#
-# Note this is NOT column 7 of chunks.tsv, which counts a different region and disagrees badly
-# (403,101 against an actual L of 965,039 for chr20 shard 4).
-#
-# One task per chromosome, reading a sites-only BCF -- a few minutes and a couple of cents,
-# against roughly $20 per batch saved by not sizing every shard for the worst one.
+# Counts panel variants per shard input (buffered) region -- exactly GLIMPSE2's L. Verified
+# against its logged L on three shards: 657,784 / 965,039 / 1,346,888, all exact. NOT column 7
+# of chunks.tsv, which covers a different region (403,101 vs an actual 965,039 for chr20 s4).
+# One task per chromosome, cents, against ~$20/batch saved by not sizing for the worst shard.
 task CountPanelVariantsPerShard {
     input {
         File panel_bubble_split_sites_only_vcf
@@ -279,16 +214,10 @@ task CountPanelVariantsPerShard {
     command <<<
         set -euxo pipefail
 
-        # --regions-overlap 0 matches how GLIMPSE2 selects sites for the input region: a
-        # record counts if its POS falls inside, regardless of how far its REF span reaches.
-        # Using the default overlap mode would include records starting before the region and
-        # inflate every count.
-        # One indexed read per region rather than a single stream bucketed in awk. The regions
-        # are buffered and overlap, so the loop reads roughly 1.5x the file overall, not once
-        # per region -- and the obviously-correct form is worth more here than the faster one,
-        # because a miscount silently mis-sizes a shard rather than failing. If this ever
-        # becomes a bottleneck on the larger chromosomes, a single `bcftools query -f '%POS\n'`
-        # piped into an interval-bucketing awk is the drop-in replacement.
+        # --regions-overlap 0 matches GLIMPSE2: a record counts if its POS is inside. The
+        # default mode would also include records starting before the region and inflate.
+        # Indexed read per region, not one bucketed stream: regions overlap so this reads
+        # ~1.5x the file, and a miscount mis-sizes a shard silently. Correctness over speed.
         REGIONS_FILE=~{write_lines(input_regions)}
         : > counts.txt
         while read -r REGION; do
@@ -309,8 +238,7 @@ task CountPanelVariantsPerShard {
             exit 1
         fi
 
-        # read_json wants a JSON array; read_lines would give Array[String], which does not
-        # coerce to Array[Int] reliably across engines.
+        # read_json wants a JSON array; read_lines gives Array[String], which does not coerce.
         printf '[%s]\n' "$(paste -sd, counts.txt)" > ~{output_prefix}.n_variants.json
         cat ~{output_prefix}.n_variants.json
     >>>
@@ -321,13 +249,9 @@ task CountPanelVariantsPerShard {
     }
 
     #########################
-    # NOT preemptible, deliberately. Every phase shard for this chromosome blocks on this
-    # task, so it is both a serialisation point and a single point of failure for the whole
-    # chromosome. Streaming a ~1.2 GB sites BCF across ~47 regions on chr2 takes minutes,
-    # against a median preemption at 7 minutes -- so on the big chromosomes a preemptible
-    # instance would frequently restart from scratch and delay all 523 downstream shards.
-    # This task costs cents; taking it off spot removes a new failure mode from the critical
-    # path for less than the price of one preemption.
+    # NOT preemptible: every phase shard blocks on this, so it is a serialisation point and a
+    # per-chromosome single point of failure. Minutes of runtime against a 7-minute median
+    # preemption would often restart and delay all 523 shards. It costs cents.
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
         mem_gb:             4,
@@ -363,20 +287,13 @@ task GLIMPSE2Phase {
 
         String docker
 
-        # Both of these are typed inputs rather than text inside extra_phase_args because the
-        # memory request below is computed from them. Anything that changes the size of the
-        # forward matrix has to be visible to the sizing arithmetic; a caller who replaced
-        # extra_phase_args to add one unrelated option would otherwise silently drop
-        # --Kpbwt 1000 and get this build's default of 2000, doubling the matrix while the
-        # memory request stayed put. The command strips both options from extra_phase_args
-        # and injects these instead.
-        #
-        # phase_threads is pinned rather than $(nproc): the forward matrix is allocated per
-        # thread, so under $(nproc) memory would be a function of cpu_cores while the N1
-        # ratio limit makes cpu_cores a function of memory. Solving that coupling for a shard
-        # of L variants gives cpu * (6.5 - 4*L/1e6) >= 5.5, which is unsolvable above
-        # L ~= 1.6M. Pinning decouples them. It is also why cpu_cores below may exceed
-        # phase_threads -- the extra cores buy ratio headroom, not parallelism.
+        # Typed, not text in extra_phase_args, because the memory request is computed from
+        # them: a caller replacing that string would otherwise drop --Kpbwt 1000, get this
+        # build's default of 2000, and double the matrix while the request stayed put.
+        # threads is pinned rather than $(nproc) because the matrix is per-thread, which under
+        # $(nproc) makes memory depend on cpu while the N1 ratio makes cpu depend on memory --
+        # unsolvable above L ~= 1.6M. cpu_cores may therefore exceed threads: ratio headroom,
+        # not parallelism.
         Int phase_threads = 4
         Int phase_kpbwt = 1000
 
@@ -391,89 +308,46 @@ task GLIMPSE2Phase {
         RuntimeAttr? runtime_attr_override
     }
 
-    # Per-shard memory. From phase/src/models/imputation_hmm.cpp:
-    #   Alpha.resize(polymorphic_sites.size() * modK)   // float
-    # modK is n_states rounded up to a multiple of 8, and n_states is bounded above by Kpbwt,
-    # so the matrix costs at most 4 bytes * L * Kpbwt per thread:
+    # imputation_hmm.cpp allocates Alpha as polymorphic_sites * modK floats, modK = n_states
+    # rounded to a multiple of 8 and bounded by Kpbwt, so the matrix costs at most
+    # 4 bytes * L * Kpbwt per thread. UPPER BOUND, not a fit: n_states is often well below
+    # Kpbwt and logged L counts all panel sites.
     #
-    #   mem = 8 + 4 * threads * Kpbwt * L / 1e9    (GB)
+    # Against the observed 16 GiB pass/fail boundary at 4 threads / Kpbwt 1000:
+    #   L =   657,784 -> 19 GiB  (passed at 16, marginally)
+    #   L =   965,039 -> 24 GiB  (OOMed at 16)
+    #   L = 1,346,888 -> 30 GiB  (OOMed at 16)
+    # Typical L ~= 400k -> 15 GiB / 4 cpu.
     #
-    # The 8 GB constant covers GLIMPSE2's fixed structures with margin -- the observed fixed
-    # cost was nearer 5.5, and the fit came from a handful of points near a noisy threshold.
-    #
-    # Calibration against the observed pass/fail boundary at 16 GiB, four threads, Kpbwt 1000:
-    #   chr22 s0   L =   657,784  -> 19 GiB   (passed at 16, marginally)
-    #   chr20 s4   L =   965,039  -> 24 GiB   (OOMed at 16)
-    #   chr7  s12  L = 1,346,888  -> 30 GiB   (OOMed at 16)
-    # and a typical shard at L ~= 400k asks for 15 GiB / 4 cpu.
-    #
-    # This is an upper bound rather than an exact model: n_states is frequently well below
-    # Kpbwt, and GLIMPSE2's logged L counts total panel sites. Bounding in the safe direction
-    # is deliberate, but it is why this is not a tight fit.
-    #
-    # COST: sizing per shard is what keeps fixing the OOMs from costing anything. Most shards
-    # land at 4 cpu / ~15 GiB; only the densest handful widen. At n1-custom us-central1 spot
-    # rates and ~35 min per shard, across 523 shards:
-    #
-    #   old  4 cpu / 16 GiB flat (OOM-prone)   $18.7 per batch
-    #   flat 8 cpu / 40 GiB (worst-case bound) $40.6
-    #   per-shard, this change                 $18.4
-    #
-    # Whole batch including ligate, pop and the counting task: $22.4 -> $22.8, or ~$44 -> ~$45
-    # effective at the measured 1.97 full-run-equivalents per success. Over 200 batches that
-    # is about +$140 against the old shape -- and about $8.7k less than the flat bound would
-    # have cost. The six OOMing shards get fixed essentially for free.
-    # Parenthesised to force Float promotion before the multiplications, not for readability.
-    # Evaluated as integers, phase_kpbwt * n_variants alone is 1000 * 1,346,888 = 1.35e9, and
-    # at Kpbwt 2000 it is 2.7e9 -- past Int32. Promoting first keeps the whole product in
-    # Float. Do not reorder this expression.
+    # Sizing per shard is what makes fixing the OOMs free: phase costs $18.4/batch against
+    # $18.7 for the old OOM-prone 4/16 shape, and $40.6 for a flat worst-case 8/40.
+    # Parenthesised to force Float promotion first: as integers, phase_kpbwt * n_variants is
+    # 2.7e9 at Kpbwt 2000, past Int32. Do not reorder.
     Int final_mem_gb  = 8 + ceil((((4.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
-    # N1 allows at most 6.5 GB per cpu (GcpBatchCustomMachineType.scala) and rounds any cpu
-    # count other than 1 up to an even number. Doing both here keeps the requested shape
-    # visible instead of letting Cromwell silently adjust it.
+    # N1 allows <= 6.5 GB/cpu and rounds any cpu count but 1 up to even; doing both here keeps
+    # the requested shape visible instead of letting Cromwell adjust it silently.
     Int ratio_min_cpu = ceil(final_mem_gb / 6.5)
     Int unrounded_cpu = if ratio_min_cpu > phase_threads then ratio_min_cpu else phase_threads
     Int final_cpu     = unrounded_cpu + (unrounded_cpu % 2)
 
     # Sized from the actual inputs rather than a flat 50 GB.
     #
-    # Peak is NOT just the localized inputs. Cromwell's checkpoint sync copies the checkpoint
-    # before replacing it (cp checkpoint.bin checkpoint.bin-tmp), so two full copies coexist,
-    # and the reheader step writes the output a second time. For chr7 s12 that is roughly
-    #   10.65 (bin + PL VCF) + ~1.3 (output, written twice) + ~4 (1.39 GB checkpoint x2) ~= 16 GB
-    # against 10 + ceil(2.0 * 10.61) = 32 GB provisioned, i.e. a 2.0x margin. (size() returns
-    # decimal GB, so the provisioned figure is nearer 33 GiB in practice.)
-    #
-    # The 30 GB floor is deliberate and costs little. Localization was measured once, at 50 GiB:
-    # 8.96 GiB in 57 s (161 MiB/s), about 7x what the documented pd-ssd scaling (0.48 MiB/s per
-    # GiB) predicts. That shows per-GiB scaling is not binding *at 50 GiB*; it says nothing about
-    # the curve at 16-20 GiB. If the scaling does bite there, a 16 GiB disk would localize at
-    # ~8 MiB/s and turn a 57 s step into ~8 min, on every one of 523 shards. The floor keeps the
-    # smallest disk within striking distance of the one size actually measured until someone
-    # times a shard on a small disk; raising the risk to save 10 GB is a bad trade.
-    #
-    # Sam's original TODO also notes that only one shard of input_vcf is ever used; pre-splitting
-    # the PL VCF per chromosome upstream would shrink this further and cut ~1.4 TB of redundant
-    # localization per batch. Not done here -- it is a change to the preprocessing stage.
+    # Peak is not just the inputs: Cromwell's checkpoint sync keeps two copies (cp to -tmp) and
+    # reheader writes the output twice, so chr7 s12 peaks ~16 GB against 32 provisioned.
+    # The 30 GB floor is deliberate: localization was measured only at 50 GiB (161 MiB/s, ~7x
+    # the documented pd-ssd per-GiB scaling), which says nothing about the curve at 16-20 GiB.
+    # Sam's TODO stands -- only one shard of input_vcf is used, so pre-splitting it upstream
+    # would cut ~1.4 TB of redundant localization per batch.
     Int computed_disk_gb = 10 + ceil(2.0 * (size(panel_split_chunk_bin, "GB") + size(input_vcf, "GB")))
     Int disk_size_gb = if computed_disk_gb > 30 then computed_disk_gb else 30
 
     command <<<
         set -euxo pipefail
 
-        # ---- resource instrumentation (best effort; must survive an OOM kill) -------------
-        # Two deliberate choices, both load-bearing:
-        #
-        #  * Emitted from an EXIT trap, not the end of the script. Under `set -e` a SIGKILLed
-        #    child aborts the command, so an end-of-script report captures nothing from
-        #    precisely the runs worth measuring. The shell outlives the killed child -- which
-        #    is why "line 32: 16 Killed" appears in these logs at all -- so the trap fires and
-        #    still reports the peak that caused the kill.
-        #  * Written to stderr, not stdout. Cromwell delocalizes stderr for FAILED tasks;
-        #    File outputs are not produced at all when a task fails.
-        #
-        # Every read is guarded and the trap disables errexit, so instrumentation can never
-        # fail the task it measures.
+        # Peak RSS via EXIT trap on stderr. Must be a trap: under set -e a SIGKILLed child
+        # aborts the script, so an end-of-script report would miss every OOM -- the only runs
+        # worth measuring. Must be stderr: Cromwell delocalizes it for FAILED tasks, File
+        # outputs do not exist. Guarded throughout; cannot fail the task it measures.
         _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
         _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
         _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
@@ -488,8 +362,7 @@ task GLIMPSE2Phase {
             echo "[RESOURCE] task=GLIMPSE2Phase region=~{input_region} n_variants=~{n_variants} requested_mem_gib=~{final_mem_gb} requested_cpu=~{final_cpu} threads=~{phase_threads} kpbwt=~{phase_kpbwt} rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
         }
         trap _instr_report EXIT
-        # Coarse time series so a spike can be located against the tool's own progress markers
-        # (GLIMPSE2 prints Cnk/Buf lines as it advances). One stderr line per 10 s.
+        # 10 s time series, so a spike can be located against GLIMPSE2's Cnk/Buf markers.
         ( set +x; while :; do
             echo "[RESOURCE-TS] t=$((SECONDS-_INSTR_T0)) rss_gib=$(_instr_cur)" >&2
             sleep 10
@@ -525,29 +398,19 @@ task GLIMPSE2Phase {
             set -e
         }
 
-        # Fail fast on values that would make the memory request meaningless. GLIMPSE2 would
-        # otherwise either reject these itself -- and boost program_options errors are caught
-        # and exit 0, so the failure would surface much later as a missing output file -- or
-        # accept them and overrun the request.
+        # Fail fast: GLIMPSE2 swallows program_options errors and exits 0, so a bad value
+        # would surface much later as a missing output file.
         if [ "~{phase_threads}" -lt 1 ] || [ "~{phase_kpbwt}" -lt 1 ]; then
             echo "ERROR: phase_threads and phase_kpbwt must both be >= 1 (got ~{phase_threads}, ~{phase_kpbwt})." >&2
             exit 1
         fi
 
-        # The memory request is computed from phase_threads and phase_kpbwt (see the sizing
-        # block above), so both have to come from that one place. Existing input CSVs carry
-        # --thread inside extra_phase_args, and the previous default string carried --Kpbwt.
-        # Passing either twice hands GLIMPSE2 a duplicate option, which boost program_options
-        # rejects -- and because GLIMPSE2 catches parser errors and exits 0, that surfaces later
-        # as a confusing missing-BCF failure rather than a clean error. Honouring the string's
-        # value instead is worse still: it decouples the parameter from the memory sized
-        # against it. So strip both from extra_phase_args, warn, and inject the typed values.
-        # NOTE: the placeholder is substituted into this script as literal text, so bash
-        # expands anything expandable inside it at assignment time. The historical default
-        # contained "--thread $(nproc)", which therefore becomes "--thread 8" here before the
-        # stripping below ever sees it. Both forms are handled -- the value matcher accepts any
-        # non-'-' token, so it removes "$(nproc)" and "8" alike -- but the distinction matters
-        # when reasoning about this block, and the tests cover both spellings for that reason.
+        # Strip both from extra_phase_args and inject the typed values. Passing either twice
+        # is a duplicate option, which boost program_options rejects -- and GLIMPSE2 catches
+        # parser errors and exits 0, so it surfaces later as a confusing missing-BCF failure.
+        # Honouring the string's value instead would decouple it from the memory sized on it.
+        # The placeholder is substituted as literal text, so bash expands "$(nproc)" here
+        # before stripping sees it. Both spellings are handled and both are tested.
         EXTRA_PHASE_ARGS="~{extra_phase_args}"
         for OPT in thread Kpbwt; do
             if echo "$EXTRA_PHASE_ARGS" | grep -qE "(^|[[:space:]])--${OPT}([[:space:]]|=|$)"; then
@@ -559,11 +422,9 @@ task GLIMPSE2Phase {
                 # leaving that behind would reintroduce the duplicate this block exists to
                 # prevent. The second removes a valueless leftover (e.g. a trailing "--thread"),
                 # which would otherwise survive as a bare duplicate.
-                # Three passes. The first takes a signed numeric value, so "--thread -1"
-                # does not leave a stray "-1" behind for GLIMPSE2 to read as a positional.
-                # The second takes any value not starting with '-' -- it must match more than
-                # [0-9]+, because the historical default used "--thread $(nproc)". The third
-                # removes a valueless leftover such as a trailing "--thread".
+                # Signed numeric first (else "--thread -1" leaves a stray "-1"), then any
+                # value not starting with '-' (must beat [0-9]+, the old default was
+                # "--thread $(nproc)"), then a valueless leftover.
                 EXTRA_PHASE_ARGS=$(echo "$EXTRA_PHASE_ARGS" \
                     | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]+|=)-?[0-9]+/ /g" \
                     | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]+|=)[^-[:space:]][^[:space:]]*/ /g" \
@@ -619,12 +480,9 @@ kpbwt=~{phase_kpbwt} resumed=$RESUMED"
         docker:             docker
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    # runtime_attr_override is applied field by field, so a caller who overrides only mem_gb
-    # would otherwise keep a cpu_cores computed for the DEFAULT memory -- e.g. mem_gb 64 with
-    # the default 4 cpu is 16 GB/cpu, far past the N1 limit, and Cromwell would silently widen
-    # the CPU count. That is the exact hidden adjustment the sizing arithmetic exists to
-    # prevent, so the ratio is re-derived here from whatever memory actually won, and an
-    # explicit cpu_cores override still takes precedence over the derivation.
+    # runtime_attr_override applies field by field, so overriding only mem_gb would keep a cpu
+    # computed for the DEFAULT memory (64 GiB with 4 cpu is 16 GB/cpu, silently widened by
+    # Cromwell). Re-derive from whichever memory won; an explicit cpu_cores still wins.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
     Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
     Int eff_unrounded = if eff_ratio_cpu > phase_threads then eff_ratio_cpu else phase_threads
@@ -660,19 +518,10 @@ task GLIMPSE2Ligate {
     command <<<
         set -euox pipefail
 
-        # ---- resource instrumentation (best effort; must survive an OOM kill) -------------
-        # Two deliberate choices, both load-bearing:
-        #
-        #  * Emitted from an EXIT trap, not the end of the script. Under `set -e` a SIGKILLed
-        #    child aborts the command, so an end-of-script report captures nothing from
-        #    precisely the runs worth measuring. The shell outlives the killed child -- which
-        #    is why "line 32: 16 Killed" appears in these logs at all -- so the trap fires and
-        #    still reports the peak that caused the kill.
-        #  * Written to stderr, not stdout. Cromwell delocalizes stderr for FAILED tasks;
-        #    File outputs are not produced at all when a task fails.
-        #
-        # Every read is guarded and the trap disables errexit, so instrumentation can never
-        # fail the task it measures.
+        # Peak RSS via EXIT trap on stderr. Must be a trap: under set -e a SIGKILLed child
+        # aborts the script, so an end-of-script report would miss every OOM -- the only runs
+        # worth measuring. Must be stderr: Cromwell delocalizes it for FAILED tasks, File
+        # outputs do not exist. Guarded throughout; cannot fail the task it measures.
         _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
         _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
         _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
@@ -687,8 +536,7 @@ task GLIMPSE2Ligate {
             echo "[RESOURCE] task=GLIMPSE2Ligate n_shards=~{length(phased_vcfs)} requested_mem_gib=32 requested_cpu=6 threads=2 rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
         }
         trap _instr_report EXIT
-        # Coarse time series so a spike can be located against the tool's own progress markers
-        # (GLIMPSE2 prints Cnk/Buf lines as it advances). One stderr line per 10 s.
+        # 10 s time series, so a spike can be located against GLIMPSE2's Cnk/Buf markers.
         ( set +x; while :; do
             echo "[RESOURCE-TS] t=$((SECONDS-_INSTR_T0)) rss_gib=$(_instr_cur)" >&2
             sleep 10
@@ -710,49 +558,19 @@ task GLIMPSE2Ligate {
     }
 
     #########################
-    # 32 GiB is an empirical cap, NOT a validated model. What is established: ligate was
-    # SIGKILLed (rc=137) at 12 GiB on chr2 and chr20, twice each, and chr7 needed three
-    # attempts; chr22 passed. The failures correlate with the number of variants in the
-    # densest seam of each chromosome, and 12 GiB sits between chr22's worst seam (245k,
-    # passed) and chr2's (597k, failed).
+    # 32 GiB is an empirical cap, NOT a validated model.
     #
-    # An earlier version of this comment asserted a mechanism -- that the two synced readers
-    # held every seam record, giving mem ~= 1.5 + 18*L_isec/1e6. That does not survive
-    # reading HTSlib 1.16: _reader_fill_buffer only buffers records sharing a coordinate and
-    # stops at the first record with a different one, reusing the buffer as it advances. So
-    # the linear-in-seam-length model is wrong, and the correlation is probably confounded
-    # (denser seams also carry more multiallelic sites, and the highly multiallelic bubbles
-    # are a known sore spot in this panel).
-    #
-    # What survives is only that something seam-specific is real: the failing seam was
-    # predicted correctly three times out of three (chr20 seam 4, chr2 seam 17, chr7 seam 11),
-    # computed from chunks.tsv before the outcomes were known. TWO mechanisms have been
-    # proposed to explain that and BOTH are dead. Recorded here so neither gets re-derived:
-    #
-    #  1. Linear in seam length, mem ~= 1.5 + 18*L_isec/1e6. Killed by HTSlib 1.16:
-    #     _reader_fill_buffer only buffers records sharing a coordinate and stops at the first
-    #     record with a different one, reusing the buffer as it advances. Nothing accumulates
-    #     across the seam.
-    #
-    #  2. Max records per coordinate (large split multiallelic bubbles piling many ALT records
-    #     at one position). Killed on both separation and magnitude:
-    #       - chr20 peaked at 10,465 records at one position and FAILED; chr22 peaked at
-    #         9,937 and PASSED. Five percent apart, opposite outcomes. Only chr2 (24,745)
-    #         stands out at all.
-    #       - magnitude is off by ~100x: 10,465 records x ~9 KB x 2 readers is ~190 MB, not
-    #         the ~12 GB that would have to be explained.
-    #
-    # So the cause is genuinely unidentified. Remaining candidates -- buffer high-water marks,
-    # index or output construction, allocator behaviour, something outside the ligater process
-    # entirely -- are not distinguishable from rc=137. The only thing that would settle it is
-    # peak RSS from /usr/bin/time -v around one known-failing seam.
-    #
-    # Until then this is a cap chosen to stop the bleeding, and it should not be tuned in
-    # either direction on the strength of a model, because every model tried so far has been
-    # wrong.
-    #
-    # cpu 6 exists only to keep 32/6 = 5.33 under the N1 6.5 GB/cpu limit; with --thread 2
-    # four of those cores are deliberately idle. That is the price of memory on this shape.
+    # Established: rc=137 at 12 GiB on chr2 and chr20 twice each, chr7 on three attempts,
+    # chr22 passing -- correlating with each chromosome's densest seam, predicted 3/3 blind.
+    # TWO mechanisms have been proposed and BOTH are dead; recorded so neither is re-derived:
+    #  1. Linear in seam length (mem ~= 1.5 + 18*L_isec/1e6). HTSlib 1.16 _reader_fill_buffer
+    #     only buffers records sharing a coordinate, so nothing accumulates across a seam.
+    #  2. Max records per coordinate. chr20 peaked at 10,465 and FAILED, chr22 at 9,937 and
+    #     PASSED -- 5% apart, opposite outcomes -- and 10,465 x ~9 KB x 2 readers is ~190 MB,
+    #     ~100x short of the ~12 GB to explain.
+    # The cause is unidentified. Do not tune this on a model; every model has been wrong.
+    # The EXIT-trap peak RSS above is what will settle it.
+    # cpu 6 only keeps 32/6 under the N1 6.5 GB/cpu limit; with --thread 2, four cores idle.
     RuntimeAttr default_attr = object {
         cpu_cores:          6,
         mem_gb:             32,
@@ -763,12 +581,9 @@ task GLIMPSE2Ligate {
         docker:             docker
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    # runtime_attr_override is applied field by field, so a caller who overrides only mem_gb
-    # would otherwise keep a cpu_cores computed for the DEFAULT memory -- e.g. mem_gb 64 with
-    # the default 4 cpu is 16 GB/cpu, far past the N1 limit, and Cromwell would silently widen
-    # the CPU count. That is the exact hidden adjustment the sizing arithmetic exists to
-    # prevent, so the ratio is re-derived here from whatever memory actually won, and an
-    # explicit cpu_cores override still takes precedence over the derivation.
+    # runtime_attr_override applies field by field, so overriding only mem_gb would keep a cpu
+    # computed for the DEFAULT memory (64 GiB with 4 cpu is 16 GB/cpu, silently widened by
+    # Cromwell). Re-derive from whichever memory won; an explicit cpu_cores still wins.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
     Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
     Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2
@@ -813,19 +628,10 @@ task PopAndMarginalizeCollisions {
     command <<<
         set -euox pipefail
 
-        # ---- resource instrumentation (best effort; must survive an OOM kill) -------------
-        # Two deliberate choices, both load-bearing:
-        #
-        #  * Emitted from an EXIT trap, not the end of the script. Under `set -e` a SIGKILLed
-        #    child aborts the command, so an end-of-script report captures nothing from
-        #    precisely the runs worth measuring. The shell outlives the killed child -- which
-        #    is why "line 32: 16 Killed" appears in these logs at all -- so the trap fires and
-        #    still reports the peak that caused the kill.
-        #  * Written to stderr, not stdout. Cromwell delocalizes stderr for FAILED tasks;
-        #    File outputs are not produced at all when a task fails.
-        #
-        # Every read is guarded and the trap disables errexit, so instrumentation can never
-        # fail the task it measures.
+        # Peak RSS via EXIT trap on stderr. Must be a trap: under set -e a SIGKILLed child
+        # aborts the script, so an end-of-script report would miss every OOM -- the only runs
+        # worth measuring. Must be stderr: Cromwell delocalizes it for FAILED tasks, File
+        # outputs do not exist. Guarded throughout; cannot fail the task it measures.
         _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '{printf "%.2f", $1/1073741824}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
         _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
         _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
@@ -840,8 +646,7 @@ task PopAndMarginalizeCollisions {
             echo "[RESOURCE] task=PopAndMarginalizeCollisions region=~{region} requested_mem_gib=12 requested_cpu=2 rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
         }
         trap _instr_report EXIT
-        # Coarse time series so a spike can be located against the tool's own progress markers
-        # (GLIMPSE2 prints Cnk/Buf lines as it advances). One stderr line per 10 s.
+        # 10 s time series, so a spike can be located against GLIMPSE2's Cnk/Buf markers.
         ( set +x; while :; do
             echo "[RESOURCE-TS] t=$((SECONDS-_INSTR_T0)) rss_gib=$(_instr_cur)" >&2
             sleep 10
@@ -878,22 +683,11 @@ task PopAndMarginalizeCollisions {
     }
 
     #########################
-    # DELIBERATELY UNCHANGED at 12 GiB / 2 cpu (6.0 GB/cpu, within the N1 limit).
-    #
-    # An earlier revision raised this to 24 GiB on the reasoning that chr2 and chr20 -- the two
-    # chromosomes with the densest seams -- have never reached this stage, ligate having failed
-    # first, so it is untested at the sizes that matter. That observation stands. The
-    # justification did not: it rested on pop being a couple of dozen tasks per batch, where
-    # over-provisioning is free.
-    #
-    # It is not. pop_regions defaults to output_regions, so this scatters once per shard --
-    # ~523 tasks per batch, the same order as phase, not the 22 that ligate runs. Doubling the
-    # memory therefore costs roughly $3.5 per batch, ~$700 across the 50k, to guard against a
-    # failure that has never been observed in any pop task on any chromosome.
-    #
-    # "Downstream of something that failed" is also not evidence of anything: it is equally
-    # true of every task after phase. Raising this on that basis would mean raising all of
-    # them. Left alone; if a pop task ever does OOM, that is the evidence to act on.
+    # DELIBERATELY UNCHANGED at 12 GiB / 2 cpu. chr2 and chr20 have never reached this stage
+    # (ligate failed first), so it is untested at the sizes that matter -- but no pop task has
+    # ever OOMed, and pop_regions defaults to output_regions, so this scatters ~523 times per
+    # batch, not 22. Doubling it would cost ~$3.5/batch for no evidence. "Downstream of a
+    # failure" is not evidence; it is true of every task after phase.
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
         mem_gb:             12,
@@ -904,12 +698,9 @@ task PopAndMarginalizeCollisions {
         docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust:v1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    # runtime_attr_override is applied field by field, so a caller who overrides only mem_gb
-    # would otherwise keep a cpu_cores computed for the DEFAULT memory -- e.g. mem_gb 64 with
-    # the default 4 cpu is 16 GB/cpu, far past the N1 limit, and Cromwell would silently widen
-    # the CPU count. That is the exact hidden adjustment the sizing arithmetic exists to
-    # prevent, so the ratio is re-derived here from whatever memory actually won, and an
-    # explicit cpu_cores override still takes precedence over the derivation.
+    # runtime_attr_override applies field by field, so overriding only mem_gb would keep a cpu
+    # computed for the DEFAULT memory (64 GiB with 4 cpu is 16 GB/cpu, silently widened by
+    # Cromwell). Re-derive from whichever memory won; an explicit cpu_cores still wins.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
     Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
     Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2
