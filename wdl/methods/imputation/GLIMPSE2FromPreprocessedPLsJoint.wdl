@@ -296,10 +296,18 @@ task GLIMPSE2Phase {
         # against it. So strip both from extra_phase_args, warn, and inject the typed values.
         EXTRA_PHASE_ARGS="~{extra_phase_args}"
         for OPT in thread Kpbwt; do
-            if echo "$EXTRA_PHASE_ARGS" | grep -qE "(^|[[:space:]])--${OPT}([[:space:]]|=)"; then
+            if echo "$EXTRA_PHASE_ARGS" | grep -qE "(^|[[:space:]])--${OPT}([[:space:]]|=|$)"; then
                 echo "WARNING: --${OPT} found in extra_phase_args; overriding with the typed input." >&2
                 echo "WARNING: set phase_threads / phase_kpbwt instead -- memory is sized from them." >&2
-                EXTRA_PHASE_ARGS=$(echo "$EXTRA_PHASE_ARGS" | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]+|=)[0-9]+/ /g")
+                # Two passes. The first removes the option together with its value, where the
+                # value is any token not itself starting with '-' -- it must match more than
+                # [0-9]+, because the historical default string used "--thread $(nproc)" and
+                # leaving that behind would reintroduce the duplicate this block exists to
+                # prevent. The second removes a valueless leftover (e.g. a trailing "--thread"),
+                # which would otherwise survive as a bare duplicate.
+                EXTRA_PHASE_ARGS=$(echo "$EXTRA_PHASE_ARGS" \
+                    | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]+|=)[^-[:space:]][^[:space:]]*/ /g" \
+                    | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]|=|$)/ /g")
             fi
         done
 
