@@ -301,7 +301,8 @@ task CountPanelVariantsPerShard {
         REGIONS_FILE=~{write_lines(input_regions)}
         : > counts.txt
         while read -r REGION; do
-            bcftools view --no-version --threads 2 -H -r "$REGION" --regions-overlap 0 \
+            # --threads is ADDITIONAL worker threads, so 1 here is 2 total on 2 cpu.
+            bcftools view --no-version --threads 1 -H -r "$REGION" --regions-overlap 0 \
                 ~{panel_bubble_split_sites_only_vcf} | wc -l >> counts.txt
         done < "$REGIONS_FILE"
 
@@ -570,7 +571,15 @@ task GLIMPSE2Ligate {
         # task is given. Hardcoding the floor at 2 while the command asked for 4 threads meant
         # an override of mem_gb to 12 produced eff_cpu 2 running --thread 4 -- oversubscribed.
         # phase avoids this by flooring on phase_threads; ligate now does the same.
-        Int ligate_threads = 4
+        #
+        # Left at 2, not raised to 4. The 12.39 GiB peak this task is sized against was
+        # measured at 2 threads, and bcf_sr_set_threads allocates per-thread decompression
+        # buffers, so 4 threads is a different configuration than the one that was measured.
+        # An earlier revision did raise it, reasoning that ~1 GiB per extra thread would fit
+        # in the headroom -- but that is a derived estimate, and every derived estimate in this
+        # file has been wrong (phase by 46% on slope, ligate by 4.5x on coefficient). Raise it
+        # once a 4-thread peak exists; the instrumentation will report one.
+        Int ligate_threads = 2
 
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
 
@@ -828,8 +837,9 @@ task PopAndMarginalizeCollisions {
 
         # this now only works for pop-glimpse2-joint-opt.rs;
         # the sort may also be extraneous, but we keep it in to guard against getting out of sync with the popped panel
-        bcftools view --threads 2 -r ~{region} --regions-overlap 0 ~{panel_bubble_split_sites_only_vcf} -Oz -o panel.bubble.split.sites.shard.vcf.gz
-        bcftools view --threads 2 -r ~{region} --regions-overlap 0 ~{posteriors_vcf} | \
+        # --threads is ADDITIONAL worker threads, so 1 is 2 total on this task's 2 cpu.
+        bcftools view --threads 1 -r ~{region} --regions-overlap 0 ~{panel_bubble_split_sites_only_vcf} -Oz -o panel.bubble.split.sites.shard.vcf.gz
+        bcftools view --threads 1 -r ~{region} --regions-overlap 0 ~{posteriors_vcf} | \
             $POP_BIN ~{panel_id_split_vcf_gz} panel.bubble.split.sites.shard.vcf.gz | \
             bcftools sort --max-mem=2G -W -Ob -o ~{output_prefix}.bcf
 

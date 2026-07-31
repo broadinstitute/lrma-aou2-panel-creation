@@ -116,14 +116,17 @@ expect_contains "preserved: --threads 4 (not --thread)" "--threads 4 --main 10" 
 # ---------------------------------------------------------------------------
 echo
 echo "Memory/CPU sizing"
-sizing() {  # kpbwt threads L -> "mem cpu"
+sizing() {  # kpbwt threads L -> "mem cpu"   (constants read from the WDL, never restated)
     python3 -c '
-import math, sys
+import math, re, sys
 kp, t, L = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-mem = 2 + math.ceil(8.0 * t * kp * L / 1e9)
+m = re.search(r"Int final_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
+              r"ceil\(\(\(\((\d+(?:\.\d+)?)\s*\*\s*phase_threads\)", open(sys.argv[4]).read())
+CONST, COEFF = (float(m.group(1)), float(m.group(2))) if m else (2.0, 8.0)
+mem = CONST + math.ceil(COEFF * t * kp * L / 1e9)
 r = math.ceil(mem / 6.5)
 u = r if r > t else t
-print(mem, u + (u % 2))' "$1" "$2" "$3"
+print(int(mem), u + (u % 2))' "$1" "$2" "$3" "$WDL"
 }
 
 # Every shard observed to OOM at 16 GiB must now be sized above 16; the one that passed at 16
