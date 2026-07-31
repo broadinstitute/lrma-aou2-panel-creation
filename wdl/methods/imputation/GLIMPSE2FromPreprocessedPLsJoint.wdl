@@ -18,6 +18,10 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # Workflow-level, not call-qualified: the phase memory request is computed from both.
         Int phase_threads = 4
         Int phase_kpbwt = 1000
+        # NOTE: GLIMPSE2 is not deterministic under multithreading. chr22 run twice with
+        # identical parameters gave identical AF at only 11.2% of sites (AF r = 0.999982,
+        # max |dAF| = 0.0247, INFO r = 0.990) -- agreement in distribution, not bit-for-bit.
+        # Pinning threads makes the thread COUNT reproducible, not the output.
 
         String output_prefix
 
@@ -36,7 +40,21 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # ZonesValidation accepts String and Array[String] alike, so the form is style only.
         # Values must lie in the backend's Batch job region. Does not reach the imported
         # ConcatVcfs call, which takes no zones argument.
-        # UNVERIFIED: whether a task-level value overrides the backend's allowedLocations.
+        # MEASURED 2026-07-31, and the answer is no: with these four zones set, a submitted
+        # job still reported
+        #     allowedLocations: ['regions/us-central1', 'zones/us-central1-a']
+        # so on the VWB backend a task-level zones does NOT override the configured
+        # allowedLocations. This attribute is therefore inert here. Kept because it is correct
+        # on backends that do honour it and it documents the intent, but widening the spot pool
+        # on VWB requires a backend config change, not a WDL change -- raise it with them
+        # alongside checkpointingInterval.
+        #
+        # This matters more than the cost: measured preemption ran 41-50% (run1, 4cpu/16G) and
+        # 63-72% (run2, 8cpu/40G) in the first hours of each run, decaying to ~17-21% later.
+        # run2 had only 150 shards yet preempted harder than run1's 523, so machine shape and
+        # clock both matter -- but 500+ shards of one shape against a single zone plausibly
+        # congests that zone itself. Until the backend allows more zones, staggering
+        # submissions is the only lever available from this side.
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
 
@@ -161,8 +179,10 @@ struct RuntimeAttr {
     Int? disk_gb
     # NOT consumed here, deliberately. Cromwell ADDS its 30 GB default to any bootDiskSizeGb
     # request, so the old value of 10 provisioned 40; omitting it yields the 30 GB minimum.
-    # An explicit 0 would keep this override live, but it is unverified that
-    # BootDiskSizeValidation accepts 0 -- and that would fail every task at once.
+    # CONFIRMED 2026-07-31: a submitted job reported bootDiskMib 28611 (30 GB), against 38148
+    # (40 GB) before -- 10 GB per shard, ~5.2 TB per batch. An explicit 0 would keep this
+    # override live, but it is unverified that BootDiskSizeValidation accepts 0, and that
+    # would fail every task at once.
     Int? boot_disk_gb
     Boolean? use_ssd
     Int? preemptible_tries
