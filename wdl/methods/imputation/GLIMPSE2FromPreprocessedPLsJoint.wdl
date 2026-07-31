@@ -34,11 +34,21 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # this set to 20, comparing localization time in the phase logs against that 57 s.
         Int phase_disk_floor_gb = 30
         # GLIMPSE2 is not deterministic under multithreading; pinning threads fixes the
-        # thread COUNT, not the output. chr22 run twice on identical inputs: 0 of 250 samples
-        # had an identical non-ref genotype count, median difference 0.16%, max 0.66%, no
-        # missing GTs; at site level AF identical at 11.2% of sites, AF r = 0.999982. That is
-        # the floor for a Terra-vs-VWB comparison. Those runs also differed in
-        # preemptible_tries, so checkpoint-restart is confounded with thread scheduling.
+        # thread COUNT, not the output. chr22 run twice on identical inputs, compared
+        # genotype by genotype over 1,896,739 sites x 250 samples (identical variant sets,
+        # zero key mismatches):
+        #     hard-call concordance   99.822%   (843,726 of 474,184,750 discordant)
+        #     non-ref discordance      4.671%   (either call non-ref -- the meaningful one)
+        #     phase flips, same GT     1.226%
+        #     worst sample            0.238%
+        # Discordance is symmetric -- 0/0->0/1 314,381 against 0/1->0/0 314,961 -- so it is
+        # noise, not a systematic shift in either direction, and it rises with allele
+        # frequency because that is where the heterozygotes are.
+        #
+        # This is the floor for any cross-platform comparison. A Terra-vs-VWB NRD near 4.7%
+        # means the two agree as well as one pipeline agrees with itself. Note those two runs
+        # also differed in preemptible_tries, so checkpoint-restart is confounded with thread
+        # scheduling; it bounds the combined effect rather than isolating either.
 
         String output_prefix
 
