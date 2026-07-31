@@ -27,11 +27,21 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # LARGEST REMAINING COST LEVER, and it is not in this file. cpuPlatform is unset, so
         # GcpBatchMachineConstraints maps these tasks to N1CustomMachineType -- the oldest and
         # most expensive family. N2D is ~14% cheaper per vCPU and per GB: ~$2.26 per batch,
-        # ~$760 across 200 batches, for one runtime line. It is not wired in because
-        # setMinCpuPlatform RESTRICTS placement to hosts with that CPU, and at the measured
-        # 41-72% preemption rates losing placement breadth could cost more than 14% saves. To
-        # test: add `cpuPlatform: "AMD Rome"` to a task's runtime block, run one chromosome and
-        # compare preemption rate and cost against N1.
+        # ~$760 across 200 batches, for one runtime line.
+        #
+        # It CANNOT be exposed as an optional input the way phase_disk_floor_gb is, and that is
+        # a property of Cromwell rather than a choice. RuntimeAttributesValidation.validate
+        # keys off presence -- values.get(key) match { case Some(v) => ...; case None =>
+        # validateNone } -- so an attribute is either in the runtime block or it is not.
+        # cpuPlatform is StringRuntimeAttributesValidation(...).optional, which handles ABSENT
+        # cleanly, but a runtime key wired to a String input is always PRESENT, and an empty
+        # string validates fine here and then reaches Batch as minCpuPlatform="". Testing N2D
+        # therefore means editing the runtime block, not overriding an input.
+        #
+        # Not wired in by default because setMinCpuPlatform RESTRICTS placement to hosts with
+        # that CPU, and at the measured 41-72% preemption rates losing placement breadth could
+        # cost more than 14% saves. To test: add `cpuPlatform: "AMD Rome"` to a task's runtime
+        # block, run one chromosome, compare preemption rate and cost against N1.
         #
         # The largest remaining lever on SSD quota, exposed as an input so testing it costs an
         # override rather than a WDL edit. At 30 a batch reserves ~31.4 TB (work + boot) and
@@ -210,12 +220,19 @@ struct RuntimeAttr {
     Float? mem_gb
     Int? cpu_cores
     Int? disk_gb
-    # NOT consumed here, deliberately. Cromwell ADDS its 30 GB default to any bootDiskSizeGb
-    # request, so the old value of 10 provisioned 40; omitting it yields the 30 GB minimum.
-    # CONFIRMED 2026-07-31: a submitted job reported bootDiskMib 28611 (30 GB), against 38148
-    # (40 GB) before -- 10 GB per shard, ~5.2 TB per batch. An explicit 0 would keep this
-    # override live, but it is unverified that BootDiskSizeValidation accepts 0, and that
-    # would fail every task at once.
+    # EXTRA boot disk on top of the backend default, not an absolute size, and 0 is correct.
+    # From BootDiskSizeValidation in Cromwell 91:
+    #     override protected def staticDefaultOption: Option[WomInteger] = Option(WomInteger(0))
+    #     case WomInteger(value) => (value + defaultBootDiskSize).validNel
+    # so an absent attribute takes the static default of 0 and an explicit 0 takes the same
+    # path -- both yield 0 + 30 = 30 GB, and there is no positive-int guard to trip. That is
+    # why the old value of 10 provisioned 40. CONFIRMED on a live job: bootDiskMib 28611
+    # (30 GB), against 38148 (40 GB) before -- 10 GB per shard, ~5.2 TB per batch.
+    #
+    # Passing 0 explicitly rather than omitting the attribute keeps this override usable by a
+    # caller running a larger custom Docker image, at identical default behaviour. An earlier
+    # revision omitted it and left this field a silent no-op because the 0 path was unverified;
+    # it is verified now.
     Int? boot_disk_gb
     Boolean? use_ssd
     Int? preemptible_tries
@@ -281,6 +298,7 @@ task CountPanelVariantsPerShard {
         cpu_cores:          4,
         mem_gb:             8,
         disk_gb:            disk_size_gb,
+        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  0,
         max_retries:        1,
@@ -382,6 +400,7 @@ task CountPanelVariantsPerShard {
         cpu:                    eff_cpu
         memory:                 eff_mem_gb + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -481,6 +500,10 @@ task GLIMPSE2Phase {
     #
     # Sizing per shard is what makes fixing the OOMs free: phase costs $18.4/batch against
     # $18.7 for the old OOM-prone 4/16 shape, and $40.6 for a flat worst-case 8/40.
+    #
+    # All figures in this block are COMPUTE-ONLY. Persistent disk adds ~$3.90 per batch and is
+    # not spot-discounted, taking the true total to ~$20.05. Differences between shapes at
+    # equal wall time are unaffected because disk cancels; absolute totals are not.
     # Parenthesised to force Float promotion first: as integers, phase_kpbwt * n_variants is
     # 2.7e9 at Kpbwt 2000, past Int32. Do not reorder.
     Int final_mem_gb  = 2 + ceil((((8.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
@@ -511,6 +534,7 @@ task GLIMPSE2Phase {
         cpu_cores:          final_cpu,
         mem_gb:             final_mem_gb,
         disk_gb:            disk_size_gb,
+        boot_disk_gb:       0,
         use_ssd:            true,
         # 10 spot attempts, and the measurement says spot is worth it. Over the instrumented
         # chr20 run: 415 successful VM-minutes against 286 wasted across 32 preemptions, a 41%
@@ -643,6 +667,7 @@ task GLIMPSE2Phase {
         cpu:                    eff_cpu
         memory:                 eff_mem_gb + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -735,6 +760,7 @@ task GLIMPSE2Ligate {
         cpu_cores:          4,
         mem_gb:             24,
         disk_gb:            disk_size_gb,
+        boot_disk_gb:       0,
         use_ssd:            true,
         # 2, unlike pop's 4, and for a reason rather than by inheritance. The spot arithmetic
         # that justified raising pop barely applies here: ligate is 22 tasks costing ~$0.26 per
@@ -808,6 +834,7 @@ task GLIMPSE2Ligate {
         cpu:                    eff_cpu
         memory:                 eff_mem_gb + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -867,6 +894,7 @@ task PopAndMarginalizeCollisions {
         cpu_cores:          2,
         mem_gb:             8,
         disk_gb:            disk_gb,
+        boot_disk_gb:       0,
         use_ssd:            true,
         # 4 rather than 2. Expected cost per success, spot at 30% of on-demand: at the
         # measured 40-60% preemption rate, 2 tries costs 0.58-0.84 of on-demand and 4-5 tries
@@ -947,6 +975,7 @@ task PopAndMarginalizeCollisions {
         cpu:                    eff_cpu
         memory:                 eff_mem_gb + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -974,6 +1003,7 @@ task RemapSampleNames {
         cpu_cores:          2,
         mem_gb:             4,
         disk_gb:            disk_size_gb,
+        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -1027,6 +1057,7 @@ task RemapSampleNames {
         cpu:                    eff_cpu
         memory:                 eff_mem_gb + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
