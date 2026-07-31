@@ -635,6 +635,13 @@ task GLIMPSE2Ligate {
         mem_gb:             24,
         disk_gb:            disk_size_gb,
         use_ssd:            true,
+        # 2, unlike pop's 4, and for a reason rather than by inheritance. The spot arithmetic
+        # that justified raising pop barely applies here: ligate is 22 tasks costing ~$0.26 per
+        # batch in total, so the spread between 2 and 5 attempts is about $0.03. What does
+        # matter is that ligate has no checkpoint and a failure costs the whole chromosome --
+        # chr7 needed three attempts, which under tries=2 means two preemptions then a
+        # guaranteed on-demand success. Falling back quickly is the reliable path, and at this
+        # cost the reliability is effectively free.
         preemptible_tries:  2,
         max_retries:        1,
         docker:             docker
