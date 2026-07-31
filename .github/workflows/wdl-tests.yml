@@ -4,12 +4,23 @@ on:
   push:
     branches: [ 'main' ]
   pull_request:
-    branches: [ 'main' ]
+    branches: [ 'main', 'sl_aou2_v1' ]
 
 env:
   CROMWELL_VERSION: 91
 
 jobs:
+
+  # Fast, self-contained contract tests for GLIMPSE2Phase argument handling and resource
+  # sizing. No Cromwell, no LFS, no cloud, no GLIMPSE2 binary -- runs in seconds, so unlike
+  # the plumbing tests below it is blocking rather than advisory.
+  phaseArgContract:
+    runs-on: ubuntu-latest
+    name: GLIMPSE2Phase argument and sizing contract
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'phase argument and sizing contract'
+        run: bash test/wdl/test-phase-arg-handling.sh
 
   #Run WDL plumbing tests
   wdlTests:
