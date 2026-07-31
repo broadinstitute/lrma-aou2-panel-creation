@@ -191,6 +191,40 @@ if [ -f "$WDL" ]; then
     else
         ok "no default string reintroduces --thread/--Kpbwt"
     fi
+
+    # build_cmd above mirrors the WDL rather than executing it, so it can pass while the WDL
+    # drifts. Assert the two sed patterns it mirrors are actually present, and in particular
+    # that the value matcher is not narrowed back to [0-9]+ -- which is the exact regression
+    # that let "--thread $(nproc)" through and produced a duplicate option.
+    if grep -qF 's/(^|[[:space:]])--${OPT}([[:space:]]+|=)[^-[:space:]][^[:space:]]*/ /g' "$WDL"; then
+        ok "WDL still strips non-integer option values"
+    else
+        bad "WDL still strips non-integer option values" "value-matching sed pattern changed"
+    fi
+    if grep -qF 's/(^|[[:space:]])--${OPT}([[:space:]]|=|$)/ /g' "$WDL"; then
+        ok "WDL still strips valueless leftovers"
+    else
+        bad "WDL still strips valueless leftovers" "second sed pattern changed"
+    fi
+    if grep -qE '\-\-\$\{OPT\}\(\[\[:space:\]\]\+\|=\)\[0-9\]\+' "$WDL"; then
+        bad "value matcher not narrowed to [0-9]+" "found the regressed pattern"
+    else
+        ok "value matcher not narrowed to [0-9]+"
+    fi
+
+    # The memory expression must keep Float promotion first; reordering overflows Int32.
+    if grep -qF 'ceil((((4.0 * phase_threads) * phase_kpbwt) * n_variants)' "$WDL"; then
+        ok "memory expression promotes to Float before multiplying"
+    else
+        bad "memory expression promotes to Float before multiplying" "expression reordered"
+    fi
+
+    # The counting task serialises the chromosome; it must not be preemptible.
+    if awk '/task CountPanelVariantsPerShard/,/^}/' "$WDL" | grep -qE 'preemptible_tries:\s*0,'; then
+        ok "CountPanelVariantsPerShard is non-preemptible"
+    else
+        bad "CountPanelVariantsPerShard is non-preemptible" "preemptible_tries is not 0"
+    fi
 else
     bad "WDL present at expected path" "$WDL"
 fi

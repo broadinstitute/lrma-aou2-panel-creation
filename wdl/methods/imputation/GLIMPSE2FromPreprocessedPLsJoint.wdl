@@ -46,11 +46,15 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # NOTE: this does not reach the imported ConcatVcfs.ConcatVcfs call, which takes no
         # zones argument, so that one task still runs wherever the backend places it.
         #
-        # Space-separated String rather than Array[String]: Cromwell's ZonesValidation has
-        # long accepted a whitespace-delimited string and splits it, while Array[String]
-        # support is newer and unverified against this backend. The string form is the safer
-        # superset -- if it turned out only the array form worked we would see it on the first
-        # shard, whereas the reverse would fail validation on every task at once.
+        # Space-separated String rather than Array[String]. To be clear about why, since an
+        # earlier version of this comment gave the wrong reason: ZonesValidation accepts BOTH
+        # forms, in the same PartialFunction --
+        #     coercion = Set(WomStringType, WomArrayType(WomStringType))
+        #     case WomString(s) => s.split("\\s+").toVector.validNel
+        #     case WomArray(womType, value) if womType.memberType == WomStringType => ...
+        # so neither is safer than the other and this is purely a style choice. Do not "fix"
+        # it back to an array believing the string form is legacy, and do not assume the
+        # reverse either.
         #
         # UNVERIFIED: whether a task-level zones actually overrides the backend's
         # allowedLocations, which was observed pinned to
@@ -262,6 +266,12 @@ task CountPanelVariantsPerShard {
         # record counts if its POS falls inside, regardless of how far its REF span reaches.
         # Using the default overlap mode would include records starting before the region and
         # inflate every count.
+        # One indexed read per region rather than a single stream bucketed in awk. The regions
+        # are buffered and overlap, so the loop reads roughly 1.5x the file overall, not once
+        # per region -- and the obviously-correct form is worth more here than the faster one,
+        # because a miscount silently mis-sizes a shard rather than failing. If this ever
+        # becomes a bottleneck on the larger chromosomes, a single `bcftools query -f '%POS\n'`
+        # piped into an interval-bucketing awk is the drop-in replacement.
         : > counts.txt
         while read -r REGION; do
             bcftools view --no-version -H -r "$REGION" --regions-overlap 0 \
@@ -293,12 +303,19 @@ task CountPanelVariantsPerShard {
     }
 
     #########################
+    # NOT preemptible, deliberately. Every phase shard for this chromosome blocks on this
+    # task, so it is both a serialisation point and a single point of failure for the whole
+    # chromosome. Streaming a ~1.2 GB sites BCF across ~47 regions on chr2 takes minutes,
+    # against a median preemption at 7 minutes -- so on the big chromosomes a preemptible
+    # instance would frequently restart from scratch and delay all 523 downstream shards.
+    # This task costs cents; taking it off spot removes a new failure mode from the critical
+    # path for less than the price of one preemption.
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
         mem_gb:             4,
         disk_gb:            disk_size_gb,
         use_ssd:            true,
-        preemptible_tries:  3,
+        preemptible_tries:  0,
         max_retries:        1,
         docker:             docker
     }
@@ -388,7 +405,11 @@ task GLIMPSE2Phase {
     # effective at the measured 1.97 full-run-equivalents per success. Over 200 batches that
     # is about +$140 against the old shape -- and about $8.7k less than the flat bound would
     # have cost. The six OOMing shards get fixed essentially for free.
-    Int final_mem_gb  = 8 + ceil(4.0 * phase_threads * phase_kpbwt * n_variants / 1000000000.0)
+    # Parenthesised to force Float promotion before the multiplications, not for readability.
+    # Evaluated as integers, phase_kpbwt * n_variants alone is 1000 * 1,346,888 = 1.35e9, and
+    # at Kpbwt 2000 it is 2.7e9 -- past Int32. Promoting first keeps the whole product in
+    # Float. Do not reorder this expression.
+    Int final_mem_gb  = 8 + ceil((((4.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
     # N1 allows at most 6.5 GB per cpu (GcpBatchCustomMachineType.scala) and rounds any cpu
     # count other than 1 up to an even number. Doing both here keeps the requested shape
     # visible instead of letting Cromwell silently adjust it.
