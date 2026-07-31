@@ -267,13 +267,26 @@ task GLIMPSE2Phase {
     # L * Kpbwt * 4 bytes * threads over-counts. That is deliberate -- it is the safe
     # direction -- but it means the coefficient is a bound, not an invariant.
     #
-    # COST: this is not free. cpu goes 4 -> 8 across all 523 phase shards per batch, i.e.
-    # 2092 -> 4184 vCPU, roughly doubling the phase CPU bill (order $14 -> $28 per batch at
-    # spot, ~$2.8k over 200 batches). That is the price of sizing every shard for the worst
-    # one. Per-shard sizing from the real L would recover most of it -- only a handful of
-    # shards need this shape -- but it requires the chunked-panel producer to emit a per-shard
-    # variant count, which it does not. See the note on ChunkedPanelChromosome for why that is
-    # a separate change rather than an optional field here.
+    # COST: this is the expensive change in the file, and it is worth stating plainly.
+    # At n1-custom us-central1 spot rates (~$0.0332/vCPU-hr, ~$0.00445/GB-hr, spot ~30% of
+    # on-demand) and ~35 min per shard, phase goes from 4 cpu / 16 GiB to 8 cpu / 40 GiB
+    # across all 523 shards in a batch:
+    #
+    #   phase   523 tasks   $18.7 -> $40.6 per batch
+    #   ligate   22 tasks   $ 0.3 -> $ 0.9
+    #   pop     523 tasks   $ 3.5    (unchanged -- see the note on PopAndMarginalizeCollisions)
+    #   -------------------------------------------
+    #   total              $22.5 -> $45.0 per batch
+    #
+    # At the measured 1.97 full-run-equivalents per success from preemption that is roughly
+    # $44 -> $89 effective per batch, i.e. about +$9k across 200 batches. That is the price of
+    # sizing every shard for the worst one, paid so that six shards stop OOMing.
+    #
+    # Per-shard sizing from the real L would recover most of the phase half: at a typical
+    # L ~= 500k the same formula asks for 4 cpu / 20 GiB, and only a couple of dozen shards
+    # genuinely need the wide shape. It requires the chunked-panel producer to emit a
+    # per-shard variant count, which it does not -- see the note on ChunkedPanelChromosome for
+    # why that is a separate change rather than an optional field here.
     Int final_mem_gb  = 8 + ceil(32.0 * phase_kpbwt * phase_threads / 4000.0)
     # N1 allows at most 6.5 GB per cpu (GcpBatchCustomMachineType.scala) and rounds odd cpu
     # counts up to even. Doing it here keeps the requested shape visible instead of letting
@@ -451,28 +464,32 @@ task GLIMPSE2Ligate {
     # (denser seams also carry more multiallelic sites, and the highly multiallelic bubbles
     # are a known sore spot in this panel).
     #
-    # What survives the retraction is that something seam-specific is real: the failing seam
-    # was predicted correctly three times out of three (chr20 seam 4, chr2 seam 17, chr7
-    # seam 11), computed from chunks.tsv before the outcomes were known.
+    # What survives is only that something seam-specific is real: the failing seam was
+    # predicted correctly three times out of three (chr20 seam 4, chr2 seam 17, chr7 seam 11),
+    # computed from chunks.tsv before the outcomes were known. TWO mechanisms have been
+    # proposed to explain that and BOTH are dead. Recorded here so neither gets re-derived:
     #
-    # The leading hypothesis, and the one consistent with both that record and the HTSlib
-    # source, is max records per coordinate rather than records per seam.
-    # _reader_fill_buffer buffers *all* records sharing a position, and this panel splits
-    # multiallelic bubbles into one record per ALT -- so a large bubble puts hundreds or
-    # thousands of records at a single position, held across two readers at once. That
-    # predicts memory tracks peak pileup, and explains the confound directly: dense seams
-    # carry the big bubbles. Sam has separately flagged these bubbles as a known sore spot.
+    #  1. Linear in seam length, mem ~= 1.5 + 18*L_isec/1e6. Killed by HTSlib 1.16:
+    #     _reader_fill_buffer only buffers records sharing a coordinate and stops at the first
+    #     record with a different one, reusing the buffer as it advances. Nothing accumulates
+    #     across the seam.
     #
-    # Testable without running anything expensive -- compare max pileup on failing vs passing
-    # seams in the sites-only panel:
-    #   bcftools query -f '%POS\n' -r chr20:22877789-24452143 <panel>.bubble.split.sites.bcf \
-    #     | uniq -c | sort -rn | head -1
-    # If the failing seams show pileups an order of magnitude above chr22's, mem becomes a
-    # function of max pileup and this number stops being a guess.
+    #  2. Max records per coordinate (large split multiallelic bubbles piling many ALT records
+    #     at one position). Killed on both separation and magnitude:
+    #       - chr20 peaked at 10,465 records at one position and FAILED; chr22 peaked at
+    #         9,937 and PASSED. Five percent apart, opposite outcomes. Only chr2 (24,745)
+    #         stands out at all.
+    #       - magnitude is off by ~100x: 10,465 records x ~9 KB x 2 readers is ~190 MB, not
+    #         the ~12 GB that would have to be explained.
     #
-    # Other candidates if that comes back flat: buffer high-water marks, index/output
-    # construction, allocator behaviour. rc=137 alone does not distinguish them, so measure
-    # peak RSS on a known-failing seam before tuning further.
+    # So the cause is genuinely unidentified. Remaining candidates -- buffer high-water marks,
+    # index or output construction, allocator behaviour, something outside the ligater process
+    # entirely -- are not distinguishable from rc=137. The only thing that would settle it is
+    # peak RSS from /usr/bin/time -v around one known-failing seam.
+    #
+    # Until then this is a cap chosen to stop the bleeding, and it should not be tuned in
+    # either direction on the strength of a model, because every model tried so far has been
+    # wrong.
     #
     # cpu 6 exists only to keep 32/6 = 5.33 under the N1 6.5 GB/cpu limit; with --thread 2
     # four of those cores are deliberately idle. That is the price of memory on this shape.
@@ -553,15 +570,25 @@ task PopAndMarginalizeCollisions {
     }
 
     #########################
-    # NOTE: unlike phase and ligate, 24 is a round number, not a derivation. No pop task has
-    # ever OOMed and there is no memory model for this step. It is raised only because chr2 and
-    # chr20 -- the two chromosomes with the densest seams -- have never reached it, ligate
-    # having failed first, so it is untested at exactly the sizes that matter.
-    # cpu_cores is 4 rather than 2 to keep 24/4 = 6.0 under the N1 6.5 GB/cpu limit; at 2 cpu
-    # Cromwell would compute ceil(24/6.5) = 4 and silently substitute the same shape anyway.
+    # DELIBERATELY UNCHANGED at 12 GiB / 2 cpu (6.0 GB/cpu, within the N1 limit).
+    #
+    # An earlier revision raised this to 24 GiB on the reasoning that chr2 and chr20 -- the two
+    # chromosomes with the densest seams -- have never reached this stage, ligate having failed
+    # first, so it is untested at the sizes that matter. That observation stands. The
+    # justification did not: it rested on pop being a couple of dozen tasks per batch, where
+    # over-provisioning is free.
+    #
+    # It is not. pop_regions defaults to output_regions, so this scatters once per shard --
+    # ~523 tasks per batch, the same order as phase, not the 22 that ligate runs. Doubling the
+    # memory therefore costs roughly $3.5 per batch, ~$700 across the 50k, to guard against a
+    # failure that has never been observed in any pop task on any chromosome.
+    #
+    # "Downstream of something that failed" is also not evidence of anything: it is equally
+    # true of every task after phase. Raising this on that basis would mean raising all of
+    # them. Left alone; if a pop task ever does OOM, that is the evidence to act on.
     RuntimeAttr default_attr = object {
-        cpu_cores:          4,
-        mem_gb:             24,
+        cpu_cores:          2,
+        mem_gb:             12,
         disk_gb:            disk_gb,
         use_ssd:            true,
         preemptible_tries:  2,
