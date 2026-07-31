@@ -14,6 +14,15 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         File chunked_panel_json
 
         String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --main 10 --burnin 5 --err-imp 1E-3"
+
+        # First-class workflow inputs, not buried in extra_phase_args and not left as
+        # call-qualified task inputs: GLIMPSE2Phase computes its memory request from both, so
+        # setting them must not require reaching into
+        # GLIMPSE2FromPreprocessedPLsJoint.ChunkedGLIMPSE2Phase.* -- the same fragile mechanism
+        # this file avoids elsewhere.
+        Int phase_threads = 4
+        Int phase_kpbwt = 1000
+
         String output_prefix
 
         # inputs for PopAndMarginalizeCollisions
@@ -36,7 +45,18 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         #
         # NOTE: this does not reach the imported ConcatVcfs.ConcatVcfs call, which takes no
         # zones argument, so that one task still runs wherever the backend places it.
-        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+        #
+        # Space-separated String rather than Array[String]: Cromwell's ZonesValidation has
+        # long accepted a whitespace-delimited string and splits it, while Array[String]
+        # support is newer and unverified against this backend. The string form is the safer
+        # superset -- if it turned out only the array form worked we would see it on the first
+        # shard, whereas the reverse would fail validation on every task at once.
+        #
+        # UNVERIFIED: whether a task-level zones actually overrides the backend's
+        # allowedLocations, which was observed pinned to
+        # ['regions/us-central1', 'zones/us-central1-a']. It may override, merge, or be
+        # ignored. Read allocationPolicy.location after one chromosome before trusting it.
+        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
     }
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
@@ -66,6 +86,8 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
                 genetic_map = genetic_map,
                 output_prefix = output_prefix + ".shard-" + k + ".glimpse2.phased",
                 extra_phase_args = extra_phase_args,
+                phase_threads = phase_threads,
+                phase_kpbwt = phase_kpbwt,
                 zones = zones,
                 docker = glimpse2_docker
         }
@@ -142,10 +164,14 @@ struct RuntimeAttr {
     Float? mem_gb
     Int? cpu_cores
     Int? disk_gb
-    # Extra boot disk *on top of* the backend default, not an absolute size. Cromwell adds its
-    # 30 GB default to whatever is requested here, so 0 yields the 30 GB minimum and the old
-    # value of 10 yielded 40. Defaulted to 0 in every task below rather than dropped, so that
-    # an override still works for callers running a larger custom Docker image.
+    # NOT consumed by the tasks in this file, deliberately. Cromwell adds its own 30 GB
+    # default to whatever bootDiskSizeGb is requested, so the previous value of 10 provisioned
+    # 40 GB; omitting the attribute entirely yields the 30 GB minimum and saves 10 GB across
+    # every shard. Passing an explicit 0 would express the same intent and keep this override
+    # live, but it is not established that BootDiskSizeValidation accepts 0 rather than
+    # requiring a positive int -- and that failure mode would hit every task at once. A
+    # documented no-op is the cheaper mistake. Retained in the struct so callers sharing this
+    # RuntimeAttr shape do not break; re-wire it once 0 is known to validate.
     Int? boot_disk_gb
     Boolean? use_ssd
     Int? preemptible_tries
@@ -222,7 +248,7 @@ task GLIMPSE2Phase {
         Int phase_threads = 4
         Int phase_kpbwt = 1000
 
-        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
 
 
         RuntimeAttr? runtime_attr_override
@@ -241,16 +267,23 @@ task GLIMPSE2Phase {
     # L * Kpbwt * 4 bytes * threads over-counts. That is deliberate -- it is the safe
     # direction -- but it means the coefficient is a bound, not an invariant.
     #
-    # Per-shard sizing from the real L would cut this substantially (most shards need far
-    # less than the worst one), but it requires the chunked-panel producer to emit a
-    # per-shard variant count. It does not, so that is a separate change; see the note on
-    # ChunkedPanelChromosome.
+    # COST: this is not free. cpu goes 4 -> 8 across all 523 phase shards per batch, i.e.
+    # 2092 -> 4184 vCPU, roughly doubling the phase CPU bill (order $14 -> $28 per batch at
+    # spot, ~$2.8k over 200 batches). That is the price of sizing every shard for the worst
+    # one. Per-shard sizing from the real L would recover most of it -- only a handful of
+    # shards need this shape -- but it requires the chunked-panel producer to emit a per-shard
+    # variant count, which it does not. See the note on ChunkedPanelChromosome for why that is
+    # a separate change rather than an optional field here.
     Int final_mem_gb  = 8 + ceil(32.0 * phase_kpbwt * phase_threads / 4000.0)
     # N1 allows at most 6.5 GB per cpu (GcpBatchCustomMachineType.scala) and rounds odd cpu
     # counts up to even. Doing it here keeps the requested shape visible instead of letting
     # Cromwell silently adjust it.
     Int ratio_min_cpu = ceil(final_mem_gb / 6.5)
-    Int final_cpu     = if ratio_min_cpu > phase_threads then ratio_min_cpu + (ratio_min_cpu % 2) else phase_threads
+    # Rounded to even on BOTH branches. N1 rounds any cpu count other than 1 up to an even
+    # number, so an odd phase_threads (say 5) would otherwise be silently reshaped to 6 --
+    # the exact hidden adjustment this arithmetic exists to make visible.
+    Int unrounded_cpu = if ratio_min_cpu > phase_threads then ratio_min_cpu else phase_threads
+    Int final_cpu     = unrounded_cpu + (unrounded_cpu % 2)
 
     # Sized from the actual inputs rather than a flat 50 GB.
     #
@@ -258,7 +291,8 @@ task GLIMPSE2Phase {
     # before replacing it (cp checkpoint.bin checkpoint.bin-tmp), so two full copies coexist,
     # and the reheader step writes the output a second time. For chr7 s12 that is roughly
     #   10.65 (bin + PL VCF) + ~1.3 (output, written twice) + ~4 (1.39 GB checkpoint x2) ~= 16 GB
-    # against 26 GB provisioned -- a 1.6x margin, not the 2x the input-only view suggests.
+    # against 10 + ceil(2.0 * 10.61) = 32 GB provisioned, i.e. a 2.0x margin. (size() returns
+    # decimal GB, so the provisioned figure is nearer 33 GiB in practice.)
     #
     # The 30 GB floor is deliberate and costs little. Localization was measured once, at 50 GiB:
     # 8.96 GiB in 57 s (161 MiB/s), about 7x what the documented pd-ssd scaling (0.48 MiB/s per
@@ -294,6 +328,12 @@ task GLIMPSE2Phase {
         # as a confusing missing-BCF failure rather than a clean error. Honouring the string's
         # value instead is worse still: it decouples the parameter from the memory sized
         # against it. So strip both from extra_phase_args, warn, and inject the typed values.
+        # NOTE: the placeholder is substituted into this script as literal text, so bash
+        # expands anything expandable inside it at assignment time. The historical default
+        # contained "--thread $(nproc)", which therefore becomes "--thread 8" here before the
+        # stripping below ever sees it. Both forms are handled -- the value matcher accepts any
+        # non-'-' token, so it removes "$(nproc)" and "8" alike -- but the distinction matters
+        # when reasoning about this block, and the tests cover both spellings for that reason.
         EXTRA_PHASE_ARGS="~{extra_phase_args}"
         for OPT in thread Kpbwt; do
             if echo "$EXTRA_PHASE_ARGS" | grep -qE "(^|[[:space:]])--${OPT}([[:space:]]|=|$)"; then
@@ -345,7 +385,6 @@ task GLIMPSE2Phase {
         cpu_cores:          final_cpu,
         mem_gb:             final_mem_gb,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  10,
         max_retries:        1,
@@ -356,7 +395,6 @@ task GLIMPSE2Phase {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -373,7 +411,7 @@ task GLIMPSE2Ligate {
 
         String docker
 
-        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
 
 
         RuntimeAttr? runtime_attr_override
@@ -413,10 +451,28 @@ task GLIMPSE2Ligate {
     # (denser seams also carry more multiallelic sites, and the highly multiallelic bubbles
     # are a known sore spot in this panel).
     #
-    # The real cause is unidentified: candidates include per-coordinate record pileups at
-    # large bubbles, buffer high-water marks, index/output construction, or allocator
-    # behaviour. rc=137 alone does not distinguish them. Treat this as "big enough to stop
-    # the bleeding" and measure peak RSS on a known-failing seam before tuning further.
+    # What survives the retraction is that something seam-specific is real: the failing seam
+    # was predicted correctly three times out of three (chr20 seam 4, chr2 seam 17, chr7
+    # seam 11), computed from chunks.tsv before the outcomes were known.
+    #
+    # The leading hypothesis, and the one consistent with both that record and the HTSlib
+    # source, is max records per coordinate rather than records per seam.
+    # _reader_fill_buffer buffers *all* records sharing a position, and this panel splits
+    # multiallelic bubbles into one record per ALT -- so a large bubble puts hundreds or
+    # thousands of records at a single position, held across two readers at once. That
+    # predicts memory tracks peak pileup, and explains the confound directly: dense seams
+    # carry the big bubbles. Sam has separately flagged these bubbles as a known sore spot.
+    #
+    # Testable without running anything expensive -- compare max pileup on failing vs passing
+    # seams in the sites-only panel:
+    #   bcftools query -f '%POS\n' -r chr20:22877789-24452143 <panel>.bubble.split.sites.bcf \
+    #     | uniq -c | sort -rn | head -1
+    # If the failing seams show pileups an order of magnitude above chr22's, mem becomes a
+    # function of max pileup and this number stops being a guess.
+    #
+    # Other candidates if that comes back flat: buffer high-water marks, index/output
+    # construction, allocator behaviour. rc=137 alone does not distinguish them, so measure
+    # peak RSS on a known-failing seam before tuning further.
     #
     # cpu 6 exists only to keep 32/6 = 5.33 under the N1 6.5 GB/cpu limit; with --thread 2
     # four of those cores are deliberately idle. That is the price of memory on this shape.
@@ -424,7 +480,6 @@ task GLIMPSE2Ligate {
         cpu_cores:          6,
         mem_gb:             32,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -435,7 +490,6 @@ task GLIMPSE2Ligate {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -461,7 +515,7 @@ task PopAndMarginalizeCollisions {
         String region
         String output_prefix
 
-        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
 
 
         RuntimeAttr? runtime_attr_override
@@ -509,7 +563,6 @@ task PopAndMarginalizeCollisions {
         cpu_cores:          4,
         mem_gb:             24,
         disk_gb:            disk_gb,
-        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -520,7 +573,6 @@ task PopAndMarginalizeCollisions {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
@@ -535,7 +587,7 @@ task RemapSampleNames {
         File remap_file
         String output_prefix
 
-        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
 
 
         RuntimeAttr? runtime_attr_override
@@ -559,7 +611,6 @@ task RemapSampleNames {
         cpu_cores:          2,
         mem_gb:             4,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -570,7 +621,6 @@ task RemapSampleNames {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
-        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])

@@ -78,7 +78,10 @@ echo
 echo "GLIMPSE2Phase receives exactly one --thread and one --Kpbwt"
 expect_single "current WDL default"                     4 1000 "$DEFAULT"
 expect_single "staged input CSV (--thread 4, --Kpbwt)"  4 1000 "$STAGED_CSV"
-expect_single "legacy default (--thread \$(nproc))"     4 1000 "$LEGACY"
+expect_single "legacy default, literal \$(nproc)"       4 1000 "$LEGACY"
+# The WDL interpolates extra_phase_args into the script as text, so bash expands $(nproc)
+# at assignment; the strip logic therefore sees an already-substituted integer. Cover both.
+expect_single "legacy default, pre-expanded by bash"    4 1000 "--thread 8 --impute-reference-only-variants --Kpbwt 1000 --main 10"
 expect_single "equals form (--thread=8 --Kpbwt=2000)"   4 1000 "--thread=8 --Kpbwt=2000 --main 10"
 expect_single "sibling WDL default (no --Kpbwt)"        4 1000 "--impute-reference-only-variants --keep-monomorphic-ref-sites"
 expect_single "bcftools-style --threads left alone"     4 1000 "--threads 4 --main 10"
@@ -111,7 +114,8 @@ import math, sys
 kp, t = int(sys.argv[1]), int(sys.argv[2])
 mem = 8 + math.ceil(32.0 * kp * t / 4000.0)
 r = math.ceil(mem / 6.5)
-cpu = r + (r % 2) if r > t else t
+u = r if r > t else t
+cpu = u + (u % 2)
 print(mem, cpu)' "$1" "$2"
 }
 
@@ -122,13 +126,16 @@ else
     bad "defaults reproduce the verified 40 GiB / 8 cpu" "got ${mem} GiB / ${cpu} cpu"
 fi
 
-for combo in "1000 4" "1000 8" "2000 4" "2000 8" "500 4" "4000 4"; do
+for combo in "1000 4" "1000 8" "2000 4" "2000 8" "500 4" "4000 4" "1000 5" "1000 1" "1000 3"; do
     set -- $combo
     read -r mem cpu <<<"$(sizing "$1" "$2")"
     within=$(python3 -c "print(1 if $mem/$cpu <= 6.5 else 0)")
-    [ "$within" -eq 1 ] \
-        && ok "Kpbwt=$1 threads=$2 -> ${mem} GiB / ${cpu} cpu within 6.5 GB/cpu" \
-        || bad "Kpbwt=$1 threads=$2" "${mem}/${cpu} exceeds 6.5 GB/cpu"
+    even=$(python3 -c "print(1 if $cpu % 2 == 0 else 0)")
+    if [ "$within" -eq 1 ] && [ "$even" -eq 1 ]; then
+        ok "Kpbwt=$1 threads=$2 -> ${mem} GiB / ${cpu} cpu (even, within 6.5 GB/cpu)"
+    else
+        bad "Kpbwt=$1 threads=$2" "${mem}/${cpu} within=${within} even=${even}"
+    fi
 done
 
 # ---------------------------------------------------------------------------

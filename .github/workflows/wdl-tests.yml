@@ -2,7 +2,7 @@ name: Test WDLs
 
 on:
   push:
-    branches: [ 'main' ]
+    branches: [ 'main', 'sl_aou2_v1' ]
   pull_request:
     branches: [ 'main', 'sl_aou2_v1' ]
 
