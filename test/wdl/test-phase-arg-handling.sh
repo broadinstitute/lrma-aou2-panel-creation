@@ -103,40 +103,78 @@ done
 expect_contains "preserved: --threads 4 (not --thread)" "--threads 4 --main 10" "--threads 4"
 
 # ---------------------------------------------------------------------------
-# Sizing: must reproduce the empirically verified shape at the defaults, and must
-# never request more than the N1 limit of 6.5 GB per cpu.
+# Per-shard sizing: mem = 8 + ceil(4 * threads * Kpbwt * L / 1e9), cpu = even(max(threads,
+# ceil(mem/6.5))). Must clear the observed OOM boundary, stay under the N1 6.5 GB/cpu limit,
+# and stay even.
 # ---------------------------------------------------------------------------
 echo
 echo "Memory/CPU sizing"
-sizing() {  # kpbwt threads -> "mem cpu"
+sizing() {  # kpbwt threads L -> "mem cpu"
     python3 -c '
 import math, sys
-kp, t = int(sys.argv[1]), int(sys.argv[2])
-mem = 8 + math.ceil(32.0 * kp * t / 4000.0)
+kp, t, L = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+mem = 8 + math.ceil(4.0 * t * kp * L / 1e9)
 r = math.ceil(mem / 6.5)
 u = r if r > t else t
-cpu = u + (u % 2)
-print(mem, cpu)' "$1" "$2"
+print(mem, u + (u % 2))' "$1" "$2" "$3"
 }
 
-read -r mem cpu <<<"$(sizing 1000 4)"
-if [ "$mem" -eq 40 ] && [ "$cpu" -eq 8 ]; then
-    ok "defaults reproduce the verified 40 GiB / 8 cpu"
-else
-    bad "defaults reproduce the verified 40 GiB / 8 cpu" "got ${mem} GiB / ${cpu} cpu"
-fi
+# Every shard observed to OOM at 16 GiB must now be sized above 16; the one that passed at 16
+# must still be at least what it needed.
+while read -r name L outcome floor; do
+    read -r mem cpu <<<"$(sizing 1000 4 "$L")"
+    if [ "$mem" -ge "$floor" ]; then
+        ok "L=$L ($name, $outcome) -> ${mem} GiB >= ${floor}"
+    else
+        bad "L=$L ($name, $outcome)" "got ${mem} GiB, need >= ${floor}"
+    fi
+done <<'CASES'
+chr22_s0 657784 passed_marginally_at_16 17
+chr3_s16 765770 OOMed_at_16 17
+chr20_s4 965039 OOMed_at_16 17
+chr20_s5 1005104 OOMed_at_16 17
+chr11_s9 1122361 OOMed_at_16 17
+chr7_s12 1346888 OOMed_at_16 17
+CASES
 
-for combo in "1000 4" "1000 8" "2000 4" "2000 8" "500 4" "4000 4" "1000 5" "1000 1" "1000 3"; do
+# Ratio limit and even cpu across the parameter space, including odd thread counts.
+for combo in "1000 4 400000" "1000 4 1346888" "1000 8 1346888" "2000 4 1346888" \
+             "500 4 400000" "1000 5 900000" "1000 1 400000" "1000 3 700000" "1000 4 100000"; do
     set -- $combo
-    read -r mem cpu <<<"$(sizing "$1" "$2")"
+    read -r mem cpu <<<"$(sizing "$1" "$2" "$3")"
     within=$(python3 -c "print(1 if $mem/$cpu <= 6.5 else 0)")
     even=$(python3 -c "print(1 if $cpu % 2 == 0 else 0)")
     if [ "$within" -eq 1 ] && [ "$even" -eq 1 ]; then
-        ok "Kpbwt=$1 threads=$2 -> ${mem} GiB / ${cpu} cpu (even, within 6.5 GB/cpu)"
+        ok "Kpbwt=$1 threads=$2 L=$3 -> ${mem} GiB / ${cpu} cpu (even, <=6.5 GB/cpu)"
     else
-        bad "Kpbwt=$1 threads=$2" "${mem}/${cpu} within=${within} even=${even}"
+        bad "Kpbwt=$1 threads=$2 L=$3" "${mem}/${cpu} within=${within} even=${even}"
     fi
 done
+
+# Doubling Kpbwt or threads must double the matrix term, not leave the request unchanged.
+read -r m1 _ <<<"$(sizing 1000 4 1000000)"
+read -r m2 _ <<<"$(sizing 2000 4 1000000)"
+read -r m3 _ <<<"$(sizing 1000 8 1000000)"
+[ $((m2 - 8)) -eq $(( (m1 - 8) * 2 )) ] && ok "Kpbwt 1000->2000 doubles the matrix term" \
+    || bad "Kpbwt scaling" "$m1 -> $m2"
+[ $((m3 - 8)) -eq $(( (m1 - 8) * 2 )) ] && ok "threads 4->8 doubles the matrix term" \
+    || bad "thread scaling" "$m1 -> $m3"
+
+# Per-shard sizing must not cost more than the flat worst-case bound it replaces.
+python3 - <<'COST'
+import math
+CPU, MEM, SPOT = 0.0332, 0.00445, 0.30
+def size(L, t=4, kp=1000):
+    m = 8 + math.ceil(4.0 * t * kp * L / 1e9)
+    r = math.ceil(m / 6.5); u = r if r > t else t
+    return m, u + (u % 2)
+def cost(n, cpu, gb, mins): return n * (cpu*CPU + gb*MEM) * (mins/60) * SPOT
+Ls = [400000]*490 + [657784,765770,965039,1005104,1122361,1346888] + [600000]*27
+dyn = sum(cost(1, c, m, 35) for m, c in (size(L) for L in Ls))
+flat = cost(len(Ls), 8, 40, 35)
+print("  \033[32mPASS\033[0m  per-shard $%.1f < flat worst-case $%.1f per batch" % (dyn, flat)
+      if dyn < flat else "  \033[31mFAIL\033[0m  per-shard $%.1f >= flat $%.1f" % (dyn, flat))
+COST
 
 # ---------------------------------------------------------------------------
 # The WDL itself must not reintroduce the duplication this guards against.

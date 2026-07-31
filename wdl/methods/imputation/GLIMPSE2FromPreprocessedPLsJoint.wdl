@@ -75,6 +75,22 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     Array[String] pop_regions = select_first([pop_glimpse2_panel_resources[chromosome].pop_regions, output_regions])
     
 
+    # Per-shard variant counts (GLIMPSE2's L), so phase can be sized per shard rather than
+    # every shard being sized for the worst one. Counting here rather than reading a field
+    # from chunked_panel_json is what makes this safe: the counts are derived in this run,
+    # from this chromosome's sites-only panel, over these input_regions in order, so they
+    # cannot be stale, reordered, or copied from another chromosome. A JSON field could be
+    # all three while still having the right length.
+    call CountPanelVariantsPerShard {
+        input:
+            panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
+            panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
+            input_regions = input_regions,
+            output_prefix = output_prefix,
+            zones = zones,
+            docker = glimpse2_docker
+    }
+
     scatter (k in range(length(output_regions))) {
         call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
             input:
@@ -88,6 +104,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
                 extra_phase_args = extra_phase_args,
                 phase_threads = phase_threads,
                 phase_kpbwt = phase_kpbwt,
+                n_variants = CountPanelVariantsPerShard.n_variants[k],
                 zones = zones,
                 docker = glimpse2_docker
         }
@@ -185,28 +202,24 @@ struct ChunkedPanelChromosome {
     Array[String] output_regions
     Array[String] panel_split_chunk_bins
 
-    # NOTE: there is deliberately no per-shard variant count here yet.
+    # NOTE: deliberately no per-shard variant count here.
     #
-    # Sizing GLIMPSE2Phase from each shard's real L (rather than from a worst-case bound)
-    # would roughly halve per-batch vCPU, since only a handful of shards need the largest
-    # shape. It was implemented and then removed, because doing it safely needs two things
-    # this schema cannot express:
+    # GLIMPSE2Phase is sized from each shard's L, but that count is produced at runtime by
+    # CountPanelVariantsPerShard rather than carried in this struct, and that is a safety
+    # decision rather than an oversight.
     #
-    #  1. The producer must emit the counts. GLIMPSE2ChunkAndSplitPanel builds this struct
-    #     with four fields and no count, so an optional count is dead on the normal
-    #     producer-to-consumer path -- it can only be supplied by hand-editing a generated
-    #     resource.
-    #  2. The counts must be bound to the shards they describe. These are unkeyed parallel
-    #     arrays, so a count array that is stale but happens to have the right length pairs
-    #     silently with the wrong bins -- and underprovisioning memory is exactly the failure
-    #     this was meant to prevent. A length check does not catch reordered shards, a
-    #     regenerated panel with the same shard count, or counts copied from another
-    #     chromosome.
+    # These are unkeyed parallel arrays. A count array added here would have no binding to the
+    # shard it describes, so one that was stale but happened to have the right length would
+    # pair silently with the wrong bins -- and underprovisioned memory is the exact failure the
+    # sizing exists to prevent. A length check catches a truncated array but not a reordered
+    # one, a panel regenerated with the same shard count, or counts copied from another
+    # chromosome. It would also be dead on arrival: GLIMPSE2ChunkAndSplitPanel builds this
+    # struct from four fields and never emits a count, so the field could only ever be
+    # populated by hand-editing a generated resource.
     #
-    # The right shape is one array of shard objects carrying region, bin and count together,
-    # emitted atomically by the producer and required rather than optional. That is a change
-    # to both files and to every staged chunked_panel.json, so it is deliberately not bundled
-    # with the memory fixes.
+    # Counting at runtime removes all of that. The counts come from this chromosome's
+    # sites-only panel, over these input_regions, in order, in the same run -- correct by
+    # construction, and costing one small task per chromosome.
 }
 
 struct PopAndMarginalizePanelResourcesChromosome {
@@ -215,6 +228,90 @@ struct PopAndMarginalizePanelResourcesChromosome {
     String panel_id_split_vcf_gz
     String panel_id_split_vcf_gz_tbi
     Array[String]? pop_regions              # non-overlapping, if not provided then GLIMPSE2 chunks will be used
+}
+
+# Counts panel variants in each shard's *input* (buffered) region -- exactly GLIMPSE2's L.
+#
+# Verified against GLIMPSE2's own logged L on three shards spanning the range, matching
+# exactly: chr22 shard 0 = 657,784; chr20 shard 4 = 965,039; chr7 shard 12 = 1,346,888.
+#
+# Note this is NOT column 7 of chunks.tsv, which counts a different region and disagrees badly
+# (403,101 against an actual L of 965,039 for chr20 shard 4).
+#
+# One task per chromosome, reading a sites-only BCF -- a few minutes and a couple of cents,
+# against roughly $20 per batch saved by not sizing every shard for the worst one.
+task CountPanelVariantsPerShard {
+    input {
+        File panel_bubble_split_sites_only_vcf
+        File panel_bubble_split_sites_only_vcf_idx
+        Array[String] input_regions
+        String output_prefix
+
+        String docker
+        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
+
+        RuntimeAttr? runtime_attr_override
+    }
+
+    Int disk_size_gb = 10 + 2 * ceil(size(panel_bubble_split_sites_only_vcf, "GB"))
+
+    command <<<
+        set -euxo pipefail
+
+        # --regions-overlap 0 matches how GLIMPSE2 selects sites for the input region: a
+        # record counts if its POS falls inside, regardless of how far its REF span reaches.
+        # Using the default overlap mode would include records starting before the region and
+        # inflate every count.
+        : > counts.txt
+        while read -r REGION; do
+            bcftools view --no-version -H -r "$REGION" --regions-overlap 0 \
+                ~{panel_bubble_split_sites_only_vcf} | wc -l >> counts.txt
+        done < ~{write_lines(input_regions)}
+
+        # Fail loudly rather than silently mis-sizing shards if a region yielded nothing.
+        EXPECTED=$(wc -l < ~{write_lines(input_regions)})
+        ACTUAL=$(wc -l < counts.txt)
+        if [ "$ACTUAL" -ne "$EXPECTED" ]; then
+            echo "ERROR: counted $ACTUAL regions, expected $EXPECTED." >&2
+            exit 1
+        fi
+        if grep -qx '0' counts.txt; then
+            echo "ERROR: at least one input region contains no panel variants." >&2
+            paste -d' ' ~{write_lines(input_regions)} counts.txt >&2
+            exit 1
+        fi
+
+        # read_json wants a JSON array; read_lines would give Array[String], which does not
+        # coerce to Array[Int] reliably across engines.
+        printf '[%s]\n' "$(paste -sd, counts.txt)" > ~{output_prefix}.n_variants.json
+        cat ~{output_prefix}.n_variants.json
+    >>>
+
+    output {
+        Array[Int] n_variants = read_json("~{output_prefix}.n_variants.json")
+        File n_variants_json = "~{output_prefix}.n_variants.json"
+    }
+
+    #########################
+    RuntimeAttr default_attr = object {
+        cpu_cores:          2,
+        mem_gb:             4,
+        disk_gb:            disk_size_gb,
+        use_ssd:            true,
+        preemptible_tries:  3,
+        max_retries:        1,
+        docker:             docker
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    runtime {
+        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
+        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        zones:                  zones
+    }
 }
 
 # checkpoint implementation borrowed from https://github.com/broadinstitute/palantir-workflows/blob/main/GlimpseImputationPipeline/Glimpse2Imputation.wdl
@@ -248,53 +345,54 @@ task GLIMPSE2Phase {
         Int phase_threads = 4
         Int phase_kpbwt = 1000
 
+        # Panel variants in this shard's input region -- GLIMPSE2's L. Required, and supplied
+        # by CountPanelVariantsPerShard in the same run rather than read from a resource file,
+        # so it cannot be stale or paired with the wrong shard.
+        Int n_variants
+
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
 
 
         RuntimeAttr? runtime_attr_override
     }
 
-    # 40 GiB / 8 cpu at the defaults, which is the shape that ran 217 shards without an OOM.
-    # The expression exists so that raising phase_kpbwt or phase_threads scales the request
-    # instead of quietly invalidating it: at phase_kpbwt=1000 and phase_threads=4 the second
-    # term is exactly 32, giving 40.
-    #
-    # Upper bound, not an exact model. phase/src/models/imputation_hmm.cpp allocates
+    # Per-shard memory. From phase/src/models/imputation_hmm.cpp:
     #   Alpha.resize(polymorphic_sites.size() * modK)   // float
-    # where modK is n_states rounded up to a multiple of 8 and n_states is the number of
-    # states actually selected for the shard, bounded above by Kpbwt (see
-    # containers/conditioning_set.cpp). GLIMPSE2's logged L is total panel sites, so
-    # L * Kpbwt * 4 bytes * threads over-counts. That is deliberate -- it is the safe
-    # direction -- but it means the coefficient is a bound, not an invariant.
+    # modK is n_states rounded up to a multiple of 8, and n_states is bounded above by Kpbwt,
+    # so the matrix costs at most 4 bytes * L * Kpbwt per thread:
     #
-    # COST: this is the expensive change in the file, and it is worth stating plainly.
-    # At n1-custom us-central1 spot rates (~$0.0332/vCPU-hr, ~$0.00445/GB-hr, spot ~30% of
-    # on-demand) and ~35 min per shard, phase goes from 4 cpu / 16 GiB to 8 cpu / 40 GiB
-    # across all 523 shards in a batch:
+    #   mem = 8 + 4 * threads * Kpbwt * L / 1e9    (GB)
     #
-    #   phase   523 tasks   $18.7 -> $40.6 per batch
-    #   ligate   22 tasks   $ 0.3 -> $ 0.9
-    #   pop     523 tasks   $ 3.5    (unchanged -- see the note on PopAndMarginalizeCollisions)
-    #   -------------------------------------------
-    #   total              $22.5 -> $45.0 per batch
+    # The 8 GB constant covers GLIMPSE2's fixed structures with margin -- the observed fixed
+    # cost was nearer 5.5, and the fit came from a handful of points near a noisy threshold.
     #
-    # At the measured 1.97 full-run-equivalents per success from preemption that is roughly
-    # $44 -> $89 effective per batch, i.e. about +$9k across 200 batches. That is the price of
-    # sizing every shard for the worst one, paid so that six shards stop OOMing.
+    # Calibration against the observed pass/fail boundary at 16 GiB, four threads, Kpbwt 1000:
+    #   chr22 s0   L =   657,784  -> 19 GiB   (passed at 16, marginally)
+    #   chr20 s4   L =   965,039  -> 24 GiB   (OOMed at 16)
+    #   chr7  s12  L = 1,346,888  -> 30 GiB   (OOMed at 16)
+    # and a typical shard at L ~= 400k asks for 15 GiB / 4 cpu.
     #
-    # Per-shard sizing from the real L would recover most of the phase half: at a typical
-    # L ~= 500k the same formula asks for 4 cpu / 20 GiB, and only a couple of dozen shards
-    # genuinely need the wide shape. It requires the chunked-panel producer to emit a
-    # per-shard variant count, which it does not -- see the note on ChunkedPanelChromosome for
-    # why that is a separate change rather than an optional field here.
-    Int final_mem_gb  = 8 + ceil(32.0 * phase_kpbwt * phase_threads / 4000.0)
-    # N1 allows at most 6.5 GB per cpu (GcpBatchCustomMachineType.scala) and rounds odd cpu
-    # counts up to even. Doing it here keeps the requested shape visible instead of letting
-    # Cromwell silently adjust it.
+    # This is an upper bound rather than an exact model: n_states is frequently well below
+    # Kpbwt, and GLIMPSE2's logged L counts total panel sites. Bounding in the safe direction
+    # is deliberate, but it is why this is not a tight fit.
+    #
+    # COST: sizing per shard is what keeps fixing the OOMs from costing anything. Most shards
+    # land at 4 cpu / ~15 GiB; only the densest handful widen. At n1-custom us-central1 spot
+    # rates and ~35 min per shard, across 523 shards:
+    #
+    #   old  4 cpu / 16 GiB flat (OOM-prone)   $18.7 per batch
+    #   flat 8 cpu / 40 GiB (worst-case bound) $40.6
+    #   per-shard, this change                 $18.4
+    #
+    # Whole batch including ligate, pop and the counting task: $22.4 -> $22.8, or ~$44 -> ~$45
+    # effective at the measured 1.97 full-run-equivalents per success. Over 200 batches that
+    # is about +$140 against the old shape -- and about $8.7k less than the flat bound would
+    # have cost. The six OOMing shards get fixed essentially for free.
+    Int final_mem_gb  = 8 + ceil(4.0 * phase_threads * phase_kpbwt * n_variants / 1000000000.0)
+    # N1 allows at most 6.5 GB per cpu (GcpBatchCustomMachineType.scala) and rounds any cpu
+    # count other than 1 up to an even number. Doing both here keeps the requested shape
+    # visible instead of letting Cromwell silently adjust it.
     Int ratio_min_cpu = ceil(final_mem_gb / 6.5)
-    # Rounded to even on BOTH branches. N1 rounds any cpu count other than 1 up to an even
-    # number, so an odd phase_threads (say 5) would otherwise be silently reshaped to 6 --
-    # the exact hidden adjustment this arithmetic exists to make visible.
     Int unrounded_cpu = if ratio_min_cpu > phase_threads then ratio_min_cpu else phase_threads
     Int final_cpu     = unrounded_cpu + (unrounded_cpu % 2)
 
