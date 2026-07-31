@@ -241,8 +241,11 @@ task CountPanelVariantsPerShard {
 
     #########################
     # NOT preemptible: every phase shard blocks on this, so it is a serialisation point and a
-    # per-chromosome single point of failure. Minutes of runtime against a 7-minute median
-    # preemption would often restart and delay all 523 shards. It costs cents.
+    # per-chromosome single point of failure. MEASURED on chr20 (7 regions): 65 s wall,
+    # 2.49 GiB peak against 4 requested, 1 GB of disk. Cheaper and faster than the "minutes"
+    # estimated -- the larger chromosomes have ~47 regions so will take longer, but the
+    # preemption exposure is smaller than assumed. Kept off spot anyway: it costs cents, and
+    # one preemption here stalls every downstream shard.
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
         mem_gb:             4,
