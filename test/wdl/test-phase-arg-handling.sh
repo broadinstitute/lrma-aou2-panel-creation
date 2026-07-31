@@ -157,7 +157,9 @@ while read -r L peak; do
     fi
 done <<'MEASURED'
 331325 7.71
+338590 7.55
 374957 8.45
+396083 9.43
 379508 8.43
 399495 9.44
 400379 9.32
@@ -312,6 +314,22 @@ ORDER
         ok "all container images pinned by digest"
     fi
 
+    # The harvester must derive the sizing constants from the WDL, not hardcode them: they
+    # drifted once already (WDL refitted 4.0 -> 8.0 while the harvester still asserted 4.0,
+    # which would have reported a bound breach on every shard).
+    HARVEST_MODEL=$(python3 -c "
+import importlib.util as u, sys
+sp=u.spec_from_file_location('h','$(dirname "$0")/../../scripts/harvest-resources.py')
+m=u.module_from_spec(sp); sp.loader.exec_module(m)
+print('%s %s' % m.wdl_model())" 2>/dev/null)
+    WDL_CONST=$(grep -oE 'Int final_mem_gb\s*=\s*[0-9]+' "$WDL" | grep -oE '[0-9]+$')
+    WDL_COEFF=$(grep -oE 'ceil\(\(\(\([0-9]+\.[0-9]+ \* phase_threads' "$WDL" | grep -oE '[0-9]+\.[0-9]+')
+    if [ "$HARVEST_MODEL" = "$WDL_CONST.0 $WDL_COEFF" ]; then
+        ok "harvester reads the sizing model from the WDL ($HARVEST_MODEL)"
+    else
+        bad "harvester reads the sizing model from the WDL" "harvester=[$HARVEST_MODEL] wdl=[$WDL_CONST.0 $WDL_COEFF]"
+    fi
+
     # The counting task serialises the chromosome; it must not be preemptible.
     if awk '/task CountPanelVariantsPerShard/,/^}/' "$WDL" | grep -qE 'preemptible_tries:\s*0,'; then
         ok "CountPanelVariantsPerShard is non-preemptible"
@@ -371,11 +389,11 @@ rm -rf "$CGDIR"
 
 if [ -x "$HARVEST" ]; then
     # under-request must be flagged: a shard that used more than it asked for
-    OVER='[RESOURCE] task=GLIMPSE2Phase n_variants=1346888 requested_mem_gib=30 requested_cpu=6 threads=4 kpbwt=1000 peak_rss_gib=31.66 peak_rss_source=cgroup-v2 wall_s=1'
+    OVER='[RESOURCE] task=GLIMPSE2Phase n_variants=1346888 requested_mem_gib=30 requested_cpu=6 threads=4 kpbwt=1000 peak_rss_gib=45.00 peak_rss_source=cgroup-v2 wall_s=1'
     echo "$OVER" | "$HARVEST" 2>/dev/null | grep -q "OVER REQUEST" \
         && ok "harvester flags an under-sized request" \
         || bad "harvester flags an under-sized request" "no OVER REQUEST warning"
-    echo "$OVER" | "$HARVEST" 2>/dev/null | grep -q "bound is NOT a bound" \
+    echo "$OVER" | "$HARVEST" 2>/dev/null | grep -q "NOT an upper bound" \
         && ok "harvester flags a breached memory bound" \
         || bad "harvester flags a breached memory bound" "no bound warning"
 

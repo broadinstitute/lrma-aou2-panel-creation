@@ -10,6 +10,7 @@ Reads stdin when given no files, and ignores non-[RESOURCE] lines.
 """
 
 import fileinput
+import os
 import re
 import statistics
 import sys
@@ -86,10 +87,31 @@ def summarise(task, recs):
         print(f"  disk high-water : {worst_u:.0f} / {worst_t:.0f} GB ({worst_u / worst_t:.0%} of the smallest margin)")
 
 
+DEFAULT_WDL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "wdl",
+                           "methods", "imputation", "GLIMPSE2FromPreprocessedPLsJoint.wdl")
+
+
+def wdl_model(path=DEFAULT_WDL):
+    """
+    Recover (constant, bytes-per-site-per-thread-per-state) from the WDL itself rather than
+    hardcoding them. These drifted once already -- the WDL was refitted from 4.0 to 8.0 while
+    this script still asserted 4.0, which would have reported a bound breach on every shard.
+    """
+    try:
+        m = re.search(r"Int final_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
+                      r"ceil\(\(\(\((\d+(?:\.\d+)?)\s*\*\s*phase_threads\)",
+                      open(path).read())
+        if m:
+            return float(m.group(1)), float(m.group(2))
+    except OSError:
+        pass
+    return None, None
+
+
 def check_phase_model(recs):
     """
-    Phase asks for 8 + 4 * threads * Kpbwt * L / 1e9 GB, i.e. an assumed 4 bytes per
-    site per thread per state. Recover that coefficient from what actually happened.
+    Phase asks for CONST + COEFF * threads * Kpbwt * L / 1e9, both read from the WDL.
+    Recover the coefficient actually needed from what the shards did.
     """
     pts = []
     for r in recs:
@@ -101,19 +123,26 @@ def check_phase_model(recs):
         # result to Cromwell as GiB, so its fixed term is 8 GiB and its matrix term is
         # decimal -- a ~7% conservative bias baked into the request. Using 8 * GIB here keeps
         # the recovered coefficient from inheriting that skew as a false bound breach.
-        pts.append((((peak * GIB) - 8 * GIB) / (L * t * kp), L, peak))
+        const, _ = wdl_model()
+        pts.append((((peak * GIB) - (const or 2) * GIB) / (L * t * kp), L, peak))
     if not pts:
         return
+    const, coeff = wdl_model()
     coeffs = sorted(c for c, _, _ in pts)
     print("\n=== phase memory model ===")
-    print(f"  assumed coefficient : 4.00 bytes per site per thread per state (upper bound)")
+    if coeff is None:
+        print("  could not read the sizing constants from the WDL; skipping comparison")
+        return
+    print(f"  WDL assumes         : {coeff:.2f} bytes per site per thread per state,"
+          f" plus {const:.0f} GiB")
     print(f"  observed            : median {statistics.median(coeffs):.2f}  max {max(coeffs):.2f}"
           f"   (n={len(coeffs)})")
-    if max(coeffs) > 4.0:
-        print("  *** the bound is NOT a bound -- some shard exceeded it. Do not size down.")
+    if max(coeffs) > coeff:
+        print("  *** the assumption is NOT an upper bound -- a shard exceeded it."
+              " Do not size down.")
     else:
-        print(f"  the bound holds; sizing on {max(coeffs):.2f} instead of 4.00 would cut the"
-              f" matrix term by {(1 - max(coeffs) / 4.0):.0%}")
+        print(f"  holds with margin; the worst shard needed {max(coeffs):.2f},"
+              f" {(1 - max(coeffs) / coeff):.0%} below what is requested")
 
 
 def main():
