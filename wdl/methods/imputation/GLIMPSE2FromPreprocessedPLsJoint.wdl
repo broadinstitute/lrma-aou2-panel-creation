@@ -1,5 +1,14 @@
 version 1.0
 
+# Resource sizing and cost rationale: docs/glimpse2-cost-and-resources.md
+#
+# Short version, so it is not lost: base compute is ~11 cents/sample, which matches the Terra
+# figure and is effectively the floor. The observed 1.97 full-run-equivalents per success --
+# preempted shards restarting from zero because the checkpoint sync interval (600 s) is longer
+# than the median preemption (7 min) -- is worth more than every knob in this file combined,
+# and it is backend config, not a WDL setting. Also noted there: tasks default to the N1
+# machine family, and the levers deliberately NOT taken (thread count, batch size, Kpbwt).
+
 import "../ConcatVcfs.wdl" as ConcatVcfs
 
 workflow GLIMPSE2FromPreprocessedPLsJoint {
