@@ -443,6 +443,35 @@ task GLIMPSE2Phase {
     command <<<
         set -euxo pipefail
 
+        # ---- resource reporting (best effort; never fails the task) -----------------------
+        # Every memory figure in this file is a bound or an empirical cap: no peak RSS has ever
+        # been collected anywhere in this pipeline, three different models of the ligate OOM
+        # have been proposed and all three were wrong, and phase is sized from an upper bound
+        # that is known to overshoot. These lines make the next batch produce the missing data
+        # at no extra cost and with no dedicated profiling run.
+        #
+        # Harvest with:  grep -h '\[RESOURCE\]' <cromwell logs> | scripts/harvest-resources.py
+        #
+        # Reads the container's own cgroup rather than /usr/bin/time, which is not guaranteed
+        # to be in these images, and which would not capture children. Every read is guarded so
+        # instrumentation can never fail the task it is measuring.
+        RESOURCE_T0=$SECONDS
+        report_resources() {
+            set +e
+            RR_PEAK=""; RR_SRC="unavailable"
+            if [ -r /sys/fs/cgroup/memory.peak ]; then
+                RR_PEAK=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null); RR_SRC="cgroup-v2"
+            elif [ -r /sys/fs/cgroup/memory/memory.max_usage_in_bytes ]; then
+                RR_PEAK=$(cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null); RR_SRC="cgroup-v1"
+            fi
+            RR_DISK=$(df -P -BG . 2>/dev/null | awk 'NR==2{gsub(/G/,"",$3); gsub(/G/,"",$2); print $3" "$2}')
+            echo "[RESOURCE] $1 peak_rss_bytes=${RR_PEAK:-NA} peak_rss_source=${RR_SRC}" \
+                 "disk_used_gb=$(echo "${RR_DISK:-NA NA}" | cut -d' ' -f1)" \
+                 "disk_total_gb=$(echo "${RR_DISK:-NA NA}" | cut -d' ' -f2)" \
+                 "wall_s=$((SECONDS-RESOURCE_T0))"
+            set -e
+        }
+
         # Fail fast on values that would make the memory request meaningless. GLIMPSE2 would
         # otherwise either reject these itself -- and boost program_options errors are caught
         # and exit 0, so the failure would surface much later as a missing output file -- or
@@ -492,8 +521,10 @@ task GLIMPSE2Phase {
                 --output ~{output_prefix}.raw.bcf \
                 --checkpoint-file-out checkpoint.bin"
 
+        RESUMED=no
         if [ -s "checkpoint.bin" ]; then
-            cmd="$cmd --checkpoint-file-in checkpoint.bin" 
+            cmd="$cmd --checkpoint-file-in checkpoint.bin"
+            RESUMED=yes
         fi
 
         eval "$cmd"
@@ -505,6 +536,12 @@ task GLIMPSE2Phase {
         cat input.header.txt glimpse2.header.txt input.columns.txt > header.txt
         bcftools reheader -h header.txt ~{output_prefix}.raw.bcf -o ~{output_prefix}.bcf
         bcftools index ~{output_prefix}.bcf
+
+        # requested_* are what the sizing arithmetic asked for; peak_rss_bytes is what it
+        # actually needed. The gap between them is the whole point of emitting this.
+        report_resources "task=GLIMPSE2Phase region=~{input_region} n_variants=~{n_variants} \
+requested_mem_gib=~{final_mem_gb} requested_cpu=~{final_cpu} threads=~{phase_threads} \
+kpbwt=~{phase_kpbwt} resumed=$RESUMED"
     >>>
 
     output {
@@ -681,6 +718,9 @@ task PopAndMarginalizeCollisions {
         bcftools view -r ~{region} --regions-overlap 0 ~{posteriors_vcf} | \
             $POP_BIN ~{panel_id_split_vcf_gz} panel.bubble.split.sites.shard.vcf.gz | \
             bcftools sort --max-mem=2G -W -Ob -o ~{output_prefix}.bcf
+
+        # Deliberately left at 12 GiB with no evidence either way. This is the evidence.
+        report_resources "task=PopAndMarginalizeCollisions region=~{region} requested_mem_gib=12 requested_cpu=2"
     >>>
 
     output {

@@ -229,6 +229,70 @@ else
     bad "WDL present at expected path" "$WDL"
 fi
 
+# ---------------------------------------------------------------------------
+# Resource reporting: the instrumentation must emit a parseable line, must never be able to
+# fail the task it measures, and the harvester must flag both failure directions.
+# ---------------------------------------------------------------------------
+echo
+echo "Resource reporting"
+HARVEST="$(dirname "$0")/../../scripts/harvest-resources.py"
+
+# The reporter runs under `set -euxo pipefail` inside the task. If any guard is wrong it
+# takes the whole shard down after the science has already been computed.
+RR_OUT=$(
+  bash -c '
+    set -euxo pipefail
+    RESOURCE_T0=$SECONDS
+    report_resources() {
+        set +e
+        RR_PEAK=""; RR_SRC="unavailable"
+        if [ -r /sys/fs/cgroup/memory.peak ]; then
+            RR_PEAK=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null); RR_SRC="cgroup-v2"
+        elif [ -r /sys/fs/cgroup/memory/memory.max_usage_in_bytes ]; then
+            RR_PEAK=$(cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null); RR_SRC="cgroup-v1"
+        fi
+        RR_DISK=$(df -P -BG . 2>/dev/null | awk "NR==2{gsub(/G/,\"\",\$3); gsub(/G/,\"\",\$2); print \$3\" \"\$2}")
+        echo "[RESOURCE] $1 peak_rss_bytes=${RR_PEAK:-NA} peak_rss_source=${RR_SRC}" \
+             "disk_used_gb=$(echo "${RR_DISK:-NA NA}" | cut -d" " -f1)" \
+             "disk_total_gb=$(echo "${RR_DISK:-NA NA}" | cut -d" " -f2)" \
+             "wall_s=$((SECONDS-RESOURCE_T0))"
+        set -e
+    }
+    report_resources "task=GLIMPSE2Phase n_variants=965039 requested_mem_gib=24"
+    echo SURVIVED
+  ' 2>/dev/null
+)
+case "$RR_OUT" in *SURVIVED*) ok "reporter survives set -euo pipefail";;
+                  *) bad "reporter survives set -euo pipefail" "$RR_OUT";; esac
+case "$RR_OUT" in *"[RESOURCE] task=GLIMPSE2Phase"*peak_rss_source=*wall_s=*)
+    ok "reporter emits a complete [RESOURCE] line";;
+  *) bad "reporter emits a complete [RESOURCE] line" "$RR_OUT";; esac
+
+if [ -x "$HARVEST" ]; then
+    # under-request must be flagged: a shard that used more than it asked for
+    OVER='[RESOURCE] task=GLIMPSE2Phase n_variants=1346888 requested_mem_gib=30 requested_cpu=6 threads=4 kpbwt=1000 peak_rss_bytes=34000000000 peak_rss_source=cgroup-v2 wall_s=1'
+    echo "$OVER" | "$HARVEST" 2>/dev/null | grep -q "OVER REQUEST" \
+        && ok "harvester flags an under-sized request" \
+        || bad "harvester flags an under-sized request" "no OVER REQUEST warning"
+    echo "$OVER" | "$HARVEST" 2>/dev/null | grep -q "bound is NOT a bound" \
+        && ok "harvester flags a breached memory bound" \
+        || bad "harvester flags a breached memory bound" "no bound warning"
+
+    # over-provisioning must be flagged too, or the data never drives sizing down
+    UNDER='[RESOURCE] task=GLIMPSE2Ligate n_shards=24 requested_mem_gib=32 requested_cpu=6 peak_rss_bytes=2000000000 peak_rss_source=cgroup-v2 wall_s=1'
+    echo "$UNDER" | "$HARVEST" 2>/dev/null | grep -q "OVER-PROVISIONED" \
+        && ok "harvester flags over-provisioning" \
+        || bad "harvester flags over-provisioning" "no OVER-PROVISIONED warning"
+
+    # must tolerate raw logs and missing measurements rather than crashing
+    printf 'unrelated log line\n[RESOURCE] task=X peak_rss_bytes=NA peak_rss_source=unavailable wall_s=3\n' \
+        | "$HARVEST" >/dev/null 2>&1 \
+        && ok "harvester tolerates noise and NA measurements" \
+        || bad "harvester tolerates noise and NA measurements" "non-zero exit"
+else
+    bad "harvest-resources.py present and executable" "$HARVEST"
+fi
+
 echo
 echo "-------------------------------------------"
 printf 'passed: %d   failed: %d\n' "$pass" "$fail"
