@@ -13,7 +13,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         File genetic_maps_tsv
         File chunked_panel_json
 
-        String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
+        String extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --main 10 --burnin 5 --err-imp 1E-3"
         String output_prefix
 
         # inputs for PopAndMarginalizeCollisions
@@ -23,6 +23,20 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         File? pop_glimpse2_binary
 
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2:1.0.0-2cee597-1778869818"    # enables checkpointing, but note this contains bcftools/htslib 1.16!
+
+        # Widens the spot pool: the VWB backend pins allocation to us-central1-a, where 355 of
+        # 502 observed attempts (71%) were preempted on the wider phase shape. Four zones cost
+        # nothing here -- shards never communicate and in-region GCS traffic is free.
+        #
+        # HARD CONSTRAINT: these must lie inside the backend's configured Batch job region.
+        # Google is enforcing that allowedLocations match the job region (from 2026-07-31 for
+        # affected projects), so a backend configured for anything but us-central1 will reject
+        # these values. Exposed as an input rather than hardcoded so such a backend can
+        # override without editing the WDL.
+        #
+        # NOTE: this does not reach the imported ConcatVcfs.ConcatVcfs call, which takes no
+        # zones argument, so that one task still runs wherever the backend places it.
+        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
     }
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
@@ -32,16 +46,6 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     Array[String] input_regions = chunked_panel[chromosome].input_regions
     Array[String] output_regions = chunked_panel[chromosome].output_regions
     Array[File] panel_split_chunk_bins = chunked_panel[chromosome].panel_split_chunk_bins
-
-    # Empty unless the panel JSON supplies n_variants. The length is checked against the shard
-    # count rather than trusted, so a stale or partial array degrades to static sizing instead
-    # of silently pairing shards with the wrong L.
-    # select_all + flatten rather than `if defined(...) then select_first(...) else []`: the
-    # ternary form relies on Cromwell not evaluating the untaken branch, and select_first on an
-    # absent optional throws. select_all drops the None without ever unwrapping it, yielding a
-    # 0- or 1-element Array[Array[Int]] that flattens to the values or to [].
-    Array[Int] panel_n_variants = flatten(select_all([chunked_panel[chromosome].n_variants]))
-    Boolean use_dynamic_phase_mem = length(panel_n_variants) == length(output_regions)
 
     Map[String, PopAndMarginalizePanelResourcesChromosome] pop_glimpse2_panel_resources = read_json(pop_glimpse2_panel_resources_json)
     File panel_bubble_split_sites_only_vcf = pop_glimpse2_panel_resources[chromosome].panel_bubble_split_sites_only_vcf
@@ -62,7 +66,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
                 genetic_map = genetic_map,
                 output_prefix = output_prefix + ".shard-" + k + ".glimpse2.phased",
                 extra_phase_args = extra_phase_args,
-                n_variants = if use_dynamic_phase_mem then panel_n_variants[k] else 0,
+                zones = zones,
                 docker = glimpse2_docker
         }
     }
@@ -72,6 +76,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             phased_vcfs = ChunkedGLIMPSE2Phase.phased_vcf,
             phased_vcf_idxs = ChunkedGLIMPSE2Phase.phased_vcf_idx,
             output_prefix = output_prefix + ".glimpse2.bubble",
+            zones = zones,
             docker = glimpse2_docker
     }
 
@@ -87,6 +92,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             cargo_toml = pop_glimpse2_cargo_toml,
             pop_glimpse2_binary = pop_glimpse2_binary,
             region = pop_regions[k],
+            zones = zones,
             output_prefix = output_prefix + ".glimpse2.popped"
         }
     }
@@ -110,6 +116,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
                 vcf = GLIMPSE2Ligate.ligated_vcf,
                 vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx,
                 remap_file = select_first([remap_sample_names_file]),
+                zones = zones,
                 output_prefix = output_prefix + ".glimpse2.bubble"
         }
 
@@ -118,6 +125,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
                 vcf = ConcatPopAndMarginalizeCollisions.concatenated_vcf,
                 vcf_idx = ConcatPopAndMarginalizeCollisions.concatenated_vcf_idx,
                 remap_file = select_first([remap_sample_names_file]),
+                zones = zones,
                 output_prefix = output_prefix + ".glimpse2.popped"
         }
     }
@@ -134,9 +142,11 @@ struct RuntimeAttr {
     Float? mem_gb
     Int? cpu_cores
     Int? disk_gb
-    Int? boot_disk_gb       # NOTE: no longer consumed by the tasks in this file; see the
-                            # bootDiskSizeGb note in GLIMPSE2Phase. Retained so the struct
-                            # stays compatible with the other WDLs that share it.
+    # Extra boot disk *on top of* the backend default, not an absolute size. Cromwell adds its
+    # 30 GB default to whatever is requested here, so 0 yields the 30 GB minimum and the old
+    # value of 10 yielded 40. Defaulted to 0 in every task below rather than dropped, so that
+    # an override still works for callers running a larger custom Docker image.
+    Int? boot_disk_gb
     Boolean? use_ssd
     Int? preemptible_tries
     Int? max_retries
@@ -149,18 +159,28 @@ struct ChunkedPanelChromosome {
     Array[String] output_regions
     Array[String] panel_split_chunk_bins
 
-    # Optional, and absent from the panel JSONs shipped so far -- when it is missing every
-    # shard falls back to static sizing, so existing inputs keep working unchanged.
+    # NOTE: there is deliberately no per-shard variant count here yet.
     #
-    # One entry per shard, parallel to input_regions: the number of panel variants in that
-    # shard's *input* region (the buffered region, column 3 of chunks.tsv). This is exactly
-    # GLIMPSE2's reported L. Note it is NOT column 7 of chunks.tsv, which counts a different
-    # region and disagrees badly -- 403,101 vs an actual L of 965,039 for chr20 shard 4.
+    # Sizing GLIMPSE2Phase from each shard's real L (rather than from a worst-case bound)
+    # would roughly halve per-batch vCPU, since only a handful of shards need the largest
+    # shape. It was implemented and then removed, because doing it safely needs two things
+    # this schema cannot express:
     #
-    # Counting the sites-only panel BCF over each input region reproduced GLIMPSE2's L exactly
-    # on all three shards checked (chr22 s0 = 657,784; chr20 s4 = 965,039; chr7 s12 =
-    # 1,346,888), so this can be generated offline from resources already staged, with no VMs.
-    Array[Int]? n_variants
+    #  1. The producer must emit the counts. GLIMPSE2ChunkAndSplitPanel builds this struct
+    #     with four fields and no count, so an optional count is dead on the normal
+    #     producer-to-consumer path -- it can only be supplied by hand-editing a generated
+    #     resource.
+    #  2. The counts must be bound to the shards they describe. These are unkeyed parallel
+    #     arrays, so a count array that is stale but happens to have the right length pairs
+    #     silently with the wrong bins -- and underprovisioning memory is exactly the failure
+    #     this was meant to prevent. A length check does not catch reordered shards, a
+    #     regenerated panel with the same shard count, or counts copied from another
+    #     chromosome.
+    #
+    # The right shape is one array of shard objects carrying region, bin and count together,
+    # emitted atomically by the producer and required rather than optional. That is a change
+    # to both files and to every staged chunked_panel.json, so it is deliberately not bundled
+    # with the memory fixes.
 }
 
 struct PopAndMarginalizePanelResourcesChromosome {
@@ -181,36 +201,51 @@ task GLIMPSE2Phase {
         String output_region
         File genetic_map
         String output_prefix
-        String? extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --Kpbwt 1000 --main 10 --burnin 5 --err-imp 1E-3"
+        String? extra_phase_args = "--impute-reference-only-variants --keep-monomorphic-ref-sites --main 10 --burnin 5 --err-imp 1E-3"
 
         String docker
 
-        # Pinned rather than $(nproc). The forward matrix is allocated per thread, so with
-        # --thread $(nproc) the memory requirement is a function of cpu_cores, while the N1
-        # ratio limit makes cpu_cores a function of the memory requirement. Solving that
-        # coupling for a shard of L variants (mem ~= 5.5 + 4*T*L/1e6, cpu >= mem/6.5) gives
-        #   cpu * (6.5 - 4*L/1e6) >= 5.5
-        # which has no solution above L ~= 1.6M and is already marginal at the genome-wide
-        # max of L = 1.35M. Pinning T decouples the two and makes the sizing below well-posed.
-        # It is also why cpu_cores below may exceed phase_threads: the extra cores buy ratio
-        # headroom, not parallelism.
+        # Both of these are typed inputs rather than text inside extra_phase_args because the
+        # memory request below is computed from them. Anything that changes the size of the
+        # forward matrix has to be visible to the sizing arithmetic; a caller who replaced
+        # extra_phase_args to add one unrelated option would otherwise silently drop
+        # --Kpbwt 1000 and get this build's default of 2000, doubling the matrix while the
+        # memory request stayed put. The command strips both options from extra_phase_args
+        # and injects these instead.
+        #
+        # phase_threads is pinned rather than $(nproc): the forward matrix is allocated per
+        # thread, so under $(nproc) memory would be a function of cpu_cores while the N1
+        # ratio limit makes cpu_cores a function of memory. Solving that coupling for a shard
+        # of L variants gives cpu * (6.5 - 4*L/1e6) >= 5.5, which is unsolvable above
+        # L ~= 1.6M. Pinning decouples them. It is also why cpu_cores below may exceed
+        # phase_threads -- the extra cores buy ratio headroom, not parallelism.
         Int phase_threads = 4
+        Int phase_kpbwt = 1000
 
-        # Number of variants (GLIMPSE2's L) in this shard's *input* region, if known.
-        # 0 means unknown and selects the static fallback sizing. See the workflow-level
-        # n_variants note on ChunkedPanelChromosome.
-        Int n_variants = 0
+        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+
 
         RuntimeAttr? runtime_attr_override
     }
 
-    # Memory model, from phase/src/models/imputation_hmm.cpp:
-    #   Alpha.resize(polymorphic_sites.size() * modK)   // float, modK = 1000 at --Kpbwt 1000
-    # => 4 KB per site per thread, i.e. 4 GB per 1e6 sites per thread, plus ~5.5 GB fixed.
-    # The +8 rather than +5.5 is deliberate headroom: the fit comes from a handful of points
-    # near a noisy threshold and no peak RSS has actually been measured.
-    Int auto_mem_gb   = 8 + ceil(4.0 * phase_threads * n_variants / 1000000.0)
-    Int final_mem_gb  = if n_variants > 0 then auto_mem_gb else 40
+    # 40 GiB / 8 cpu at the defaults, which is the shape that ran 217 shards without an OOM.
+    # The expression exists so that raising phase_kpbwt or phase_threads scales the request
+    # instead of quietly invalidating it: at phase_kpbwt=1000 and phase_threads=4 the second
+    # term is exactly 32, giving 40.
+    #
+    # Upper bound, not an exact model. phase/src/models/imputation_hmm.cpp allocates
+    #   Alpha.resize(polymorphic_sites.size() * modK)   // float
+    # where modK is n_states rounded up to a multiple of 8 and n_states is the number of
+    # states actually selected for the shard, bounded above by Kpbwt (see
+    # containers/conditioning_set.cpp). GLIMPSE2's logged L is total panel sites, so
+    # L * Kpbwt * 4 bytes * threads over-counts. That is deliberate -- it is the safe
+    # direction -- but it means the coefficient is a bound, not an invariant.
+    #
+    # Per-shard sizing from the real L would cut this substantially (most shards need far
+    # less than the worst one), but it requires the chunked-panel producer to emit a
+    # per-shard variant count. It does not, so that is a separate change; see the note on
+    # ChunkedPanelChromosome.
+    Int final_mem_gb  = 8 + ceil(32.0 * phase_kpbwt * phase_threads / 4000.0)
     # N1 allows at most 6.5 GB per cpu (GcpBatchCustomMachineType.scala) and rounds odd cpu
     # counts up to even. Doing it here keeps the requested shape visible instead of letting
     # Cromwell silently adjust it.
@@ -242,23 +277,37 @@ task GLIMPSE2Phase {
     command <<<
         set -euxo pipefail
 
-        # The memory request is a function of phase_threads (see the sizing block above), so the
-        # thread count has to come from that one place. Existing input CSVs carry --thread inside
-        # extra_phase_args; passing both would hand GLIMPSE2 a duplicate option (boost
-        # program_options rejects those), and honouring the CSV's value instead would silently
-        # decouple threads from the memory it was sized against. So: strip any --thread from
-        # extra_phase_args, warn loudly, and always inject phase_threads.
-        EXTRA_PHASE_ARGS="~{extra_phase_args}"
-        if echo "$EXTRA_PHASE_ARGS" | grep -qE '(^|[[:space:]])--thread([[:space:]]|=)'; then
-            echo "WARNING: --thread found in extra_phase_args; overriding with phase_threads=~{phase_threads}." >&2
-            echo "WARNING: set the phase_threads input instead -- memory is sized from it." >&2
-            EXTRA_PHASE_ARGS=$(echo "$EXTRA_PHASE_ARGS" | sed -E 's/(^|[[:space:]])--thread([[:space:]]+|=)[0-9]+/ /g')
+        # Fail fast on values that would make the memory request meaningless. GLIMPSE2 would
+        # otherwise either reject these itself -- and boost program_options errors are caught
+        # and exit 0, so the failure would surface much later as a missing output file -- or
+        # accept them and overrun the request.
+        if [ "~{phase_threads}" -lt 1 ] || [ "~{phase_kpbwt}" -lt 1 ]; then
+            echo "ERROR: phase_threads and phase_kpbwt must both be >= 1 (got ~{phase_threads}, ~{phase_kpbwt})." >&2
+            exit 1
         fi
+
+        # The memory request is computed from phase_threads and phase_kpbwt (see the sizing
+        # block above), so both have to come from that one place. Existing input CSVs carry
+        # --thread inside extra_phase_args, and the previous default string carried --Kpbwt.
+        # Passing either twice hands GLIMPSE2 a duplicate option, which boost program_options
+        # rejects -- and because GLIMPSE2 catches parser errors and exits 0, that surfaces later
+        # as a confusing missing-BCF failure rather than a clean error. Honouring the string's
+        # value instead is worse still: it decouples the parameter from the memory sized
+        # against it. So strip both from extra_phase_args, warn, and inject the typed values.
+        EXTRA_PHASE_ARGS="~{extra_phase_args}"
+        for OPT in thread Kpbwt; do
+            if echo "$EXTRA_PHASE_ARGS" | grep -qE "(^|[[:space:]])--${OPT}([[:space:]]|=)"; then
+                echo "WARNING: --${OPT} found in extra_phase_args; overriding with the typed input." >&2
+                echo "WARNING: set phase_threads / phase_kpbwt instead -- memory is sized from them." >&2
+                EXTRA_PHASE_ARGS=$(echo "$EXTRA_PHASE_ARGS" | sed -E "s/(^|[[:space:]])--${OPT}([[:space:]]+|=)[0-9]+/ /g")
+            fi
+        done
 
         cmd="/bin/GLIMPSE2_phase \
                 --input-gl ~{input_vcf} \
                 -R ~{panel_split_chunk_bin} \
                 --thread ~{phase_threads} \
+                --Kpbwt ~{phase_kpbwt} \
                 $EXTRA_PHASE_ARGS \
                 --output ~{output_prefix}.raw.bcf \
                 --checkpoint-file-out checkpoint.bin"
@@ -288,6 +337,7 @@ task GLIMPSE2Phase {
         cpu_cores:          final_cpu,
         mem_gb:             final_mem_gb,
         disk_gb:            disk_size_gb,
+        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  10,
         max_retries:        1,
@@ -298,10 +348,11 @@ task GLIMPSE2Phase {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-        zones:                  ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+        zones:                  zones
         checkpointFile:         "checkpoint.bin"
     }
 }
@@ -314,6 +365,9 @@ task GLIMPSE2Ligate {
 
         String docker
 
+        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+
+
         RuntimeAttr? runtime_attr_override
     }
 
@@ -322,9 +376,9 @@ task GLIMPSE2Ligate {
     command <<<
         set -euox pipefail
 
-        # Threads pinned rather than $(nproc): bcf_sr_set_threads allocates per-thread
-        # decompression buffers, so scaling threads with cpu_cores would grow the very
-        # memory this task is being widened to accommodate.
+        # Threads pinned rather than $(nproc): bcf_sr_set_threads creates a thread pool, so
+        # letting the thread count follow cpu_cores would grow memory alongside the widening
+        # below. Two is a conservative choice pending measurement, not a tuned value.
         /bin/GLIMPSE2_ligate --input ~{write_lines(phased_vcfs)} --output ~{output_prefix}.bcf --thread 2
 
         # the index generated by ligate appears to be corrupt for both bcf and vcf.gz output (possibly due to https://github.com/samtools/htslib/issues/1740), so we regenerate with bcftools
@@ -337,10 +391,32 @@ task GLIMPSE2Ligate {
     }
 
     #########################
+    # 32 GiB is an empirical cap, NOT a validated model. What is established: ligate was
+    # SIGKILLed (rc=137) at 12 GiB on chr2 and chr20, twice each, and chr7 needed three
+    # attempts; chr22 passed. The failures correlate with the number of variants in the
+    # densest seam of each chromosome, and 12 GiB sits between chr22's worst seam (245k,
+    # passed) and chr2's (597k, failed).
+    #
+    # An earlier version of this comment asserted a mechanism -- that the two synced readers
+    # held every seam record, giving mem ~= 1.5 + 18*L_isec/1e6. That does not survive
+    # reading HTSlib 1.16: _reader_fill_buffer only buffers records sharing a coordinate and
+    # stops at the first record with a different one, reusing the buffer as it advances. So
+    # the linear-in-seam-length model is wrong, and the correlation is probably confounded
+    # (denser seams also carry more multiallelic sites, and the highly multiallelic bubbles
+    # are a known sore spot in this panel).
+    #
+    # The real cause is unidentified: candidates include per-coordinate record pileups at
+    # large bubbles, buffer high-water marks, index/output construction, or allocator
+    # behaviour. rc=137 alone does not distinguish them. Treat this as "big enough to stop
+    # the bleeding" and measure peak RSS on a known-failing seam before tuning further.
+    #
+    # cpu 6 exists only to keep 32/6 = 5.33 under the N1 6.5 GB/cpu limit; with --thread 2
+    # four of those cores are deliberately idle. That is the price of memory on this shape.
     RuntimeAttr default_attr = object {
         cpu_cores:          6,
         mem_gb:             32,
         disk_gb:            disk_size_gb,
+        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -351,10 +427,11 @@ task GLIMPSE2Ligate {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-        zones:                  ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+        zones:                  zones
     }
 }
 
@@ -375,6 +452,9 @@ task PopAndMarginalizeCollisions {
         
         String region
         String output_prefix
+
+        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+
 
         RuntimeAttr? runtime_attr_override
     }
@@ -421,6 +501,7 @@ task PopAndMarginalizeCollisions {
         cpu_cores:          4,
         mem_gb:             24,
         disk_gb:            disk_gb,
+        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -431,10 +512,11 @@ task PopAndMarginalizeCollisions {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-        zones:                  ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+        zones:                  zones
     }
 }
 
@@ -444,6 +526,9 @@ task RemapSampleNames {
         File vcf_idx
         File remap_file
         String output_prefix
+
+        Array[String] zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+
 
         RuntimeAttr? runtime_attr_override
     }
@@ -466,6 +551,7 @@ task RemapSampleNames {
         cpu_cores:          2,
         mem_gb:             4,
         disk_gb:            disk_size_gb,
+        boot_disk_gb:       0,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -476,9 +562,10 @@ task RemapSampleNames {
         cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
         memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb,      default_attr.boot_disk_gb])
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
-        zones:                  ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+        zones:                  zones
     }
 }
