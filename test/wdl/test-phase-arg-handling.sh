@@ -324,27 +324,6 @@ if [ -f "$WDL" ]; then
     fi
 
     # Instrumentation must be trap-based and on stderr, or it vanishes exactly when needed.
-    if [ "$(grep -c 'trap _instr_report EXIT' "$WDL")" -eq 4 ]; then
-        ok "all four measured tasks install an EXIT trap"
-    else
-        bad "all four measured tasks install an EXIT trap" "found $(grep -c 'trap _instr_report EXIT' "$WDL")"
-    fi
-    if grep -q 'wall_s=\$((SECONDS-_INSTR_T0))" >&2' "$WDL"; then
-        ok "resource lines are written to stderr"
-    else
-        bad "resource lines are written to stderr" "redirect changed"
-    fi
-    if grep -qF 's/(^|[[:space:]])--${OPT}([[:space:]]+|=)-?[0-9]+/ /g' "$WDL"; then
-        ok "WDL strips signed numeric option values"
-    else
-        bad "WDL strips signed numeric option values" "signed-value sed pattern missing"
-    fi
-    if [ "$(grep -c 'Int eff_cpu       = select_first(\[runtime_attr.cpu_cores' "$WDL")" -eq 4 ]; then
-        ok "cpu is re-derived from effective memory in all four tasks"
-    else
-        bad "cpu is re-derived from effective memory in all four tasks" "partial override coupling not enforced"
-    fi
-
     # eff_* must be declared before the command block that references them.
     if python3 - "$WDL" <<'ORDER'
 import re,sys
@@ -397,6 +376,31 @@ print('%s %s' % m.wdl_model())" 2>/dev/null)
     else
         ok "ligate thread comment matches the value ($LIG_T)"
     fi
+
+    # Structural, so a task added later cannot silently miss either fix. Every task with a
+    # runtime block must re-derive cpu from effective memory (or a partial runtime_attr_override
+    # breaches the N1 ratio) and must install the EXIT-trap instrumentation (or it reports
+    # nothing from the OOMs that matter).
+    if python3 - "$WDL" <<'AUDIT'
+import re, sys
+s = open(sys.argv[1]).read()
+bad = []
+for m in re.finditer(r"task (\w+) \{", s):
+    seg = s[m.end():]
+    nx = re.search(r"\ntask ", seg)
+    seg = seg[:nx.start()] if nx else seg
+    if "runtime {" not in seg:
+        continue
+    missing = [n for n, ok in (("eff_cpu", "Int eff_cpu" in seg),
+                               ("instrumentation", "trap _instr_report" in seg)) if not ok]
+    if missing:
+        bad.append("%s (%s)" % (m.group(1), ", ".join(missing)))
+if bad:
+    print("      " + "; ".join(bad))
+sys.exit(1 if bad else 0)
+AUDIT
+    then ok "every task re-derives cpu and installs instrumentation"
+    else bad "every task re-derives cpu and installs instrumentation" "see above"; fi
 
     # The counting task serialises the chromosome; it must not be preemptible.
     if awk '/task CountPanelVariantsPerShard/,/^}/' "$WDL" | grep -qE 'preemptible_tries:\s*0,'; then

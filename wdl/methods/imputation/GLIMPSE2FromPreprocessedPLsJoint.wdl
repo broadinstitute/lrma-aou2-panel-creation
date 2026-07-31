@@ -417,8 +417,12 @@ task GLIMPSE2Phase {
     #
     # Peak is not just the inputs: Cromwell's checkpoint sync keeps two copies (cp to -tmp) and
     # reheader writes the output twice, so chr7 s12 peaks ~16 GB against 32 provisioned.
-    # The 30 GB floor is deliberate: localization was measured only at 50 GiB (161 MiB/s, ~7x
-    # the documented pd-ssd per-GiB scaling), which says nothing about the curve at 16-20 GiB.
+    # The 30 GB floor is now exercised rather than assumed. Every chr20 shard ran on it (df
+    # reports 29 GB usable) and the worst used 17 GB -- 59%, on the L=1,005,104 shard -- with
+    # wall times in the normal 842-3152 s range, so the floor is neither wasteful nor a
+    # throughput cliff at this size. What remains untested is smaller: localization was only
+    # ever timed at 50 GiB (161 MiB/s, ~7x the documented pd-ssd per-GiB scaling), so the curve
+    # below 30 GB is still unknown and the floor is what keeps us out of it.
     # Sam's TODO stands -- only one shard of input_vcf is used, so pre-splitting it upstream
     # would cut ~1.4 TB of redundant localization per batch.
     Int computed_disk_gb = 10 + ceil(2.0 * (size(panel_split_chunk_bin, "GB") + size(input_vcf, "GB")))
@@ -888,17 +892,6 @@ task RemapSampleNames {
 
     Int disk_size_gb = 10 + 2 * ceil(size(vcf, "GB"))
 
-    command <<<
-        set -euxo pipefail
-
-        bcftools reheader --samples ~{remap_file} ~{vcf} -o ~{output_prefix}.bcf
-        bcftools index ~{output_prefix}.bcf
-    >>>
-
-    output {
-        File output_vcf = "~{output_prefix}.bcf"
-        File output_vcf_idx = "~{output_prefix}.bcf.csi"
-    }
 
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
@@ -910,9 +903,52 @@ task RemapSampleNames {
         docker:             "us.gcr.io/broad-dsp-lrma/lr-gcloud-samtools@sha256:f820f1708624242c9b35912be83446d502d36ddadfe0f3ccac6492591314454c"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    # Same partial-override fix as the other tasks: select_first is per field, so overriding
+    # only mem_gb would keep a cpu computed for the default memory and breach the N1 ratio.
+    Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2
+    Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
+    command <<<
+        set -euxo pipefail
+
+        # Peak RSS via EXIT trap on stderr. Must be a trap: under set -e a SIGKILLed child
+        # aborts the script, so an end-of-script report would miss every OOM -- the only runs
+        # worth measuring. Must be stderr: Cromwell delocalizes it for FAILED tasks, File
+        # outputs do not exist. Guarded throughout; cannot fail the task it measures.
+        # $1 may be the literal "max" (cgroup v2, no limit); emit NA rather than 0.00.
+        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '$1 ~ /^[0-9]+$/ {printf "%.2f", $1/1073741824; ok=1} END{if(!ok) printf "NA"}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+        _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
+        _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
+        _instr_cur()   { _instr_gib /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes; }
+        _INSTR_T0=$SECONDS
+        _INSTR_SAMPLER=""
+        _instr_report() {
+            _rc=$?
+            set +e +x
+            [ -n "$_INSTR_SAMPLER" ] && kill "$_INSTR_SAMPLER" 2>/dev/null
+            # -Pk is POSIX; -BG is GNU-only and absent on busybox. 1K blocks -> GiB in awk.
+            _du=$(df -Pk . 2>/dev/null | awk 'NR==2{printf "%.0f %.0f", $3/1048576, $2/1048576}')
+            echo "[RESOURCE] task=RemapSampleNames requested_mem_gib=~{eff_mem_gb} requested_cpu=~{eff_cpu} rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
+        }
+        trap _instr_report EXIT
+        # 10 s time series, so a spike can be located against GLIMPSE2's Cnk/Buf markers.
+        ( set +x; while :; do
+            echo "[RESOURCE-TS] t=$((SECONDS-_INSTR_T0)) rss_gib=$(_instr_cur)" >&2
+            sleep 10
+          done ) & _INSTR_SAMPLER=$!
+
+        bcftools reheader --samples ~{remap_file} ~{vcf} -o ~{output_prefix}.bcf
+        bcftools index ~{output_prefix}.bcf
+    >>>
+
+    output {
+        File output_vcf = "~{output_prefix}.bcf"
+        File output_vcf_idx = "~{output_prefix}.bcf.csi"
+    }
     runtime {
-        cpu:                    select_first([runtime_attr.cpu_cores,         default_attr.cpu_cores])
-        memory:                 select_first([runtime_attr.mem_gb,            default_attr.mem_gb]) + " GiB"
+        cpu:                    eff_cpu
+        memory:                 eff_mem_gb + " GiB"
         disks: "local-disk " +  select_first([runtime_attr.disk_gb,           default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
