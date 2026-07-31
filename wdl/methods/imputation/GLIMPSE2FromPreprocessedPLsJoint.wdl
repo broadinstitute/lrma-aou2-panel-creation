@@ -567,22 +567,35 @@ task GLIMPSE2Ligate {
 
 
     #########################
-    # 32 GiB is an empirical cap, NOT a validated model.
+    # 24 GiB / 4 cpu, from a measured peak.
     #
-    # Established: rc=137 at 12 GiB on chr2 and chr20 twice each, chr7 on three attempts,
-    # chr22 passing -- correlating with each chromosome's densest seam, predicted 3/3 blind.
-    # TWO mechanisms have been proposed and BOTH are dead; recorded so neither is re-derived:
-    #  1. Linear in seam length (mem ~= 1.5 + 18*L_isec/1e6). HTSlib 1.16 _reader_fill_buffer
-    #     only buffers records sharing a coordinate, so nothing accumulates across a seam.
-    #  2. Max records per coordinate. chr20 peaked at 10,465 and FAILED, chr22 at 9,937 and
-    #     PASSED -- 5% apart, opposite outcomes -- and 10,465 x ~9 KB x 2 readers is ~190 MB,
-    #     ~100x short of the ~12 GB to explain.
-    # The cause is unidentified. Do not tune this on a model; every model has been wrong.
-    # The EXIT-trap peak RSS above is what will settle it.
-    # cpu 6 only keeps 32/6 under the N1 6.5 GB/cpu limit; with --thread 2, four cores idle.
+    # MEASURED on chr20: peak 12.39 GiB, rc=0, 618 s. The 10 s series puts the spike exactly
+    # on Buf 4 [L_isec=744,316] -- the seam that took two rc=137 kills at 12 GiB. It needed
+    # 12.39 and had 12.00. The margin was 0.39 GiB.
+    #
+    # Two anchors from that series (L_isec 117,072 -> 10.01 GiB, 744,316 -> 12.39) give
+    #     peak_GiB ~= 9.57 + 3.79e-6 * L_isec        (~4.0 KB per intersecting site)
+    # An earlier version of this comment declared BOTH proposed mechanisms dead. That was half
+    # wrong: seam size is real, but at ~4 KB/site on a ~9.6 GiB baseline, not the 18 KB/site on
+    # a 1.5 GiB baseline first claimed -- right variable, wrong intercept and coefficient, the
+    # same failure as the phase formula. What is genuinely dead is max-records-per-coordinate:
+    # chr20 peaked at 10,465 records and FAILED while chr22 peaked at 9,937 and PASSED.
+    #
+    # The model also explains why 12 GiB behaved like a coin flip. Projected peaks across the
+    # genome's worst seams span 10.5-13.5 GiB, so chr2 (11.83), chr10 (11.91) and chr20 (12.39)
+    # all sit within half a gigabyte of the old limit -- which is why chr10 passed, chr2 failed,
+    # and chr7 needed three attempts.
+    #
+    # 24 GiB is 1.9x the measured peak and 1.8x the projected genome max (chr7's 1,023,060-site
+    # seam, ~13.5 GiB). Down from 32, which measured 39% utilised. The reason to shrink is not
+    # the $0.28 per batch: 24/4 is a materially smaller VM than 32/6, and wider shapes were
+    # measured to preempt harder (63-72% on 8cpu/40G against 41-50% on 4cpu/16G), so the
+    # narrower shape should place more easily on spot.
+    #
+    # Caveat as with phase: memory.peak includes page cache, so part of 12.39 is reclaimable.
     RuntimeAttr default_attr = object {
-        cpu_cores:          6,
-        mem_gb:             32,
+        cpu_cores:          4,
+        mem_gb:             24,
         disk_gb:            disk_size_gb,
         use_ssd:            true,
         preemptible_tries:  2,

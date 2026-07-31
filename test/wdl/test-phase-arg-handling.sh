@@ -183,6 +183,26 @@ chr11_s9 1122361
 chr7_s12 1346888
 EXTRAP
 
+# Ligate: measured 12.39 GiB peak on chr20's 744,316-site seam (the one that took two rc=137
+# kills at 12 GiB). Projected genome max is chr7's 1,023,060-site seam at ~13.5 GiB via
+# peak = 9.57 + 3.79e-6 * L_isec. The request must clear both with margin.
+LIG_MEM=$(awk '/task GLIMPSE2Ligate/,/runtime \{/' "$WDL" | grep -oE 'mem_gb:\s+[0-9]+' | grep -oE '[0-9]+$')
+LIG_CPU=$(awk '/task GLIMPSE2Ligate/,/runtime \{/' "$WDL" | grep -oE 'cpu_cores:\s+[0-9]+' | grep -oE '[0-9]+$')
+for probe in "12.39 measured_chr20_seam" "13.45 projected_chr7_seam"; do
+    set -- $probe
+    ratio=$(python3 -c "print(int(100*$1/$LIG_MEM))")
+    if [ "$ratio" -le 75 ]; then
+        ok "ligate $2 ${1} GiB fits ${LIG_MEM} GiB (${ratio}%)"
+    else
+        bad "ligate $2 ${1} GiB fits ${LIG_MEM} GiB" "${ratio}% -- too tight"
+    fi
+done
+if python3 -c "import sys; sys.exit(0 if $LIG_MEM/$LIG_CPU <= 6.5 else 1)"; then
+    ok "ligate shape ${LIG_MEM}/${LIG_CPU} within the N1 6.5 GB/cpu limit"
+else
+    bad "ligate shape ${LIG_MEM}/${LIG_CPU} within the N1 limit" "exceeds 6.5"
+fi
+
 # Ratio limit and even cpu across the parameter space, including odd thread counts.
 for combo in "1000 4 400000" "1000 4 1346888" "1000 8 1346888" "2000 4 1346888" \
              "500 4 400000" "1000 5 900000" "1000 1 400000" "1000 3 700000" "1000 4 100000"; do
@@ -398,7 +418,7 @@ if [ -x "$HARVEST" ]; then
         || bad "harvester flags a breached memory bound" "no bound warning"
 
     # over-provisioning must be flagged too, or the data never drives sizing down
-    UNDER='[RESOURCE] task=GLIMPSE2Ligate n_shards=24 requested_mem_gib=32 requested_cpu=6 peak_rss_gib=1.86 peak_rss_source=cgroup-v2 wall_s=1'
+    UNDER='[RESOURCE] task=GLIMPSE2Ligate n_shards=24 requested_mem_gib=24 requested_cpu=4 peak_rss_gib=1.86 peak_rss_source=cgroup-v2 wall_s=1'
     echo "$UNDER" | "$HARVEST" 2>/dev/null | grep -q "OVER-PROVISIONED" \
         && ok "harvester flags over-provisioning" \
         || bad "harvester flags over-provisioning" "no OVER-PROVISIONED warning"
