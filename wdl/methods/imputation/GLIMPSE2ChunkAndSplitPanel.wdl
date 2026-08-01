@@ -274,7 +274,9 @@ task CoercePairsToMap {
 # Counts panel variants per shard input (buffered) region -- exactly GLIMPSE2's L. Verified
 # against its logged L on three shards: 657,784 / 965,039 / 1,346,888, all exact. NOT column 7
 # of chunks.tsv, which covers a different region (403,101 vs an actual 965,039 for chr20 s4).
-# One task per chromosome, cents, against ~$20/batch saved by not sizing for the worst shard.
+# One task per chromosome, run once when the panel is chunked. Every batch then reads the
+# numbers out of chunked_panel.json instead of recounting them, which is what lets phase size
+# each shard from its own L rather than from the densest one in the genome.
 task CountPanelVariantsPerShard {
     input {
         File panel_bubble_split_sites_only_vcf
@@ -290,17 +292,12 @@ task CountPanelVariantsPerShard {
 
 
     #########################
-    # 8 GiB, up from 4: the measured 2.49 GiB peak was a single reader and
-    # the loop now runs eff_cpu of them concurrently. Memory at that concurrency is unmeasured
-    # -- the readers stream and should share page cache, so 8 is expected to be generous, and
-    # the instrumentation will say if it is not.
+    # 8 GiB, up from 4: the measured 2.49 GiB peak was a single reader and the loop runs
+    # eff_cpu of them concurrently. Memory at that concurrency is unmeasured -- the readers
+    # stream and should share page cache -- and the instrumentation below reports it.
+    # MEASURED on chr20 (7 regions): 65 s wall, 2.49 GiB peak, 1 GB of disk.
     #
-    # NOT preemptible: every phase shard blocks on this, so it is a serialisation point and a
-    # per-chromosome single point of failure. MEASURED on chr20 (7 regions): 65 s wall,
-    # 2.49 GiB peak against 4 requested, 1 GB of disk. Cheaper and faster than the "minutes"
-    # estimated -- the larger chromosomes have ~47 regions so will take longer, but the
-    # preemption exposure is smaller than assumed. Kept off spot anyway: it costs cents, and
-    # one preemption here stalls every downstream shard.
+    # NOT preemptible: the whole panel build waits on these, and they cost cents.
     RuntimeAttr default_attr = object {
         cpu_cores:          4,
         mem_gb:             8,

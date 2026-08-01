@@ -261,7 +261,7 @@ task GLIMPSE2Phase {
         Int phase_disk_floor_gb = 30
 
         # Panel variants in this shard's input region -- GLIMPSE2's L. Required, and supplied
-        # by CountPanelVariantsPerShard in the same run, so it is bound to the shard it describes.
+        # by the panel, parallel to input_regions, so it is bound to the shard it describes.
         Int n_variants
 
         String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
