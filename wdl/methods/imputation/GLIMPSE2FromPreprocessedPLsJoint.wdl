@@ -522,7 +522,7 @@ task GLIMPSE2Ligate {
     # circulating figure puts chr2 nearer 16 GiB. This model would under-predict that by ~39%.
     # 24 GiB still covers 16 at 68%, which is why the request is sized on the measurement plus
     # margin rather than on the fit. Treat any projection here as indicative until a second
-    # chromosome reports a peak; chr2 and chr11 are the next to run and will settle it.
+    # chromosome reports a peak.
     #
     # chr1 is a separate gap: the position file used for that sweep held 370,261 entries
     # against the 10,112,850 records chr1 actually imputed, so it was truncated and chr1's

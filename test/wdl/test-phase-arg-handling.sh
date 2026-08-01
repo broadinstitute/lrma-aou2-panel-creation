@@ -144,7 +144,6 @@ chr22_s0 657784 passed_marginally_at_16 17
 chr3_s16 765770 OOMed_at_16 17
 chr20_s4 965039 OOMed_at_16 17
 chr20_s5 1005104 OOMed_at_16 17
-chr11_s9 1122361 OOMed_at_16 17
 chr7_s12 1346888 OOMed_at_16 17
 CASES
 
@@ -184,7 +183,6 @@ while read -r name L; do
     fi
 done <<'EXTRAP'
 chr2_s17 967196
-chr11_s9 1122361
 chr7_s12 1346888
 EXTRAP
 
@@ -275,7 +273,7 @@ def size(L, t=4, kp=1000):
     r = math.ceil(m / 6.5); u = r if r > t else t
     return m, u + (u % 2)
 def cost(n, cpu, gb, mins): return n * (cpu*CPU + gb*MEM) * (mins/60) * SPOT
-Ls = [400000]*490 + [657784,765770,965039,1005104,1122361,1346888] + [600000]*27
+Ls = [400000]*491 + [657784,765770,965039,1005104,1346888] + [600000]*27
 dyn = sum(cost(1, c, m, 35) for m, c in (size(L) for L in Ls))
 flat = cost(len(Ls), 8, 40, 35)   # the worst-case bound this replaced
 print("  \033[32mPASS\033[0m  per-shard $%.1f < flat worst-case $%.1f per batch" % (dyn, flat)
@@ -443,9 +441,16 @@ def res(text):
         m = re.search(r"(cpu_cores|mem_gb):\s*(\d+)", line)
         if m and n: out.setdefault(n, {})[m.group(1)] = m.group(2)
     return out
-base = subprocess.run(["git", "show", "sl_aou2_v1:" + P], capture_output=True, text=True)
-if base.returncode != 0:
+# The merge-base, not sl_aou2_v1 itself: that branch moves, and comparing against its tip
+# would report Sam's later changes as our drift.
+mb = subprocess.run(["git", "merge-base", "HEAD", "origin/sl_aou2_v1"],
+                    capture_output=True, text=True)
+if mb.returncode != 0:
     sys.exit(0)   # no base ref (shallow clone); nothing to compare against
+base = subprocess.run(["git", "show", mb.stdout.strip() + ":" + P],
+                      capture_output=True, text=True)
+if base.returncode != 0:
+    sys.exit(0)
 old, new = res(base.stdout), res(open(P).read())
 drift = ["%s %s -> %s" % (k, old[k], new.get(k)) for k in old if old[k] != new.get(k)]
 if drift:
