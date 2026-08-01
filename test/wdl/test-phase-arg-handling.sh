@@ -428,16 +428,26 @@ AUDIT
     then ok "every task: eff_cpu, instrumentation, boot_disk default and wiring"
     else bad "every task: eff_cpu, instrumentation, boot_disk default and wiring" "see above"; fi
 
-    # The counting task's concurrency limiter must not count the instrumentation sampler,
-    # which is also a background job of that shell. Counting it caps concurrency at PAR-1, and
-    # at PAR=1 -- reachable via a cpu_cores override -- the sampler alone satisfies the
-    # condition and the loop spins forever, hanging a non-preemptible task that every phase
-    # shard blocks on. Reproduced before fixing.
-    if grep -q 'jobs -rp | grep -vx "${_INSTR_SAMPLER:-}"' "$PANEL_WDL"; then
-        ok "concurrency limiter excludes the instrumentation sampler"
-    else
-        bad "concurrency limiter excludes the instrumentation sampler" "PAR=1 would hang"
-    fi
+    # A bare `wait` in a command block that starts the instrumentation sampler blocks
+    # forever: `wait` with no arguments waits for every background job, and the sampler loops
+    # until the EXIT trap kills it. That deadlocked a non-preemptible task in production.
+    if python3 - "$WDL" "$PANEL_WDL" <<'BAREWAIT'
+import re, sys
+bad = []
+for path in sys.argv[1:]:
+    s = open(path).read()
+    for m in re.finditer(r"task (\w+) \{", s):
+        seg = s[m.end():]
+        nx = re.search(r"\ntask ", seg)
+        seg = seg[:nx.start()] if nx else seg
+        if "_INSTR_SAMPLER=$!" in seg and re.search(r"^\s*wait\s*$", seg, re.M):
+            bad.append("%s in %s" % (m.group(1), path.split("/")[-1]))
+if bad:
+    print("      " + "; ".join(bad))
+sys.exit(1 if bad else 0)
+BAREWAIT
+    then ok "no bare wait alongside the instrumentation sampler"
+    else bad "no bare wait alongside the instrumentation sampler" "deadlock"; fi
 
     # The count comes from the panel, not a per-run task: it is a property of the panel and
     # recomputing it once per chromosome per batch produced the same numbers 4,400 times.

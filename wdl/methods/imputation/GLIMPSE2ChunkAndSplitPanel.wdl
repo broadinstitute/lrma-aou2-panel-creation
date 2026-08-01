@@ -144,8 +144,8 @@ task GLIMPSE2Chunk {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          4,
-        mem_gb:             8,
+        cpu_cores:          2,
+        mem_gb:             4,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -314,7 +314,7 @@ task CountPanelVariantsPerShard {
     # cpu_cores still wins. Same pattern as the other tasks in this file.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
     Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
-    Int eff_unrounded = if eff_ratio_cpu > 4 then eff_ratio_cpu else 4
+    Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2
     Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
     command <<<
         set -euxo pipefail
@@ -346,51 +346,27 @@ task CountPanelVariantsPerShard {
           done ) & _INSTR_SAMPLER=$!
 
         # Indexed read per region. The regions overlap, so this reads ~1.5x the file total,
-        # and a miscount mis-sizes a
-        # shard silently. Run in parallel because every phase shard for this chromosome blocks
-        # on this task -- chr20's 7 regions took 65 s and chr2 has 47, so serial execution
-        # would put ~7 minutes on the critical path of every chromosome. Parallel is also
-        # cheaper as well as faster: cpu bills linearly but the memory reservation is charged
-        # for the whole wall time, so finishing 4x sooner on 4x the cores costs slightly less.
-        #
-        # Counts go to per-index files and are assembled in order afterwards, because parallel
-        # completion order is not region order and the array must line up with input_regions.
-        # A per-job success sentinel distinguishes "bcftools failed" from "region genuinely has
-        # no variants": `wait` with no arguments returns 0 regardless of what the background
-        # jobs did, so without it a tool failure would surface later as a spurious empty-region
-        # error pointing at the wrong cause.
-        PAR=~{eff_cpu}
+        # and a miscount mis-sizes a shard silently. Serial: this runs once when the panel is
+        # chunked, not once per batch, so ~7 minutes on the largest chromosome is paid once and
+        # parallelising it is not worth the machinery. A parallel version deadlocked -- its
+        # bare `wait` blocked on the instrumentation sampler, which never exits -- and hung a
+        # non-preemptible VM until it was cancelled.
         REGIONS_FILE=~{write_lines(input_regions)}
-        awk '{print NR-1 "\t" $0}' "$REGIONS_FILE" > indexed_regions.txt
-        while IFS=$'\t' read -r IDX REGION; do
-            (
-                set -o pipefail
-                # --regions-overlap 0 matches GLIMPSE2: a record counts if its POS is inside.
-                # The default mode also counts records starting before the region, inflating it.
-                bcftools view --no-version --threads 1 -H -r "$REGION" --regions-overlap 0 \
-                    ~{panel_bubble_split_sites_only_vcf} \
-                    | awk 'END{print NR+0}' > "count.$IDX" && touch "ok.$IDX"
-            ) &
-            # Exclude the instrumentation sampler, which is also a background job of this
-            # shell. Counting it caps concurrency at PAR-1, and at PAR=1 -- reachable by a
-            # cpu_cores override -- the sampler alone satisfies the condition and this loop
-            # spins forever, hanging a non-preemptible task that every phase shard waits on.
-            while [ "$(jobs -rp | grep -vx "${_INSTR_SAMPLER:-}" | awk 'END{print NR+0}')" -ge "$PAR" ]; do
-                sleep 1
-            done
-        done < indexed_regions.txt
-        wait
-
-        # awk, because wc -l pads its output with spaces on some platforms, which would
-        # break the numeric checks below.
-        EXPECTED=$(awk 'END{print NR+0}' "$REGIONS_FILE")
         : > counts.txt
-        for IDX in $(seq 0 $((EXPECTED-1))); do
-            [ -f "ok.$IDX" ] || { echo "ERROR: bcftools failed on region index $IDX." >&2; exit 1; }
-            grep -qE '^[0-9]+$' "count.$IDX" || { echo "ERROR: non-numeric count at index $IDX." >&2; exit 1; }
-            cat "count.$IDX" >> counts.txt
-        done
+        while read -r REGION; do
+            # --regions-overlap 0 matches GLIMPSE2: a record counts if its POS is inside. The
+            # default mode also counts records starting before the region, inflating it.
+            bcftools view --no-version --threads 1 -H -r "$REGION" --regions-overlap 0 \
+                ~{panel_bubble_split_sites_only_vcf} | awk 'END{print NR+0}' >> counts.txt
+        done < "$REGIONS_FILE"
 
+        # awk rather than wc -l: wc pads its output with spaces on some platforms.
+        EXPECTED=$(awk 'END{print NR+0}' "$REGIONS_FILE")
+        ACTUAL=$(awk 'END{print NR+0}' counts.txt)
+        if [ "$ACTUAL" -ne "$EXPECTED" ]; then
+            echo "ERROR: counted $ACTUAL regions, expected $EXPECTED." >&2
+            exit 1
+        fi
         if grep -qx '0' counts.txt; then
             echo "ERROR: at least one input region contains no panel variants." >&2
             paste -d' ' "$REGIONS_FILE" counts.txt >&2
