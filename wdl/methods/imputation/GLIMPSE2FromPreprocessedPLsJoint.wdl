@@ -25,8 +25,9 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 
         # The largest remaining lever on SSD quota, exposed as an input so testing it costs an
         # override. At 30 a batch reserves ~31.4 TB (work + boot) and
-        # ~2.6 batches fit an 82 TB quota; at 20 that is ~26.1 TB and ~3.1 batches -- 5.2 TB
-        # per batch, roughly 35x what per-chromosome PL slicing would have saved. Not lowered
+        # ~2.6 batches fit an 82 TB quota; at 20 that is ~26.1 TB and ~3.1 batches, a saving of
+        # 5.2 TB per batch. This is the only lever that moves the quota: per-chromosome PL
+        # slicing changes the disk request on no shard, because this floor dominates. Not lowered
         # by default because the reason for the floor is unmeasured: localization was only ever
         # timed at 50 GiB (8.96 GiB in 57 s, 161 MiB/s), so the pd-ssd throughput curve below
         # 30 GB is unknown and this keeps us out of it. The experiment is one chromosome with

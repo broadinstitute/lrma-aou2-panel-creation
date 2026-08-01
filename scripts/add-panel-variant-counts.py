@@ -29,14 +29,23 @@ import sys
 
 
 def count_region(vcf, region):
-    """Panel variants whose POS falls inside `region`."""
-    p = subprocess.run(
+    """
+    Panel variants whose POS falls inside `region`.
+
+    Streams rather than capturing: a dense shard is ~1M records, and with --jobs 8 buffering
+    every one of them before counting holds hundreds of MB for a number.
+    """
+    proc = subprocess.Popen(
         ["bcftools", "view", "--no-version", "--threads", "1", "-H",
          "-r", region, "--regions-overlap", "0", vcf],
-        capture_output=True, text=True)
-    if p.returncode != 0:
-        raise RuntimeError(f"bcftools failed on {region}: {p.stderr.strip().splitlines()[-1:]}")
-    return sum(1 for _ in p.stdout.splitlines())
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    n = sum(1 for _ in proc.stdout)
+    proc.stdout.close()
+    err = proc.stderr.read()
+    proc.stderr.close()
+    if proc.wait() != 0:
+        raise RuntimeError(f"bcftools failed on {region}: {err.strip().splitlines()[-1:]}")
+    return n
 
 
 def main():
