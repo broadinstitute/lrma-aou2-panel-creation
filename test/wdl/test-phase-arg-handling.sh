@@ -250,12 +250,15 @@ for combo in "1000 4 400000" "1000 4 1346888" "1000 8 1346888" "2000 4 1346888" 
 done
 
 # Doubling Kpbwt or threads must double the matrix term, not leave the request unchanged.
+# The fixed term comes from the WDL: restating it here made both assertions fail the moment
+# it moved from 2 to 4, which is a test tracking a literal rather than the property.
+WDL_CONST_I=$(grep -oE 'Int final_mem_gb[[:space:]]*=[[:space:]]*[0-9]+' "$WDL" | grep -oE '[0-9]+$')
 read -r m1 _ <<<"$(sizing 1000 4 1000000)"
 read -r m2 _ <<<"$(sizing 2000 4 1000000)"
 read -r m3 _ <<<"$(sizing 1000 8 1000000)"
-[ $((m2 - 2)) -eq $(( (m1 - 2) * 2 )) ] && ok "Kpbwt 1000->2000 doubles the matrix term" \
+[ $((m2 - WDL_CONST_I)) -eq $(( (m1 - WDL_CONST_I) * 2 )) ] && ok "Kpbwt 1000->2000 doubles the matrix term" \
     || bad "Kpbwt scaling" "$m1 -> $m2"
-[ $((m3 - 2)) -eq $(( (m1 - 2) * 2 )) ] && ok "threads 4->8 doubles the matrix term" \
+[ $((m3 - WDL_CONST_I)) -eq $(( (m1 - WDL_CONST_I) * 2 )) ] && ok "threads 4->8 doubles the matrix term" \
     || bad "thread scaling" "$m1 -> $m3"
 
 # Per-shard sizing must not cost more than the flat worst-case bound it replaces.
@@ -317,7 +320,7 @@ if [ -f "$WDL" ]; then
     fi
 
     # The memory expression must keep Float promotion first; reordering overflows Int32.
-    if grep -qF 'ceil((((8.0 * phase_threads) * phase_kpbwt) * n_variants)' "$WDL"; then
+    if grep -qE 'ceil\(\(\(\([0-9]+\.[0-9]+ \* phase_threads\) \* phase_kpbwt\) \* n_variants\)' "$WDL"; then
         ok "memory expression promotes to Float before multiplying"
     else
         bad "memory expression promotes to Float before multiplying" "expression reordered or coefficient changed"
@@ -570,7 +573,15 @@ rm -rf "$CGDIR"
 
 if [ -x "$HARVEST" ]; then
     # under-request must be flagged: a shard that used more than it asked for
-    OVER='[RESOURCE] task=GLIMPSE2Phase n_variants=1346888 requested_mem_gib=30 requested_cpu=6 threads=4 kpbwt=1000 peak_rss_gib=45.00 peak_rss_source=cgroup-v2 wall_s=1'
+    # Peak derived from the WDL's own constants: a literal stops breaching the bound as soon
+    # as the coefficient is refitted upward, and the test then asserts nothing.
+    BREACH_PEAK=$(python3 -c "
+import re
+m = re.search(r'Int final_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*'
+              r'ceil\(\(\(\((\d+(?:\.\d+)?)\s*\*\s*phase_threads\)', open('$WDL').read())
+c, k = (float(m.group(1)), float(m.group(2))) if m else (2.0, 8.0)
+print('%.2f' % (c + 1.25 * k * 4 * 1000 * 1346888 / 1073741824))")
+    OVER="[RESOURCE] task=GLIMPSE2Phase n_variants=1346888 requested_mem_gib=30 requested_cpu=6 threads=4 kpbwt=1000 peak_rss_gib=$BREACH_PEAK peak_rss_source=cgroup-v2 wall_s=1"
     echo "$OVER" | "$HARVEST" 2>/dev/null | grep -q "OVER REQUEST" \
         && ok "harvester flags an under-sized request" \
         || bad "harvester flags an under-sized request" "no OVER REQUEST warning"

@@ -271,15 +271,28 @@ task GLIMPSE2Phase {
         RuntimeAttr? runtime_attr_override
     }
 
-    # Fitted from measured peak RSS over 11 instrumented shards:
-    #     peak_GiB = 0.42 + 2.17e-5 * L        (4 threads, Kpbwt 1000, r2 ~ 0.99)
-    # i.e. 5.82 bytes per site per thread per state. The source-derived 4.0 -- from
-    # imputation_hmm.cpp allocating Alpha as polymorphic_sites * modK floats -- counts only that
-    # one matrix; the process allocates more. Requesting 8.0 gives ~64%
-    # utilisation across the range:
-    #     L =   400,379 -> 15 GiB / 4 cpu   (peak  9.32)
-    #     L = 1,005,104 -> 35 GiB / 6 cpu   (peak 22.44)
-    #     L = 1,346,888 -> 46 GiB / 8 cpu   (projected 29.61)
+    # Fitted from measured peak RSS. The chr20 sweep gave 11 points at 4 threads / Kpbwt 1000:
+    #     peak_GiB = 0.42 + 2.17e-5 * L        (r2 ~ 0.99)
+    # i.e. 5.82 bytes per site per thread per state. Requesting 8.0 on the strength of that
+    # then OOMed every shard of the first chr2/chr11 run -- 3 of 3, all rc=137:
+    #     L =  50,227  requested  4 GiB, killed at  3.37
+    #     L = 351,339  requested 14 GiB, killed at 13.15
+    #     L = 357,973  requested 14 GiB, killed at 13.15
+    # Refitting on those: peak = 1.75 + 3.21e-5 * L, i.e. 8.62 bytes -- above the 8.0 they
+    # were sized with. The chr20 fit understated the slope by a third, so a sweep of one
+    # chromosome does not generalise to another.
+    #
+    # Two corrections, because the failures show two things at once. 8.0 -> 11.0 covers the
+    # refit with margin, and 2 -> 4 GiB pays for what the task cannot use: every kill landed
+    # BELOW its request (84%, 94%, 94%), so the guest OS, Docker, the monitoring script and
+    # localization buffers take a cut of the VM that GLIMPSE2 never sees.
+    #
+    # Both peaks and the refit are lower bounds. peak_rss_gib on an rc=137 task is where the
+    # kernel stopped it, not what it wanted, which biases the slope down -- the direction that
+    # OOMs. Treat 11.0 as the floor of what is defensible until shards finish.
+    #     L =   400,379 -> 22 GiB / 4 cpu
+    #     L = 1,005,104 -> 49 GiB / 8 cpu
+    #     L = 1,346,888 -> 64 GiB / 10 cpu
     # Per-shard sizing redistributes memory rather than saving it against the old flat 16. 490 shards get less, 33 get more, and the total is 3538 GiB-hours against 3552, a
     # 0.4% difference. Phase compute is $13.68/batch either way (+$0.09). What it does buy is
     # the freedom to size the dense shards correctly at all: a flat request safe for chr7 s12
@@ -301,7 +314,7 @@ task GLIMPSE2Phase {
     # minCpuPlatform="". Testing it means editing the runtime block. Not default because
     # setMinCpuPlatform restricts placement, which at 41-72% preemption may cost more than
     # it saves.
-    Int final_mem_gb  = 2 + ceil((((8.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
+    Int final_mem_gb  = 4 + ceil((((11.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
     # N1 allows <= 6.5 GB/cpu and rounds any cpu count but 1 up to even; doing both here keeps
     # the requested shape visible instead of letting Cromwell adjust it silently.
     Int ratio_min_cpu = ceil(final_mem_gb / 6.5)
