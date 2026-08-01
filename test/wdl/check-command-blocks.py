@@ -5,7 +5,8 @@ Static checks on the shell inside each WDL task command block.
 The argument/sizing tests exercise a *mirror* of the command block, so they cannot see the
 real thing. This parses the WDL directly and catches what the mirror cannot: a call to a
 shell function that is not defined in that block (under set -e that is exit 127 on every
-task), a syntax error, or a [RESOURCE] line written to stdout instead of stderr.
+task), a syntax error, a [RESOURCE] line written to stdout instead of stderr, or a bare
+`wait` in a block that starts the instrumentation sampler.
 
     python3 test/wdl/check-command-blocks.py <file.wdl>
 """
@@ -57,6 +58,14 @@ for m in re.finditer(r"task (\w+) \{", s):
                       if x not in KNOWN and x not in local and HELPERISH.match(x))
     if suspects:
         print("  FAIL %s: calls undefined shell function(s): %s" % (name, ", ".join(suspects)))
+        fail = 1
+
+    # `wait` with no arguments waits for EVERY background job. The instrumentation sampler
+    # loops until the EXIT trap kills it, so a bare `wait` alongside it never returns. This
+    # hung a non-preemptible task through an entire submission before it was cancelled.
+    # Wait for the specific PIDs instead.
+    if "_INSTR_SAMPLER=$!" in body and re.search(r"^\s*wait\s*(#.*)?$", shell_only, re.M):
+        print("  FAIL %s: bare `wait` will block forever on the instrumentation sampler" % name)
         fail = 1
 
     shell = re.sub(r"~\{[^}]*\}", "WDLPLACEHOLDER", body)

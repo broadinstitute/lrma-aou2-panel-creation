@@ -428,6 +428,33 @@ AUDIT
     then ok "every task: eff_cpu, instrumentation, boot_disk default and wiring"
     else bad "every task: eff_cpu, instrumentation, boot_disk default and wiring" "see above"; fi
 
+    # A resource edit meant for one task landing on another is invisible in review: both
+    # default_attr blocks look alike, and womtool accepts either. This branch downsized
+    # GLIMPSE2Chunk from 4/8 to 2/4 while leaving the task it meant to change untouched.
+    # Every task this branch did not introduce must keep the resources Sam gave it.
+    if python3 - <<'RESDRIFT'
+import re, subprocess, sys
+P = "wdl/methods/imputation/GLIMPSE2ChunkAndSplitPanel.wdl"
+def res(text):
+    out, n = {}, None
+    for line in text.splitlines():
+        m = re.match(r"task (\w+)", line)
+        if m: n = m.group(1)
+        m = re.search(r"(cpu_cores|mem_gb):\s*(\d+)", line)
+        if m and n: out.setdefault(n, {})[m.group(1)] = m.group(2)
+    return out
+base = subprocess.run(["git", "show", "sl_aou2_v1:" + P], capture_output=True, text=True)
+if base.returncode != 0:
+    sys.exit(0)   # no base ref (shallow clone); nothing to compare against
+old, new = res(base.stdout), res(open(P).read())
+drift = ["%s %s -> %s" % (k, old[k], new.get(k)) for k in old if old[k] != new.get(k)]
+if drift:
+    print("      " + "; ".join(drift))
+sys.exit(1 if drift else 0)
+RESDRIFT
+    then ok "pre-existing panel tasks keep their original resources"
+    else bad "pre-existing panel tasks keep their original resources" "resources changed"; fi
+
     # A bare `wait` in a command block that starts the instrumentation sampler blocks
     # forever: `wait` with no arguments waits for every background job, and the sampler loops
     # until the EXIT trap kills it. That deadlocked a non-preemptible task in production.

@@ -2,9 +2,9 @@ name: Test WDLs
 
 on:
   push:
-    branches: [ 'main', 'sl_aou2_v1' ]
+    branches: [ 'main', 'sl_aou2_v1', 'vwb_fixes' ]
   pull_request:
-    branches: [ 'main', 'sl_aou2_v1' ]
+    branches: [ 'main', 'sl_aou2_v1', 'vwb_fixes' ]
 
 env:
   CROMWELL_VERSION: 91
@@ -21,10 +21,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: 'phase argument and sizing contract'
         run: bash test/wdl/test-phase-arg-handling.sh
-      # Blocking only for the file this branch changes. A repo-wide sweep runs below as
-      # advisory, so a pre-existing quirk in an untouched WDL cannot fail CI on sl_aou2_v1.
-      - name: 'task command blocks (changed file)'
-        run: python3 test/wdl/check-command-blocks.py wdl/methods/imputation/GLIMPSE2FromPreprocessedPLsJoint.wdl
+      # Blocking for both files this branch changes -- the counting task lives in the panel
+      # WDL now, so checking only the consumer would have left it unchecked. A repo-wide sweep
+      # runs below as advisory, so a pre-existing quirk in an untouched WDL cannot fail CI.
+      - name: 'task command blocks (changed files)'
+        run: |
+          python3 test/wdl/check-command-blocks.py wdl/methods/imputation/GLIMPSE2FromPreprocessedPLsJoint.wdl
+          python3 test/wdl/check-command-blocks.py wdl/methods/imputation/GLIMPSE2ChunkAndSplitPanel.wdl
       - name: 'task command blocks (repo-wide, advisory)'
         continue-on-error: true
         run: |

@@ -144,8 +144,8 @@ task GLIMPSE2Chunk {
 
     #########################
     RuntimeAttr default_attr = object {
-        cpu_cores:          2,
-        mem_gb:             4,
+        cpu_cores:          4,
+        mem_gb:             8,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       10,
         use_ssd:            true,
@@ -292,15 +292,13 @@ task CountPanelVariantsPerShard {
 
 
     #########################
-    # 8 GiB, up from 4: the measured 2.49 GiB peak was a single reader and the loop runs
-    # eff_cpu of them concurrently. Memory at that concurrency is unmeasured -- the readers
-    # stream and should share page cache -- and the instrumentation below reports it.
+    # One bcftools reader at a time, sized to what that reader measured.
     # MEASURED on chr20 (7 regions): 65 s wall, 2.49 GiB peak, 1 GB of disk.
     #
     # NOT preemptible: the whole panel build waits on these, and they cost cents.
     RuntimeAttr default_attr = object {
-        cpu_cores:          4,
-        mem_gb:             8,
+        cpu_cores:          2,
+        mem_gb:             4,
         disk_gb:            disk_size_gb,
         boot_disk_gb:       0,
         use_ssd:            true,
