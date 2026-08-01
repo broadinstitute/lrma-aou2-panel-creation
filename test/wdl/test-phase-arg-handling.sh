@@ -17,6 +17,7 @@
 set -uo pipefail
 
 WDL="$(dirname "$0")/../../wdl/methods/imputation/GLIMPSE2FromPreprocessedPLsJoint.wdl"
+PANEL_WDL="$(dirname "$0")/../../wdl/methods/imputation/GLIMPSE2ChunkAndSplitPanel.wdl"
 pass=0
 fail=0
 
@@ -432,10 +433,31 @@ AUDIT
     # at PAR=1 -- reachable via a cpu_cores override -- the sampler alone satisfies the
     # condition and the loop spins forever, hanging a non-preemptible task that every phase
     # shard blocks on. Reproduced before fixing.
-    if grep -q 'jobs -rp | grep -vx "${_INSTR_SAMPLER:-}"' "$WDL"; then
+    if grep -q 'jobs -rp | grep -vx "${_INSTR_SAMPLER:-}"' "$PANEL_WDL"; then
         ok "concurrency limiter excludes the instrumentation sampler"
     else
         bad "concurrency limiter excludes the instrumentation sampler" "PAR=1 would hang"
+    fi
+
+    # The count comes from the panel, not a per-run task: it is a property of the panel and
+    # recomputing it once per chromosome per batch produced the same numbers 4,400 times.
+    if grep -q 'Array\[Int\] n_variants = chunked_panel\[chromosome\].n_variants' "$WDL"; then
+        ok "consumer reads n_variants from the panel"
+    else
+        bad "consumer reads n_variants from the panel" "field not read"
+    fi
+    if grep -q 'n_variants: CountPanelVariantsPerShard.n_variants' "$PANEL_WDL"; then
+        ok "producer emits n_variants into the panel JSON"
+    else
+        bad "producer emits n_variants into the panel JSON" "field not emitted"
+    fi
+    # Both structs must agree or the JSON will not round-trip.
+    a=$(awk '/^struct ChunkedPanelChromosome/,/^}/' "$WDL" | grep -oE '^\s+(String|Array\[[A-Za-z]+\])\s+\w+' | tr -s ' ')
+    b=$(awk '/^struct ChunkedPanelChromosome/,/^}/' "$PANEL_WDL" | grep -oE '^\s+(String|Array\[[A-Za-z]+\])\s+\w+' | tr -s ' ')
+    if [ "$a" = "$b" ]; then
+        ok "ChunkedPanelChromosome identical in producer and consumer"
+    else
+        bad "ChunkedPanelChromosome identical in producer and consumer" "structs differ"
     fi
 
     # The disk floor must stay a parameter. It is the largest remaining SSD-quota saving and
@@ -448,7 +470,7 @@ AUDIT
     fi
 
     # The counting task serialises the chromosome; it must not be preemptible.
-    if awk '/task CountPanelVariantsPerShard/,/^}/' "$WDL" | grep -qE 'preemptible_tries:\s*0,'; then
+    if awk '/task CountPanelVariantsPerShard/,/^}/' "$PANEL_WDL" | grep -qE 'preemptible_tries:\s*0,'; then
         ok "CountPanelVariantsPerShard is non-preemptible"
     else
         bad "CountPanelVariantsPerShard is non-preemptible" "preemptible_tries is not 0"
