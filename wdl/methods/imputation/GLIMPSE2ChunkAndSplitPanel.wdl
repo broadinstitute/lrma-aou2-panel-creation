@@ -378,7 +378,6 @@ task CountPanelVariantsPerShard {
 
     output {
         Array[Int] n_variants = read_json("~{output_prefix}.n_variants.json")
-        File n_variants_json = "~{output_prefix}.n_variants.json"
     }
     runtime {
         cpu:                    eff_cpu
