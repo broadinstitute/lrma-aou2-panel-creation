@@ -1,0 +1,53 @@
+# Static x86_64 extract-bubble-PLs, for running the tool where it is not installed.
+#
+#   docker build -f Dockerfile.static -t ebp-static .
+#   docker create --name ebp ebp-static && docker cp ebp:/extract-bubble-PLs . && docker rm ebp
+#
+# Build it on an x86_64 Linux host. On an arm64 Mac this needs --platform linux/amd64, which
+# emulates and takes far longer than it is worth.
+#
+# Writes its own Cargo.toml rather than using the one next to it: the only change needed is
+# dropping rust-htslib's default `curl` feature, and that is what blocks a static link. The
+# tool never opens a URL -- every reader and the writer are IndexedReader::from_path /
+# Writer::from_path -- so nothing is lost. The checked-in Cargo.toml is left alone so the
+# cargo-build-from-source path in GLIMPSE2BatchedCaseShardedSingleBatch.PreprocessPLs keeps
+# building exactly what it builds today.
+#
+# rust:alpine, not a pinned older tag: rust 1.83 fails to resolve dependencies here because a
+# transitive dep of `url` requires the edition2024 cargo feature.
+#
+# If the static link still fails, a dynamically linked build works too -- use a glibc base
+# (rust:bookworm, no RUSTFLAGS, no --target), copy the binary out along with the .so files
+# `ldd` reports, and set LD_LIBRARY_PATH where you run it.
+
+FROM rust:alpine
+
+RUN apk add --no-cache musl-dev build-base clang-dev llvm-dev cmake perl \
+    zlib-dev zlib-static bzip2-dev bzip2-static xz-dev xz-static
+
+WORKDIR /build
+COPY src ./src
+
+RUN printf '%s\n' \
+    '[package]' \
+    'name = "extract-bubble-PLs"' \
+    'version = "0.1.0"' \
+    'edition = "2021"' \
+    '' \
+    '[dependencies]' \
+    'rust-htslib = { version = "0.44", default-features = false, features = ["bzip2", "lzma"] }' \
+    'anyhow = "1.0"' \
+    '' \
+    '[profile.release]' \
+    'opt-level = 3' \
+    > Cargo.toml
+
+ENV RUSTFLAGS="-C target-feature=+crt-static"
+
+# No pipe into tail: that would hide cargo's exit status behind tail's and let a failed build
+# reach the copy below as a missing-file error instead of a compiler error.
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+RUN cp target/x86_64-unknown-linux-musl/release/extract-bubble-PLs /extract-bubble-PLs \
+    && ldd /extract-bubble-PLs 2>&1 | head -3 \
+    && /extract-bubble-PLs 2>&1 | head -1
