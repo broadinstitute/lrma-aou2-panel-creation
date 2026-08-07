@@ -10,7 +10,21 @@ workflow GLIMPSE2Concordance {
         File trh_bed_idx
         Array[String] regions
         String output_prefix
+
+        # GLIMPSE2_concordance takes a frequency file and a truth file separately; this
+        # workflow used to pass the panel as both, which is what the leaveout evaluation wants
+        # -- the held-out samples' assembly genotypes are in the panel and nowhere else.
+        #
+        # Left unset these still default to the panel, so that evaluation is unchanged. Set
+        # them when the truth lives somewhere the panel is not: validating samples that are
+        # absent from the panel against an external gold standard (e.g. the public 1kGP DRAGEN
+        # joint callset) needs the panel for allele frequencies but cannot get truth from it.
+        Array[File]? truth_vcfs
+        Array[File]? truth_vcf_idxs
     }
+
+    Array[File] truth_vcfs_ = select_first([truth_vcfs, panel_vcfs])
+    Array[File] truth_vcf_idxs_ = select_first([truth_vcf_idxs, panel_vcf_idxs])
 
     Array[String] trh_bins = ["outTRH", "inTRH"]
     Array[String] length_bins = ["SV_DEL", "DEL", "SNP", "INS", "SV_INS"]
@@ -32,6 +46,8 @@ workflow GLIMPSE2Concordance {
                     annotated_bcf_index = AnnotateImputed.annotated_vcf_idx,
                     panel_vcf = panel_vcfs[idx],
                     panel_vcf_idx = panel_vcf_idxs[idx],
+                    truth_vcf = truth_vcfs_[idx],
+                    truth_vcf_idx = truth_vcf_idxs_[idx],
                     trh_bin = trh_bin,
                     length_bin = length_bin,
                     region = regions[idx],
@@ -147,6 +163,8 @@ task FilterAndConcordance {
         File annotated_bcf_index
         File panel_vcf
         File panel_vcf_idx
+        File truth_vcf
+        File truth_vcf_idx
         String trh_bin
         String length_bin
         String region
@@ -155,6 +173,12 @@ task FilterAndConcordance {
         RuntimeAttr? runtime_attr_override
     }
 
+    # Deliberately NOT counting truth_vcf. In the leaveout evaluation it is the same file as
+    # panel_vcf, which Cromwell localizes once, so adding size(truth_vcf) would inflate every
+    # one of these by 2x the panel -- and there are 10 of them per region (2 TRH bins x 5 length
+    # bins), against an SSD quota that is already the binding constraint. The 2x factor below
+    # covers the annotated BCF and the panel. A run that supplies a genuinely separate, large
+    # truth file should override disk_gb.
     Int disk_gb = 10 + 2 * ceil(size(annotated_bcf, "GiB") + size(panel_vcf, "GiB"))
 
     command <<<
@@ -182,7 +206,8 @@ task FilterAndConcordance {
             --threads $(nproc) \
             --write-index=csi -Ob -o ~{output_prefix}.bcf
 
-        echo "~{region} ~{panel_vcf} ~{panel_vcf} ~{output_prefix}.bcf" > ~{output_prefix}.concordance-input.txt
+        # GLIMPSE2_concordance reads: <region> <frequency file> <truth file> <estimate file>
+        echo "~{region} ~{panel_vcf} ~{truth_vcf} ~{output_prefix}.bcf" > ~{output_prefix}.concordance-input.txt
 
         wget https://github.com/odelaneau/GLIMPSE/releases/download/v2.0.1/GLIMPSE2_concordance_static
         chmod +x GLIMPSE2_concordance_static
@@ -203,7 +228,7 @@ task FilterAndConcordance {
             --threads $(nproc) \
             --write-index=csi -Ob -o ~{output_prefix}.INFO05.bcf
 
-        echo "~{region} ~{panel_vcf} ~{panel_vcf} ~{output_prefix}.INFO05.bcf" > ~{output_prefix}.INFO05.concordance-input.txt
+        echo "~{region} ~{panel_vcf} ~{truth_vcf} ~{output_prefix}.INFO05.bcf" > ~{output_prefix}.INFO05.concordance-input.txt
 
         ./GLIMPSE2_concordance_static \
             --min-tar-gp 0.0 \
