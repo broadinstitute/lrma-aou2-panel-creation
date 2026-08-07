@@ -1,0 +1,35 @@
+{
+  "__note_arms": "Full-panel arm is the control ceiling: the 22 cohort samples are in the full panel.",
+  "GLIMPSE2LeaveoutVsFullControl.leaveout_panel_bcf": "gs://longreadsphase2imputation/val/panel.leaveout.bcf",
+  "GLIMPSE2LeaveoutVsFullControl.leaveout_panel_bcf_idx": "gs://longreadsphase2imputation/val/panel.leaveout.bcf.csi",
+  "GLIMPSE2LeaveoutVsFullControl.full_panel_bcf": "gs://longreadsphase2imputation/val/panel.full.bcf",
+  "GLIMPSE2LeaveoutVsFullControl.full_panel_bcf_idx": "gs://longreadsphase2imputation/val/panel.full.bcf.csi",
+  "__note_cohort": "22 samples, 433,383 sites, chr22:23139988-30474099.",
+  "GLIMPSE2LeaveoutVsFullControl.cohort_gl_bcf": "gs://longreadsphase2imputation/val/cohort.bcf",
+  "GLIMPSE2LeaveoutVsFullControl.cohort_gl_bcf_idx": "gs://longreadsphase2imputation/val/cohort.bcf.csi",
+  "__note_windows": "shard-2 is chr22:23640007-28828225; these 4 windows cover 23800000-26200000. output_regions tile contiguously; input_regions add 100 kb per side. Change both together.",
+  "GLIMPSE2LeaveoutVsFullControl.input_regions": [
+    "chr22:23700000-24500000",
+    "chr22:24300000-25100000",
+    "chr22:24900000-25700000",
+    "chr22:25500000-26300000"
+  ],
+  "GLIMPSE2LeaveoutVsFullControl.output_regions": [
+    "chr22:23800000-24400000",
+    "chr22:24400000-25000000",
+    "chr22:25000000-25600000",
+    "chr22:25600000-26200000"
+  ],
+  "GLIMPSE2LeaveoutVsFullControl.genetic_map": "gs://longreadsphase2imputation/val/chr22.b38.gmap.gz",
+  "GLIMPSE2LeaveoutVsFullControl.output_prefix": "chr22-shard2-leaveout-vs-full",
+  "__note_kpbwt": "--pbwt-depth does not set conditioning states; a run passing --pbwt-depth 1000 logged #states=2000.0.",
+  "GLIMPSE2LeaveoutVsFullControl.phase_threads": 8,
+  "GLIMPSE2LeaveoutVsFullControl.phase_kpbwt": 1000,
+  "GLIMPSE2LeaveoutVsFullControl.extra_phase_args": "--impute-reference-only-variants --keep-monomorphic-ref-sites --main 10 --burnin 5 --err-imp 1E-3",
+  "GLIMPSE2LeaveoutVsFullControl.extra_split_args": "--keep-monomorphic-ref-sites",
+  "GLIMPSE2LeaveoutVsFullControl.split_mem_gb": 16,
+  "GLIMPSE2LeaveoutVsFullControl.phase_mem_gb": 32,
+  "GLIMPSE2LeaveoutVsFullControl.ligate_threads": 2,
+  "GLIMPSE2LeaveoutVsFullControl.ligate_mem_gb": 24,
+  "GLIMPSE2LeaveoutVsFullControl.docker": "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-glimpse2:tfenne-opt"
+}
