@@ -34,21 +34,24 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # this set to 20, comparing localization time in the phase logs against that 57 s.
         Int phase_disk_floor_gb = 30
         # GLIMPSE2 is not deterministic under multithreading; pinning threads fixes the
-        # thread COUNT, not the output. chr22 run twice on identical inputs, compared
-        # genotype by genotype over 1,896,739 sites x 250 samples (identical variant sets,
-        # zero key mismatches):
-        #     hard-call concordance   99.822%   (843,726 of 474,184,750 discordant)
-        #     non-ref discordance      4.671%   (either call non-ref -- the meaningful one)
-        #     phase flips, same GT     1.226%
-        #     worst sample            0.238%
-        # Discordance is symmetric -- 0/0->0/1 314,381 against 0/1->0/0 314,961 -- so it is
-        # noise, not a systematic shift in either direction, and it rises with allele
-        # frequency because that is where the heterozygotes are.
+        # thread COUNT, not the output. The size of that non-determinism has now been measured
+        # two ways, and the two disagree by three orders of magnitude.
         #
-        # This is the floor for any cross-platform comparison. A Terra-vs-VWB NRD near 4.7%
-        # means the two agree as well as one pipeline agrees with itself. Note those two runs
-        # also differed in preemptible_tries, so checkpoint-restart is confounded with thread
-        # scheduling; it bounds the combined effect.
+        # Controlled replicates, leaveout panel, --Kpbwt 1000 confirmed in the log, 8 threads:
+        #     mean dDS      -1.18e-05     sd 1.26e-02     |mu|/sd 9.3e-04
+        #     GT flips       0.014%
+        #     bootstrap CI straddles zero
+        # That is the real floor: replicate-to-replicate noise is centred on zero and tiny.
+        #
+        # The earlier chr22 pair gave a much larger number -- 4.671% non-ref discordance over
+        # 1,896,739 sites x 250 samples, 99.822% hard-call concordance, 1.226% phase flips.
+        # Do NOT read that as the determinism floor. Those two runs also differed in
+        # preemptible_tries, so checkpoint-restart was confounded with thread scheduling, and
+        # they did not pin Kpbwt, so they ran at the 2000-state default rather than 1000. It
+        # bounds a combined effect, not thread non-determinism.
+        #
+        # The practical consequence: a Terra-vs-VWB comparison has far more resolution than
+        # 4.7% implies. Differences at the percent level are signal, not noise.
 
         String output_prefix
 
