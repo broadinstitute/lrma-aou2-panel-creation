@@ -1,0 +1,22 @@
+{
+  "__comment_input": "Output of PreprocessPLsGVCF. Despite the workflow name the input is the pasted multi-sample PL VCF, which is what the gVCF path produces.",
+  "GLIMPSE2FromPreprocessedPLsJoint.input_preprocessed_joint_vcf": "gs://BUCKET/1kgp-validation/1kgp-validation.chr22.preprocessedPLs.bcf",
+  "GLIMPSE2FromPreprocessedPLsJoint.input_preprocessed_joint_vcf_idx": "gs://BUCKET/1kgp-validation/1kgp-validation.chr22.preprocessedPLs.bcf.csi",
+
+  "GLIMPSE2FromPreprocessedPLsJoint.chromosome": "chr22",
+  "GLIMPSE2FromPreprocessedPLsJoint.output_prefix": "1kgp-validation.chr22",
+
+  "__comment_chunked_panel": "Output of GLIMPSE2SplitLeaveoutPanel -- the LEAVEOUT .bin files. NOT rw-long-reads-transfer-2026-07-24/chunked_panel, which was split from the full panel and would make this circular. n_variants is already in this JSON; no add-panel-variant-counts.py backfill needed.",
+  "GLIMPSE2FromPreprocessedPLsJoint.chunked_panel_json": "gs://BUCKET/1kgp-validation/aou_lr_phase2_v1.leaveout.json",
+
+  "__comment_pop_resources": "Panel resources for the popping step. Use the LEAVEOUT panel's sites-only and id-split VCFs to match the panel imputed against.",
+  "GLIMPSE2FromPreprocessedPLsJoint.pop_glimpse2_panel_resources_json": "gs://BUCKET/PANEL/aou_lr_phase2_v1.leaveout.pop_glimpse2_panel_resources.json",
+  "GLIMPSE2FromPreprocessedPLsJoint.genetic_maps_tsv": "gs://BUCKET/resources/genetic_map_b38.tsv",
+
+  "GLIMPSE2FromPreprocessedPLsJoint.pop_glimpse2_binary": "gs://BUCKET/binaries/pop-glimpse2",
+
+  "__comment_parity": "Leave these at production values. They change the result, and the thread/Kpbwt pair also feeds the phase memory formula (4 + ceil(11.0*threads*Kpbwt*L/1e9)), so an override changes both what runs and what it costs.",
+  "GLIMPSE2FromPreprocessedPLsJoint.extra_phase_args": "--impute-reference-only-variants --keep-monomorphic-ref-sites --main 10 --burnin 5 --err-imp 1E-3",
+  "GLIMPSE2FromPreprocessedPLsJoint.phase_threads": 4,
+  "GLIMPSE2FromPreprocessedPLsJoint.phase_kpbwt": 1000
+}

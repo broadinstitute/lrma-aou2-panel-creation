@@ -1,0 +1,20 @@
+{
+  "__comment_inputs": "From scripts/build-1kgp-validation-manifest.py, after StageDragen1kGPGvcfs has run. The three files are positionally parallel -- do not sort one without the others.",
+  "PreprocessPLsGVCF.input_gvcfs_fofn": "gs://BUCKET/1kgp-validation/manifests/1kgp-validation.chr22.gvcfs.fofn",
+  "PreprocessPLsGVCF.input_gvcf_idxs_fofn": "gs://BUCKET/1kgp-validation/manifests/1kgp-validation.chr22.gvcf_idxs.fofn",
+  "PreprocessPLsGVCF.sample_names_file": "gs://BUCKET/1kgp-validation/manifests/1kgp-validation.chr22.samples.txt",
+
+  "PreprocessPLsGVCF.output_prefix": "1kgp-validation.chr22",
+
+  "__comment_panel": "LEAVEOUT panel sites. These samples are held out of it; using the full panel's sites here would extract PLs at sites informed by their own haplotypes.",
+  "PreprocessPLsGVCF.preprocess_panel_bubble_split_sites_only_vcf": "gs://BUCKET/panel_bubble_split_leaveout_vcf/aou_lr_phase2_v1.chr22.bubble.split.leaveout.sites-only.bcf",
+  "PreprocessPLsGVCF.preprocess_panel_bubble_split_sites_only_vcf_idx": "gs://BUCKET/panel_bubble_split_leaveout_vcf/aou_lr_phase2_v1.chr22.bubble.split.leaveout.sites-only.bcf.csi",
+
+  "PreprocessPLsGVCF.extract_bubble_likelihoods_binary": "gs://BUCKET/binaries/extract-bubble-PLs",
+  "__comment_extra_args": "Production values. These change the result, so an override makes the numbers not comparable to Samuel's.",
+  "PreprocessPLsGVCF.extract_bubble_likelihoods_extra_args": "--window 15000 --cap-pl 30 --scale-pl 5.0 --threads $(nproc)",
+
+  "PreprocessPLsGVCF.paste_vcfs_binary": "gs://BUCKET/binaries/paste-vcfs",
+  "__comment_paste_regions": "Same output_regions as the chunked_panel JSON for this chromosome.",
+  "PreprocessPLsGVCF.paste_regions": ["chr22"]
+}

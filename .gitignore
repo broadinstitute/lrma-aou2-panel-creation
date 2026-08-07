@@ -3,6 +3,7 @@
 *.mod.*
 resources/bubble-utils/Cargo.lock
 resources/bubble-utils/target
+resources/extract-bubble-PLs/target
 
 # python bytecode
 __pycache__/

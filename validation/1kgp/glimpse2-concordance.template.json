@@ -1,0 +1,16 @@
+{
+  "__comment": "Leaveout route. GLIMPSE2_concordance reads '<region> <frequencies> <truth> <imputed>', and this workflow passes the panel as both frequencies and truth. That is exactly right here: the held-out samples' assembly-based genotypes live in the FULL panel and nowhere else. truth_vcfs is left UNSET so it defaults to panel_vcfs.",
+
+  "__comment_panel": "The FULL panel -- frequencies AND truth. Imputation upstream used the LEAVEOUT panel. Pointing this at the leaveout panel too is the mistake that makes the result look perfect.",
+  "GLIMPSE2Concordance.panel_vcfs": ["gs://BUCKET/PANEL/aou_lr_phase2_v1.chr22.bubble.split.bcf"],
+  "GLIMPSE2Concordance.panel_vcf_idxs": ["gs://BUCKET/PANEL/aou_lr_phase2_v1.chr22.bubble.split.bcf.csi"],
+
+  "GLIMPSE2Concordance.imputed_vcfs": ["gs://BUCKET/1kgp-validation/1kgp-validation.chr22.glimpse2.ligated.popped.bcf"],
+  "GLIMPSE2Concordance.imputed_vcf_idxs": ["gs://BUCKET/1kgp-validation/1kgp-validation.chr22.glimpse2.ligated.popped.bcf.csi"],
+
+  "GLIMPSE2Concordance.trh_bed": "gs://BUCKET/resources/trh.bed.gz",
+  "GLIMPSE2Concordance.trh_bed_idx": "gs://BUCKET/resources/trh.bed.gz.tbi",
+
+  "GLIMPSE2Concordance.regions": ["chr22"],
+  "GLIMPSE2Concordance.output_prefix": "1kgp-validation.chr22.concordance"
+}
