@@ -314,7 +314,15 @@ task GLIMPSE2Phase {
     # minCpuPlatform="". Testing it means editing the runtime block. Not default because
     # setMinCpuPlatform restricts placement, which at 41-72% preemption may cost more than
     # it saves.
-    Int final_mem_gb  = 4 + ceil((((11.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
+    # Floored at 16 GiB. The regression cannot be trusted to set the low end: it was fit to
+    # peak_rss values from runs killed at rc=137, which are censored observations -- a kill
+    # point is where measurement stopped, not what the task wanted -- and those runs did not
+    # pin Kpbwt, so they ran at the 2000-state default while the coefficient is applied here
+    # at 1000. Both biases push the fit down. Against that, 517 of 523 shards completed at a
+    # flat 16 GiB, which is a measurement rather than an extrapolation. Keep the regression
+    # for the large shards it was built for and let the measured value hold the floor.
+    Int computed_mem_gb = 4 + ceil((((11.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
+    Int final_mem_gb    = if computed_mem_gb > 16 then computed_mem_gb else 16
     # N1 allows <= 6.5 GB/cpu and rounds any cpu count but 1 up to even; doing both here keeps
     # the requested shape visible instead of letting Cromwell adjust it silently.
     Int ratio_min_cpu = ceil(final_mem_gb / 6.5)

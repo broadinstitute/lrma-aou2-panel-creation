@@ -98,7 +98,7 @@ def wdl_model(path=DEFAULT_WDL):
     this script still asserted 4.0, which would have reported a bound breach on every shard.
     """
     try:
-        m = re.search(r"Int final_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
+        m = re.search(r"Int computed_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
                       r"ceil\(\(\(\((\d+(?:\.\d+)?)\s*\*\s*phase_threads\)",
                       open(path).read())
         if m:

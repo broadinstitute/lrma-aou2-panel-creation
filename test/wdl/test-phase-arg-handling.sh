@@ -121,10 +121,12 @@ sizing() {  # kpbwt threads L -> "mem cpu"   (constants read from the WDL, never
     python3 -c '
 import math, re, sys
 kp, t, L = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-m = re.search(r"Int final_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
+m = re.search(r"Int computed_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
               r"ceil\(\(\(\((\d+(?:\.\d+)?)\s*\*\s*phase_threads\)", open(sys.argv[4]).read())
 CONST, COEFF = (float(m.group(1)), float(m.group(2))) if m else (2.0, 8.0)
-mem = CONST + math.ceil(COEFF * t * kp * L / 1e9)
+f = re.search(r"if computed_mem_gb > (\d+) then computed_mem_gb else \1", open(sys.argv[4]).read())
+FLOOR = float(f.group(1)) if f else 0.0
+mem = max(FLOOR, CONST + math.ceil(COEFF * t * kp * L / 1e9))
 r = math.ceil(mem / 6.5)
 u = r if r > t else t
 print(int(mem), u + (u % 2))' "$1" "$2" "$3" "$WDL"
@@ -146,6 +148,22 @@ chr20_s4 965039 OOMed_at_16 17
 chr20_s5 1005104 OOMed_at_16 17
 chr7_s12 1346888 OOMed_at_16 17
 CASES
+
+# The floor is the measured number, not the regression: 517 of 523 shards completed at a flat
+# 16 GiB, whereas the fit was built from peaks censored at rc=137 and taken at the 2000-state
+# default. Small shards must land on the floor, large ones must still be driven by the model.
+FLOOR_I=$(grep -oE 'if computed_mem_gb > [0-9]+ then computed_mem_gb else [0-9]+' "$WDL" | grep -oE '[0-9]+' | head -1)
+if [ -n "$FLOOR_I" ]; then
+    ok "memory floor present in the WDL (${FLOOR_I} GiB)"
+    read -r m_small _ <<<"$(sizing 1000 4 50000)"
+    [ "$m_small" -eq "$FLOOR_I" ] && ok "small shard L=50000 floored to ${FLOOR_I} GiB" \
+        || bad "small shard floored" "got ${m_small}, expected ${FLOOR_I}"
+    read -r m_big _ <<<"$(sizing 1000 4 1346888)"
+    [ "$m_big" -gt "$FLOOR_I" ] && ok "dense shard L=1346888 -> ${m_big} GiB, model still governs" \
+        || bad "dense shard above floor" "got ${m_big}, floor ${FLOOR_I}"
+else
+    bad "memory floor present in the WDL" "no floor expression found"
+fi
 
 # Real measured peaks from the instrumented chr20 run. The request must exceed each peak
 # with margin; at <=75% we would be one bad extrapolation from an OOM. This is the assertion
@@ -252,7 +270,7 @@ done
 # Doubling Kpbwt or threads must double the matrix term, not leave the request unchanged.
 # The fixed term comes from the WDL: restating it here made both assertions fail the moment
 # it moved from 2 to 4, which is a test tracking a literal rather than the property.
-WDL_CONST_I=$(grep -oE 'Int final_mem_gb[[:space:]]*=[[:space:]]*[0-9]+' "$WDL" | grep -oE '[0-9]+$')
+WDL_CONST_I=$(grep -oE 'Int computed_mem_gb[[:space:]]*=[[:space:]]*[0-9]+' "$WDL" | grep -oE '[0-9]+$')
 read -r m1 _ <<<"$(sizing 1000 4 1000000)"
 read -r m2 _ <<<"$(sizing 2000 4 1000000)"
 read -r m3 _ <<<"$(sizing 1000 8 1000000)"
@@ -268,7 +286,7 @@ CPU, MEM, SPOT = 0.0332, 0.00445, 0.30
 # Read the sizing constants out of the WDL rather than restating them: this block validated a
 # formula the WDL had already moved off once, and printed a stale cost table while every other
 # assertion around it read the live value.
-m = re.search(r"Int final_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
+m = re.search(r"Int computed_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
               r"ceil\(\(\(\((\d+(?:\.\d+)?)\s*\*\s*phase_threads\)", open(sys.argv[1]).read())
 CONST, COEFF = (float(m.group(1)), float(m.group(2))) if m else (2.0, 8.0)
 def size(L, t=4, kp=1000):
@@ -362,7 +380,7 @@ import importlib.util as u, sys
 sp=u.spec_from_file_location('h','$(dirname "$0")/../../scripts/harvest-resources.py')
 m=u.module_from_spec(sp); sp.loader.exec_module(m)
 print('%s %s' % m.wdl_model())" 2>/dev/null)
-    WDL_CONST=$(grep -oE 'Int final_mem_gb\s*=\s*[0-9]+' "$WDL" | grep -oE '[0-9]+$')
+    WDL_CONST=$(grep -oE 'Int computed_mem_gb\s*=\s*[0-9]+' "$WDL" | grep -oE '[0-9]+$')
     WDL_COEFF=$(grep -oE 'ceil\(\(\(\([0-9]+\.[0-9]+ \* phase_threads' "$WDL" | grep -oE '[0-9]+\.[0-9]+')
     if [ "$HARVEST_MODEL" = "$WDL_CONST.0 $WDL_COEFF" ]; then
         ok "harvester reads the sizing model from the WDL ($HARVEST_MODEL)"
@@ -577,7 +595,7 @@ if [ -x "$HARVEST" ]; then
     # as the coefficient is refitted upward, and the test then asserts nothing.
     BREACH_PEAK=$(python3 -c "
 import re
-m = re.search(r'Int final_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*'
+m = re.search(r'Int computed_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*'
               r'ceil\(\(\(\((\d+(?:\.\d+)?)\s*\*\s*phase_threads\)', open('$WDL').read())
 c, k = (float(m.group(1)), float(m.group(2))) if m else (2.0, 8.0)
 print('%.2f' % (c + 1.25 * k * 4 * 1000 * 1346888 / 1073741824))")
