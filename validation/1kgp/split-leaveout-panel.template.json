@@ -1,0 +1,24 @@
+{
+  "__comment": "STEP 1, and the only genuinely blocking piece. GLIMPSE2_phase consumes .bin, and the .bin files in rw-long-reads-transfer-2026-07-24/chunked_panel were split from the FULL panel. Imputing against those would put the held-out samples' own haplotypes back into the reference.",
+
+  "GLIMPSE2SplitLeaveoutPanel.chromosomes": ["chr22"],
+  "GLIMPSE2SplitLeaveoutPanel.output_prefix": "aou_lr_phase2_v1",
+
+  "__comment_chunks": "The FULL panel's chunks.tsv, reused verbatim. Columns 3 and 4 are the buffered input region and the output region, which is exactly where GLIMPSE2ChunkAndSplitPanel gets its own -- so the shard boundaries are identical by construction and the per-shard concordance still lines up with Samuel's. Deliberately NOT the chunked_panel JSON: reading that would require its n_variants field, which a panel chunked before that field existed does not have.",
+  "GLIMPSE2SplitLeaveoutPanel.full_panel_chunks_tsvs": ["gs://BUCKET/rw-long-reads-transfer-2026-07-24/chunked_panel/chr22/aou_lr_phase2_v1.chr22.chunks.tsv"],
+
+  "GLIMPSE2SplitLeaveoutPanel.leaveout_panel_bubble_split_vcfs": ["gs://BUCKET/panel_bubble_split_leaveout_vcf/aou_lr_phase2_v1.chr22.bubble.split.leaveout.bcf"],
+  "GLIMPSE2SplitLeaveoutPanel.leaveout_panel_bubble_split_vcf_idxs": ["gs://BUCKET/panel_bubble_split_leaveout_vcf/aou_lr_phase2_v1.chr22.bubble.split.leaveout.bcf.csi"],
+
+  "__comment_sites": "Sites-only view of the SAME leaveout panel, for the per-shard variant counts. PostprocessBubblePanel emits one (ConcatBubbleSplitSitesOnlyLeaveOut); if it was not transferred, make one with: bcftools view -G <leaveout>.bcf --write-index=csi -Ob -o <leaveout>.sites-only.bcf",
+  "GLIMPSE2SplitLeaveoutPanel.leaveout_panel_bubble_split_sites_only_vcfs": ["gs://BUCKET/panel_bubble_split_leaveout_vcf/aou_lr_phase2_v1.chr22.bubble.split.leaveout.sites-only.bcf"],
+  "GLIMPSE2SplitLeaveoutPanel.leaveout_panel_bubble_split_sites_only_vcf_idxs": ["gs://BUCKET/panel_bubble_split_leaveout_vcf/aou_lr_phase2_v1.chr22.bubble.split.leaveout.sites-only.bcf.csi"],
+
+  "__comment_assert": "Full panel is 12554, leaveout is 12064. Set this so a mis-wired path fails on one cheap task instead of producing a valid, silently circular set of .bin files.",
+  "GLIMPSE2SplitLeaveoutPanel.expected_n_samples": 12064,
+
+  "GLIMPSE2SplitLeaveoutPanel.genetic_maps_tsv": "gs://BUCKET/resources/genetic_map_b38.tsv",
+
+  "__comment_split_args": "Must match what the full panel was split with, or the .bin files are not interchangeable.",
+  "GLIMPSE2SplitLeaveoutPanel.extra_split_args": "--keep-monomorphic-ref-sites"
+}
