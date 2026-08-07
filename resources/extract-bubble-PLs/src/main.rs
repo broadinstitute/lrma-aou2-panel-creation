@@ -314,7 +314,15 @@ fn main() -> Result<()> {
                             }
                         }
 
-                        // Safely extract LPL or PL, strictly bound to the computed pl_stride
+                        // BUG: LPL is indexed by the sample's local allele list in FORMAT/LAA,
+                        // which is never read here -- the values are copied straight into the
+                        // global PL layout below, so when LAA is not the identity the
+                        // likelihoods land on the wrong genotypes. Does not fire on the 1kGP
+                        // DRAGEN 4.4.7 gVCFs (plain PL, no LAA/LPL); AoU DRAGEN 3.7.8 unchecked.
+                        // Fix: map local->global allele indices and write each local pair (j,k)
+                        // to idx(global[j], global[k]) = k(k+1)/2 + j; error if LPL is present
+                        // without LAA. Also note pl_found is set on any Ok, so a record missing
+                        // LPL under a header that declares it would skip the PL fallback.
                         let mut pl_found = false;
                         if let Ok(lpl_fmt) = g_rec.format(b"LPL").integer() {
                             for (out_idx, &in_idx) in sample_mapping.iter().enumerate() {
