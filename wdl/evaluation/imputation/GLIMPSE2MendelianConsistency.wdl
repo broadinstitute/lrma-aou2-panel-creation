@@ -519,6 +519,17 @@ task PlotMendelianMetrics {
                     for i, af_bin_label in enumerate(af_bin_labels):
                         plt_df_values = []
                         for j, length_bin_label in enumerate(length_bin_labels):
+                            
+                            mean_n_l = {}
+                            for filt in ['unfiltered', 'GP09', 'INFO05']:
+                                k = (af_bin_label, length_bin_label, in_trh, filt)
+                                mean_n_l[filt] = agg_results[k]['nhr_per_trio'].mean() if k in agg_results else 0.0
+                                
+                            len_text = (
+                                f"{length_bin_label}\n"
+                                f"$\\langle N_{{l}} \\rangle$: {mean_n_l['unfiltered']:.1f} | {mean_n_l['GP09']:.1f} | {mean_n_l['INFO05']:.1f}"
+                            )
+
                             for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
                                 key = (af_bin_label, length_bin_label, in_trh, filter_condition)
                                 if key in agg_results:
@@ -527,7 +538,6 @@ task PlotMendelianMetrics {
                                     nhr = res['nhr_per_trio']
                                     
                                     error_rates_per_trio = np.divide(errs, nhr, out=np.full(num_trios, np.nan), where=(nhr > 0))
-                                    mean_num_non_hom_ref = nhr.mean()
                                     
                                     if filter_condition == 'unfiltered':
                                         min_tar_gp_label = 'unfiltered'
@@ -535,11 +545,6 @@ task PlotMendelianMetrics {
                                         min_tar_gp_label = 'GP > 0.9'
                                     else:
                                         min_tar_gp_label = 'INFO > 0.5'
-                                    
-                                    spacing = '\n' * (g + 1)
-                                    len_text = spacing + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$'
-                                    if g == 2:
-                                        len_text += '\n\n' + length_bin_label
                                     
                                     plt_df_values.extend(
                                         [[min_tar_gp_label, len_text, error_rates_per_trio[t]]
@@ -580,14 +585,29 @@ task PlotMendelianMetrics {
                     for i, af_bin_label in enumerate(af_bin_labels):
                         plt_df_values = []
                         for j, length_bin_label in enumerate(length_bin_labels):
+                            
+                            mean_n_t = {}
+                            n_l_dict = {}
+                            for filt in ['unfiltered', 'GP09', 'INFO05']:
+                                k = (af_bin_label, length_bin_label, in_trh, filt)
+                                if k in agg_results:
+                                    n_l_dict[filt] = len(agg_results[k]['locus_rates'])
+                                    mean_n_t[filt] = agg_results[k]['nhr_per_trio'].sum() / max(n_l_dict[filt], 1)
+                                else:
+                                    n_l_dict[filt] = 0
+                                    mean_n_t[filt] = 0.0
+
+                            len_text = (
+                                f"{length_bin_label}\n"
+                                f"$\\langle N_{{t}} \\rangle$: {mean_n_t['unfiltered']:.1f} | {mean_n_t['GP09']:.1f} | {mean_n_t['INFO05']:.1f}\n"
+                                f"$N_{{l}}$: {n_l_dict['unfiltered']} | {n_l_dict['GP09']} | {n_l_dict['INFO05']}"
+                            )
+
                             for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
                                 key = (af_bin_label, length_bin_label, in_trh, filter_condition)
                                 if key in agg_results:
                                     res = agg_results[key]
                                     error_rates_per_locus = res['locus_rates']
-                                    num_loci = len(error_rates_per_locus)
-                                    
-                                    mean_num_non_hom_ref_trios = res['nhr_per_trio'].sum() / max(num_loci, 1)
                                     
                                     if filter_condition == 'unfiltered':
                                         min_tar_gp_label = 'unfiltered'
@@ -595,11 +615,6 @@ task PlotMendelianMetrics {
                                         min_tar_gp_label = 'GP > 0.9'
                                     else:
                                         min_tar_gp_label = 'INFO > 0.5'
-                                    
-                                    spacing = '\n' * (g + 1)
-                                    len_text = spacing + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}\n$N_{{l}}={num_loci}$'
-                                    if g == 2:
-                                        len_text += '\n\n' + length_bin_label
 
                                     plt_df_values.extend(
                                         [[min_tar_gp_label, len_text, rate] for rate in error_rates_per_locus]
