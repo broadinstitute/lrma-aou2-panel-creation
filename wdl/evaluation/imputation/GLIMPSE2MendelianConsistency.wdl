@@ -145,7 +145,9 @@ task CalculateMendelianMetrics {
     command <<<
         set -euxo pipefail
 
-        conda install -y -c bioconda -c conda-forge bcftools scikit-allel
+        # Install missing dependencies for this environment
+        conda install -y -c bioconda bcftools
+        pip install scikit-allel
 
         # Create mapping file to safely rename the GLIMPSE2 'INFO' tag on-the-fly.
         # NOTE: --rename-annots takes "old_name new_name"; the new name must be BARE
@@ -528,8 +530,10 @@ task PlotMendelianMetrics {
                                 mean_n_l[filt] = agg_results[k]['nhr_per_trio'].mean() if k in agg_results else 0.0
                                 
                             len_text = (
-                                f"{length_bin_label}\n"
-                                f"$\\langle N_{{l}} \\rangle$: {mean_n_l['unfiltered']:.1f} | {mean_n_l['GP09']:.1f} | {mean_n_l['INFO05']:.1f}"
+                                f"\n$\\langle N_{{l}} \\rangle={mean_n_l['unfiltered']:.2f}${' '*25}\n"
+                                f"{' '*12}$\\langle N_{{l}} \\rangle={mean_n_l['GP09']:.2f}${' '*12}\n"
+                                f"{' '*25}$\\langle N_{{l}} \\rangle={mean_n_l['INFO05']:.2f}\n\n"
+                                f"{length_bin_label}"
                             )
 
                             for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
@@ -589,20 +593,24 @@ task PlotMendelianMetrics {
                         for j, length_bin_label in enumerate(length_bin_labels):
                             
                             mean_n_t = {}
-                            n_l_dict = {}
+                            n_l = {}
                             for filt in ['unfiltered', 'GP09', 'INFO05']:
                                 k = (af_bin_label, length_bin_label, in_trh, filt)
                                 if k in agg_results:
-                                    n_l_dict[filt] = len(agg_results[k]['locus_rates'])
-                                    mean_n_t[filt] = agg_results[k]['nhr_per_trio'].sum() / max(n_l_dict[filt], 1)
+                                    n_l[filt] = len(agg_results[k]['locus_rates'])
+                                    mean_n_t[filt] = agg_results[k]['nhr_per_trio'].sum() / max(n_l[filt], 1)
                                 else:
-                                    n_l_dict[filt] = 0
+                                    n_l[filt] = 0
                                     mean_n_t[filt] = 0.0
 
                             len_text = (
-                                f"{length_bin_label}\n"
-                                f"$\\langle N_{{t}} \\rangle$: {mean_n_t['unfiltered']:.1f} | {mean_n_t['GP09']:.1f} | {mean_n_t['INFO05']:.1f}\n"
-                                f"$N_{{l}}$: {n_l_dict['unfiltered']} | {n_l_dict['GP09']} | {n_l_dict['INFO05']}"
+                                f"\n$\\langle N_{{t}} \\rangle$={mean_n_t['unfiltered']:.2f}{' '*25}\n"
+                                f"$N_{{l}}={n_l['unfiltered']}${' '*25}\n"
+                                f"{' '*15}$\\langle N_{{t}} \\rangle$={mean_n_t['GP09']:.2f}{' '*15}\n"
+                                f"{' '*15}$N_{{l}}={n_l['GP09']}${' '*15}\n"
+                                f"{' '*25}$\\langle N_{{t}} \\rangle$={mean_n_t['INFO05']:.2f}\n"
+                                f"{' '*25}$N_{{l}}={n_l['INFO05']}\n\n"
+                                f"{length_bin_label}"
                             )
 
                             for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
