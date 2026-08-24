@@ -145,8 +145,6 @@ task CalculateMendelianMetrics {
     command <<<
         set -euxo pipefail
 
-        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy pyarrow
-
         # Create mapping file to safely rename the GLIMPSE2 'INFO' tag on-the-fly.
         # NOTE: --rename-annots takes "old_name new_name"; the new name must be BARE
         # (no INFO/ prefix), otherwise the resulting tag ID is malformed and cannot be
@@ -431,7 +429,7 @@ task CalculateMendelianMetrics {
         disk_type:          "SSD",
         preemptible_tries:  2,
         max_retries:        0,
-        docker:             "continuumio/miniconda3:latest"
+        docker:             "jupyter/scipy-notebook:latest"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -460,9 +458,7 @@ task PlotMendelianMetrics {
     
     command <<<
         set -euxo pipefail
-        
-        conda install -y -c bioconda -c conda-forge pandas numpy "matplotlib<=3.10" seaborn pyarrow
-        
+
         python - "~{sep=',' unfiltered_pkls}" "~{sep=',' filtered_pkls}" "~{sep=',' info05_pkls}" "~{pedigree}" "~{output_prefix}" <<-'EOF'
         import sys
         import pandas as pd
@@ -659,7 +655,7 @@ task PlotMendelianMetrics {
         disk_type:          "SSD",
         preemptible_tries:  2,
         max_retries:        0,
-        docker:             "continuumio/miniconda3:latest"
+        docker:             "jupyter/scipy-notebook:latest"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
