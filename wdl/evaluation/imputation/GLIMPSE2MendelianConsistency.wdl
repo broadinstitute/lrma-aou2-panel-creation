@@ -145,9 +145,7 @@ task CalculateMendelianMetrics {
     command <<<
         set -euxo pipefail
 
-        # Install missing dependencies for this environment
-        conda install -y -c bioconda bcftools
-        pip install scikit-allel
+        conda install -y -c bioconda -c conda-forge bcftools scikit-allel
 
         # Create mapping file to safely rename the GLIMPSE2 'INFO' tag on-the-fly.
         # NOTE: --rename-annots takes "old_name new_name"; the new name must be BARE
