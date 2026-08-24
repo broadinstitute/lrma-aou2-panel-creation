@@ -522,18 +522,20 @@ task PlotMendelianMetrics {
                         plt_df_values = []
                         for j, length_bin_label in enumerate(length_bin_labels):
                             
-                            mean_n_l = {}
-                            for filt in ['unfiltered', 'GP09', 'INFO05']:
-                                k = (af_bin_label, length_bin_label, in_trh, filt)
-                                mean_n_l[filt] = agg_results[k]['nhr_per_trio'].mean() if k in agg_results else 0.0
-                                
-                            len_text = (
-                                f"\n$\\langle N_{{l}} \\rangle={mean_n_l['unfiltered']:.2f}${' '*25}\n"
-                                f"{' '*12}$\\langle N_{{l}} \\rangle={mean_n_l['GP09']:.2f}${' '*12}\n"
-                                f"{' '*25}$\\langle N_{{l}} \\rangle={mean_n_l['INFO05']:.2f}\n\n"
-                                f"{length_bin_label}"
-                            )
-
+                            unified_len_text = ""
+                            for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
+                                key = (af_bin_label, length_bin_label, in_trh, filter_condition)
+                                if key in agg_results:
+                                    mean_num_non_hom_ref = agg_results[key]['nhr_per_trio'].mean()
+                                else:
+                                    mean_num_non_hom_ref = 0.0
+                                    
+                                spacing = '\n' * (g + 1)
+                                len_text = spacing + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$'
+                                if g == 2:
+                                    len_text += '\n\n' + length_bin_label
+                                unified_len_text += len_text
+                            
                             for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
                                 key = (af_bin_label, length_bin_label, in_trh, filter_condition)
                                 if key in agg_results:
@@ -551,7 +553,7 @@ task PlotMendelianMetrics {
                                         min_tar_gp_label = 'INFO > 0.5'
                                     
                                     plt_df_values.extend(
-                                        [[min_tar_gp_label, len_text, error_rates_per_trio[t]]
+                                        [[min_tar_gp_label, unified_len_text, error_rates_per_trio[t]]
                                          for t in range(num_trios) if not np.isnan(error_rates_per_trio[t])]
                                     )
                                         
@@ -590,26 +592,21 @@ task PlotMendelianMetrics {
                         plt_df_values = []
                         for j, length_bin_label in enumerate(length_bin_labels):
                             
-                            mean_n_t = {}
-                            n_l = {}
-                            for filt in ['unfiltered', 'GP09', 'INFO05']:
-                                k = (af_bin_label, length_bin_label, in_trh, filt)
-                                if k in agg_results:
-                                    n_l[filt] = len(agg_results[k]['locus_rates'])
-                                    mean_n_t[filt] = agg_results[k]['nhr_per_trio'].sum() / max(n_l[filt], 1)
+                            unified_len_text = ""
+                            for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
+                                key = (af_bin_label, length_bin_label, in_trh, filter_condition)
+                                if key in agg_results:
+                                    num_loci = len(agg_results[key]['locus_rates'])
+                                    mean_num_non_hom_ref_trios = agg_results[key]['nhr_per_trio'].sum() / max(num_loci, 1)
                                 else:
-                                    n_l[filt] = 0
-                                    mean_n_t[filt] = 0.0
-
-                            len_text = (
-                                f"\n$\\langle N_{{t}} \\rangle$={mean_n_t['unfiltered']:.2f}{' '*25}\n"
-                                f"$N_{{l}}={n_l['unfiltered']}${' '*25}\n"
-                                f"{' '*15}$\\langle N_{{t}} \\rangle$={mean_n_t['GP09']:.2f}{' '*15}\n"
-                                f"{' '*15}$N_{{l}}={n_l['GP09']}${' '*15}\n"
-                                f"{' '*25}$\\langle N_{{t}} \\rangle$={mean_n_t['INFO05']:.2f}\n"
-                                f"{' '*25}$N_{{l}}={n_l['INFO05']}\n\n"
-                                f"{length_bin_label}"
-                            )
+                                    num_loci = 0
+                                    mean_num_non_hom_ref_trios = 0.0
+                                    
+                                spacing = '\n' * (g + 1)
+                                len_text = spacing + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}\n$N_{{l}}={num_loci}$'
+                                if g == 2:
+                                    len_text += '\n\n' + length_bin_label
+                                unified_len_text += len_text
 
                             for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
                                 key = (af_bin_label, length_bin_label, in_trh, filter_condition)
@@ -623,9 +620,9 @@ task PlotMendelianMetrics {
                                         min_tar_gp_label = 'GP > 0.9'
                                     else:
                                         min_tar_gp_label = 'INFO > 0.5'
-
+                                    
                                     plt_df_values.extend(
-                                        [[min_tar_gp_label, len_text, rate] for rate in error_rates_per_locus]
+                                        [[min_tar_gp_label, unified_len_text, rate] for rate in error_rates_per_locus]
                                     )
 
                         if plt_df_values:
