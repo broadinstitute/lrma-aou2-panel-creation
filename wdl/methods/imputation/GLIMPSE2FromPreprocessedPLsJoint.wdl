@@ -67,7 +67,10 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 
         # VWB's Batch backend is restricted to us-central1-a. Task-level attempts to provide
         # a wider zone pool were measured to be inert, so state the location that actually
-        # runs instead of advertising unavailable zones.
+        # runs instead of advertising unavailable zones. All five task types defined below
+        # request AMD Rome, which makes Cromwell select N2D instead of its N1 default. Both
+        # families are available in us-central1-a, while the live Cloud Billing catalog prices
+        # N2D custom Spot CPU and RAM 35% below N1 custom Spot.
         String zones = "us-central1-a"
     }
 
@@ -320,6 +323,7 @@ task SplitPreprocessedPLsForPhase {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries, default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker, default_attr.docker])
+        cpuPlatform:            "AMD Rome"
         zones:                  zones
     }
 }
@@ -405,13 +409,12 @@ task GLIMPSE2Phase {
     # since linear predicts 58.8 GiB for chr7 s12 at 8 threads and it succeeded on 40. And
     # cgroup memory.peak counts page cache, so this is an upper bound on demand.
     #
-    # Largest untaken dollar lever, not in this file: cpuPlatform is unset, so these tasks
-    # land on N1CustomMachineType. N2D is ~14% cheaper (~$2.26/batch). It cannot be an
-    # optional input -- Cromwell's validate keys off attribute presence, so a runtime key
-    # wired to a String is always present and an empty string reaches Batch as
-    # minCpuPlatform="". Testing it means editing the runtime block. Not default because
-    # setMinCpuPlatform restricts placement, which at 41-72% preemption may cost more than
-    # it saves.
+    # Request AMD Rome in the runtime block so Cromwell selects N2D rather than its N1 custom
+    # default. The live Cloud Billing catalog prices us-central1 N2D custom Spot at
+    # $0.01224/vCPU-hour and $0.001640/GiB-hour, versus $0.01885 and $0.002526 for N1: 35%
+    # less for both resources that dominate this task. This is hard-coded deliberately:
+    # Cromwell validates a cpuPlatform key wired to an optional String as present even when
+    # empty, then sends minCpuPlatform="" to Batch. us-central1-a offers both N1 and N2D.
     # Floored at 16 GiB. The regression cannot be trusted to set the low end: it was fit to
     # peak_rss values from runs killed at rc=137, which are censored observations -- a kill
     # point is where measurement stopped, not what the task wanted -- and those runs did not
@@ -566,6 +569,7 @@ task GLIMPSE2Phase {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        cpuPlatform:            "AMD Rome"
         zones:                  zones
         checkpointFile:         "checkpoint.bin"
     }
@@ -728,6 +732,7 @@ task GLIMPSE2Ligate {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        cpuPlatform:            "AMD Rome"
         zones:                  zones
     }
 }
@@ -839,6 +844,7 @@ task PopAndMarginalizeCollisions {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        cpuPlatform:            "AMD Rome"
         zones:                  zones
     }
 }
@@ -921,6 +927,7 @@ task RemapSampleNames {
         preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
         maxRetries:             select_first([runtime_attr.max_retries,       default_attr.max_retries])
         docker:                 select_first([runtime_attr.docker,            default_attr.docker])
+        cpuPlatform:            "AMD Rome"
         zones:                  zones
     }
 }
