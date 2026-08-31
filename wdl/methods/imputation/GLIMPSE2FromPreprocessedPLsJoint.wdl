@@ -529,8 +529,13 @@ task GLIMPSE2Phase {
             fi
         done
 
+        # Cromwell localizes the BCF and CSI from separate glob output directories. htslib
+        # discovers an index by filename beside the BCF, so stage both under one local stem.
+        ln -s "~{input_vcf}" phase_input.bcf
+        ln -s "~{input_vcf_idx}" phase_input.bcf.csi
+
         cmd="/bin/GLIMPSE2_phase \
-                --input-gl ~{input_vcf} \
+                --input-gl phase_input.bcf \
                 -R ~{panel_split_chunk_bin} \
                 --thread ~{phase_threads} \
                 --Kpbwt ~{phase_kpbwt} \
@@ -547,9 +552,9 @@ task GLIMPSE2Phase {
         eval "$cmd"
 
         # take input VCF header and add GLIMPSE INFO and FORMAT lines (GLIMPSE header only contains a single chromosome and breaks bcftools concat --naive)
-        bcftools view --no-version -h ~{input_vcf} | grep '^##' > input.header.txt
+        bcftools view --no-version -h phase_input.bcf | grep '^##' > input.header.txt
         bcftools view --no-version -h ~{output_prefix}.raw.bcf | grep -E '^##INFO|^##FORMAT|^##NMAIN|^##FPLOIDY' > glimpse2.header.txt
-        bcftools view --no-version -h ~{input_vcf} | grep '^#CHROM' > input.columns.txt
+        bcftools view --no-version -h phase_input.bcf | grep '^#CHROM' > input.columns.txt
         cat input.header.txt glimpse2.header.txt input.columns.txt > header.txt
         bcftools reheader -h header.txt ~{output_prefix}.raw.bcf -o ~{output_prefix}.bcf
         bcftools index ~{output_prefix}.bcf
