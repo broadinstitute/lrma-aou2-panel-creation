@@ -23,16 +23,11 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # against a peak measured at 2 threads.
         Int ligate_threads = 2
 
-        # The largest remaining lever on SSD quota, exposed as an input so testing it costs an
-        # override. At 30 a batch reserves ~31.4 TB (work + boot) and
-        # ~2.6 batches fit an 82 TB quota; at 20 that is ~26.1 TB and ~3.1 batches, a saving of
-        # 5.2 TB per batch. This is the only lever that moves the quota: per-chromosome PL
-        # slicing changes the disk request on no shard, because this floor dominates. Not lowered
-        # by default because the reason for the floor is unmeasured: localization was only ever
-        # timed at 50 GiB (8.96 GiB in 57 s, 161 MiB/s), so the pd-ssd throughput curve below
-        # 30 GB is unknown and this keeps us out of it. The experiment is one chromosome with
-        # this set to 20, comparing localization time in the phase logs against that 57 s.
-        Int phase_disk_floor_gb = 30
+        # Phase now receives a pre-split regional PL BCF rather than localizing the full
+        # chromosome BCF in every shard. The smaller input removes the reason for the old
+        # 30-GB throughput floor. 20 GB retains space for the panel bin, phase output and
+        # reheader copy while saving about 5.2 TB of provisioned work disk per genome batch.
+        Int phase_disk_floor_gb = 20
         # GLIMPSE2 is not deterministic under multithreading; pinning threads fixes the
         # thread COUNT, not the output. The size of that non-determinism has now been measured
         # two ways, and the two disagree by three orders of magnitude.
@@ -57,9 +52,9 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 
         # inputs for PopAndMarginalizeCollisions
         File pop_glimpse2_panel_resources_json
-        File? pop_glimpse2_script               # heavily modified version of convert-to-biallelic.py
-        File? pop_glimpse2_cargo_toml
-        File? pop_glimpse2_binary
+        # Built once and reused. Compiling in each pop task would repeat the same Cargo build
+        # thousands of times in production.
+        File pop_glimpse2_binary
 
         # Pinned by digest. GCR tags are mutable, so a repush would silently
         # change what runs. This digest is tag 1.0.0-2cee597-1778869818 as of 2026-07-31.
@@ -70,14 +65,10 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # the run config.
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2@sha256:c3d64c5af3b8e789bcda94451931f09073d3a8750fc7375a8d44246d193e8a21"
 
-        # Cromwell's own ZonesDefaultValue, restoring the stock four zones that the VWB
-        # backend overrode to pin us-central1-a. MEASURED INERT: with these set, phase and
-        # count shards still reported allowedLocations us-central1-a, so a task-level value
-        # does not override the backend -- widening the pool is a backend change. Ask VWB
-        # before overriding; the pin may be deliberate. Set to "us-central1-a" to restore it.
-        # Values must lie in the backend's Batch job region. Does not reach the imported
-        # ConcatVcfs call.
-        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
+        # VWB's Batch backend is restricted to us-central1-a. Task-level attempts to provide
+        # a wider zone pool were measured to be inert, so state the location that actually
+        # runs instead of advertising unavailable zones.
+        String zones = "us-central1-a"
     }
 
     Map[String, String] genetic_maps_dict = read_map(genetic_maps_tsv)
@@ -97,13 +88,21 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     File panel_id_split_vcf_gz = pop_glimpse2_panel_resources[chromosome].panel_id_split_vcf_gz
     File panel_id_split_vcf_gz_tbi = pop_glimpse2_panel_resources[chromosome].panel_id_split_vcf_gz_tbi
     Array[String] pop_regions = select_first([pop_glimpse2_panel_resources[chromosome].pop_regions, output_regions])
-    
+
+    call SplitPreprocessedPLsForPhase {
+        input:
+            input_vcf = input_preprocessed_joint_vcf,
+            input_vcf_idx = input_preprocessed_joint_vcf_idx,
+            input_regions = input_regions,
+            zones = zones,
+            docker = glimpse2_docker
+    }
 
     scatter (k in range(length(output_regions))) {
         call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
             input:
-                input_vcf = input_preprocessed_joint_vcf,
-                input_vcf_idx = input_preprocessed_joint_vcf_idx,
+                input_vcf = SplitPreprocessedPLsForPhase.sharded_vcfs[k],
+                input_vcf_idx = SplitPreprocessedPLsForPhase.sharded_vcf_idxs[k],
                 panel_split_chunk_bin = panel_split_chunk_bins[k],
                 input_region = input_regions[k],
                 output_region = output_regions[k],
@@ -137,15 +136,13 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             panel_bubble_split_sites_only_vcf_idx = panel_bubble_split_sites_only_vcf_idx,
             panel_id_split_vcf_gz = panel_id_split_vcf_gz,
             panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
-            pop_glimpse2_script = pop_glimpse2_script,
-            cargo_toml = pop_glimpse2_cargo_toml,
             pop_glimpse2_binary = pop_glimpse2_binary,
             region = pop_regions[k],
             zones = zones,
             output_prefix = output_prefix + ".glimpse2.popped"
         }
     }
-    
+
     call ConcatVcfs.ConcatVcfs as ConcatPopAndMarginalizeCollisions { input:
         vcfs = PopAndMarginalizeCollisions.popped_vcf,
         vcf_idxs = PopAndMarginalizeCollisions.popped_vcf_idx,
@@ -226,7 +223,105 @@ struct PopAndMarginalizePanelResourcesChromosome {
     String panel_bubble_split_sites_only_vcf_idx
     String panel_id_split_vcf_gz
     String panel_id_split_vcf_gz_tbi
-    Array[String]? pop_regions              # non-overlapping, if not provided then GLIMPSE2 chunks will be used
+    Array[String]? pop_regions
+}
+
+task SplitPreprocessedPLsForPhase {
+    input {
+        File input_vcf
+        File input_vcf_idx
+        Array[String] input_regions
+        String docker
+        String zones = "us-central1-a"
+
+        RuntimeAttr? runtime_attr_override
+    }
+
+    # The task localizes the chromosome BCF once and writes overlapping regional BCFs whose
+    # total size is modestly larger than the input because GLIMPSE input regions include
+    # buffers. Three input sizes plus 10 GB covers the localized input, all regional outputs,
+    # their indexes, and compression overhead.
+    Int disk_size_gb = 10 + 3 * ceil(size(input_vcf, "GB"))
+
+    RuntimeAttr default_attr = object {
+        cpu_cores:          4,
+        mem_gb:             8,
+        disk_gb:            disk_size_gb,
+        boot_disk_gb:       0,
+        use_ssd:            true,
+        preemptible_tries:  2,
+        max_retries:        1,
+        docker:             docker
+    }
+    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
+    Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_unrounded = if eff_ratio_cpu > 4 then eff_ratio_cpu else 4
+    Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
+
+    command <<<
+        set -euxo pipefail
+
+        _instr_gib() { for f in "$@"; do if [ -r "$f" ]; then awk '$1 ~ /^[0-9]+$/ {printf "%.2f", $1/1073741824; ok=1} END{if(!ok) printf "NA"}' "$f" 2>/dev/null && return 0; fi; done; printf NA; }
+        _instr_peak()  { _instr_gib /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; }
+        _instr_limit() { _instr_gib /sys/fs/cgroup/memory.max  /sys/fs/cgroup/memory/memory.limit_in_bytes; }
+        _instr_cur()   { _instr_gib /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes; }
+        _INSTR_T0=$SECONDS
+        _INSTR_SAMPLER=""
+        _instr_report() {
+            _rc=$?
+            set +e +x
+            [ -n "$_INSTR_SAMPLER" ] && kill "$_INSTR_SAMPLER" 2>/dev/null
+            _du=$(df -Pk . 2>/dev/null | awk 'NR==2{printf "%.0f %.0f", $3/1048576, $2/1048576}')
+            echo "[RESOURCE] task=SplitPreprocessedPLsForPhase requested_mem_gib=~{eff_mem_gb} requested_cpu=~{eff_cpu} rc=$_rc peak_rss_gib=$(_instr_peak) limit_gib=$(_instr_limit) disk_used_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f1) disk_total_gb=$(echo "${_du:-NA NA}" | cut -d' ' -f2) wall_s=$((SECONDS-_INSTR_T0))" >&2
+        }
+        trap _instr_report EXIT
+        ( set +x; while :; do
+            echo "[RESOURCE-TS] t=$((SECONDS-_INSTR_T0)) rss_gib=$(_instr_cur)" >&2
+            sleep 10
+          done ) & _INSTR_SAMPLER=$!
+
+        mkdir phase-pl-shards
+        : > phase-pl-shards/vcfs.list
+        : > phase-pl-shards/indexes.list
+        i=0
+        while IFS= read -r REGION; do
+            [ -n "$REGION" ] || continue
+            PREFIX=$(printf "phase-pl-shards/shard-%04d" "$i")
+            bcftools view \
+                --threads 3 \
+                --regions-overlap 0 \
+                --regions "$REGION" \
+                --output-type b \
+                --output "$PREFIX.bcf" \
+                ~{input_vcf}
+            bcftools index --threads 3 --force "$PREFIX.bcf"
+            printf '%s\n' "$PREFIX.bcf" >> phase-pl-shards/vcfs.list
+            printf '%s\n' "$PREFIX.bcf.csi" >> phase-pl-shards/indexes.list
+            i=$((i + 1))
+        done < ~{write_lines(input_regions)}
+
+        if [ "$i" -ne ~{length(input_regions)} ]; then
+            echo "ERROR: wrote $i phase PL shards for ~{length(input_regions)} input regions" >&2
+            exit 1
+        fi
+    >>>
+
+    output {
+        Array[File] sharded_vcfs = read_lines("phase-pl-shards/vcfs.list")
+        Array[File] sharded_vcf_idxs = read_lines("phase-pl-shards/indexes.list")
+    }
+
+    runtime {
+        cpu:                    eff_cpu
+        memory:                 eff_mem_gb + " GiB"
+        disks: "local-disk " + select_first([runtime_attr.disk_gb, default_attr.disk_gb]) + if select_first([runtime_attr.use_ssd, default_attr.use_ssd]) then " SSD" else " HDD"
+        bootDiskSizeGb:         select_first([runtime_attr.boot_disk_gb, default_attr.boot_disk_gb])
+        preemptible:            select_first([runtime_attr.preemptible_tries, default_attr.preemptible_tries])
+        maxRetries:             select_first([runtime_attr.max_retries, default_attr.max_retries])
+        docker:                 select_first([runtime_attr.docker, default_attr.docker])
+        zones:                  zones
+    }
 }
 
 # checkpoint implementation borrowed from https://github.com/broadinstitute/palantir-workflows/blob/main/GlimpseImputationPipeline/Glimpse2Imputation.wdl
@@ -260,15 +355,15 @@ task GLIMPSE2Phase {
         Int phase_threads = 4
         Int phase_kpbwt = 1000
 
-        # See the workflow-level declaration: lowering this is the largest remaining SSD-quota
-        # saving, gated on a throughput measurement below 30 GB that has not been made.
-        Int phase_disk_floor_gb = 30
+        # The workflow pre-splits the chromosome PL BCF, so phase no longer needs the old
+        # 30-GB floor to localize a multi-gigabyte chromosome input.
+        Int phase_disk_floor_gb = 20
 
         # Panel variants in this shard's input region -- GLIMPSE2's L. Required, and supplied
         # by the panel, parallel to input_regions, so it is bound to the shard it describes.
         Int n_variants
 
-        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
+        String zones = "us-central1-a"
 
 
         RuntimeAttr? runtime_attr_override
@@ -332,18 +427,11 @@ task GLIMPSE2Phase {
     Int unrounded_cpu = if ratio_min_cpu > phase_threads then ratio_min_cpu else phase_threads
     Int final_cpu     = unrounded_cpu + (unrounded_cpu % 2)
 
-    # Sized from the actual inputs rather than a flat 50 GB.
-    #
-    # Peak is not just the inputs: Cromwell's checkpoint sync keeps two copies (cp to -tmp) and
-    # reheader writes the output twice, so chr7 s12 peaks ~16 GB against 32 provisioned.
-    # The 30 GB floor is exercised. Every chr20 shard ran on it (df
-    # reports 29 GB usable) and the worst used 17 GB -- 59%, on the L=1,005,104 shard -- with
-    # wall times in the normal 842-3152 s range, so the floor is neither wasteful nor a
-    # throughput cliff at this size. What remains untested is smaller: localization was only
-    # ever timed at 50 GiB (161 MiB/s, ~7x the documented pd-ssd per-GiB scaling), so the curve
-    # below 30 GB is still unknown and the floor is what keeps us out of it.
-    # Sam's TODO stands -- only one shard of input_vcf is used, so pre-splitting it upstream
-    # would cut ~1.4 TB of redundant localization per batch.
+    # Sized from the regional inputs rather than a flat 50 GB. The old 17-GB measured
+    # high-water included localization of the full chromosome PL BCF into every phase shard.
+    # SplitPreprocessedPLsForPhase removes that repeated input. The 20-GB floor retains room
+    # for the panel bin, raw output, reheader copy, index, and checkpoint while reducing
+    # provisioned SSD by about 5.2 TB per genome batch relative to 30 GB.
     Int computed_disk_gb = 10 + ceil(2.0 * (size(panel_split_chunk_bin, "GB") + size(input_vcf, "GB")))
     Int disk_size_gb = if computed_disk_gb > phase_disk_floor_gb then computed_disk_gb else phase_disk_floor_gb
 
@@ -502,7 +590,7 @@ task GLIMPSE2Ligate {
         # reports one on every run.
         Int ligate_threads = 2
 
-        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
+        String zones = "us-central1-a"
 
 
         RuntimeAttr? runtime_attr_override
@@ -655,50 +743,35 @@ task PopAndMarginalizeCollisions {
         File panel_id_split_vcf_gz           # panel popping script currently requires vcf.gz, so we also use that here
         File panel_id_split_vcf_gz_tbi
         
-        File? pop_glimpse2_script             # modified version of convert-to-biallelic.py translated to Rust
-        File? cargo_toml
-        File? pop_glimpse2_binary
+        File pop_glimpse2_binary
         
         String region
         String output_prefix
 
-        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
+        String zones = "us-central1-a"
 
 
         RuntimeAttr? runtime_attr_override
     }
 
-    # Measured on chr20: 2 GB used of the 16 this produced. Trimmed 3x -> 2x, which still
-    # leaves ~5x the observed high-water. Pop scatters ~523 times per batch, so 2 GB per task
-    # is ~1 TB of the SSD quota that bounds how many batches run at once.
+    # Measured on chr20: 2 GB used of the 16 this produced. Two input sizes plus 10 GB leaves
+    # about 5x the observed high-water while keeping the short pop shards cheap to schedule.
     Int disk_gb = 10 + 2 * ceil(size([posteriors_vcf, panel_bubble_split_sites_only_vcf, panel_id_split_vcf_gz], "GB"))
 
 
     #########################
-    # 8 GiB / 2 cpu, from measurement: eleven instrumented chr20 shards put the worst peak at
-    # 4.68 GiB.
-    #
-    # 8 GiB is 1.7x the worst measured peak, the same margin used for ligate and phase. It
-    # matters more here than anywhere else in the file because pop_regions defaults to
-    # output_regions, so this scatters ~523 times per batch -- the same order as phase, not the
-    # 22 that ligate runs. 12 -> 8 is ~$0.5 per batch, ~$200 across 200 batches.
-    #
-    # CAVEAT: all eleven measurements are chr20. The regions are chunked to a similar variant
-    # count on every chromosome so the peak should not scale with chromosome size, but bubble
-    # density does vary. The [RESOURCE] lines will say so if that is wrong.
-    # bcftools sort --max-mem=2G in the command sets the floor.
+    # 8 GiB / 2 cpu, from eleven instrumented chr20 shards whose worst peak was 4.68 GiB.
+    # Retain regional pop parallelism: collapsing to one chromosome task would serialize
+    # roughly 20-30 short shards and turn a 5-8 minute Spot task into a long uncheckpointed
+    # critical path. bcftools sort --max-mem=2G sets the other material memory floor.
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
         mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       0,
         use_ssd:            true,
-        # 4 rather than 2. Expected cost per success, spot at 30% of on-demand: at the
-        # measured 40-60% preemption rate, 2 tries costs 0.58-0.84 of on-demand and 4-5 tries
-        # costs 0.51-0.77, because falling through to on-demand is the expensive outcome. The
-        # price of the extra attempts is wall-clock, and pop restarts cheaply -- 226-475 s
-        # measured, no checkpoint to lose. Above ~70% preemption the ordering reverses and
-        # fewer tries would win, so 4 is the ceiling.
+        # Short pop shards restart cheaply. Four Spot attempts was the measured cost optimum
+        # at the observed 40-60% preemption rate before falling through to on-demand.
         preemptible_tries:  4,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust@sha256:0f25c4091c49d8eb0c3d8bcdb45e7680a093e0a691e74ccec2d3743758a7d22c"
@@ -741,25 +814,15 @@ task PopAndMarginalizeCollisions {
           done ) & _INSTR_SAMPLER=$!
 
 
-        if [ -n "~{pop_glimpse2_binary}" ]; then
-            POP_BIN="~{pop_glimpse2_binary}"
-            chmod +x $POP_BIN
-        else
-            mkdir -p pop-glimpse2/src/bin
-            cp ~{pop_glimpse2_script} pop-glimpse2/src/bin/pop-glimpse2.rs
-            cp ~{cargo_toml} pop-glimpse2
-            cd pop-glimpse2
-            cargo build --release
-            cd ..
-            POP_BIN="./pop-glimpse2/target/release/pop-glimpse2"
-        fi
+        POP_BIN="~{pop_glimpse2_binary}"
+        chmod +x "$POP_BIN"
 
         # this now only works for pop-glimpse2-joint-opt.rs;
         # the sort may also be extraneous, but we keep it in to guard against getting out of sync with the popped panel
         # --threads is ADDITIONAL worker threads, so 1 is 2 total on this task's 2 cpu.
         bcftools view --threads 1 -r ~{region} --regions-overlap 0 ~{panel_bubble_split_sites_only_vcf} -Oz -o panel.bubble.split.sites.shard.vcf.gz
         bcftools view --threads 1 -r ~{region} --regions-overlap 0 ~{posteriors_vcf} | \
-            $POP_BIN ~{panel_id_split_vcf_gz} panel.bubble.split.sites.shard.vcf.gz | \
+            "$POP_BIN" ~{panel_id_split_vcf_gz} panel.bubble.split.sites.shard.vcf.gz | \
             bcftools sort --max-mem=2G -W -Ob -o ~{output_prefix}.bcf
 
     >>>
@@ -787,7 +850,7 @@ task RemapSampleNames {
         File remap_file
         String output_prefix
 
-        String zones = "us-central1-a us-central1-b us-central1-c us-central1-f"
+        String zones = "us-central1-a"
 
 
         RuntimeAttr? runtime_attr_override
