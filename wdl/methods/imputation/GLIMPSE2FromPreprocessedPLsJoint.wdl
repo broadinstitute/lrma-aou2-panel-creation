@@ -285,8 +285,6 @@ task SplitPreprocessedPLsForPhase {
           done ) & _INSTR_SAMPLER=$!
 
         mkdir phase-pl-shards
-        : > phase-pl-shards/vcfs.list
-        : > phase-pl-shards/indexes.list
         i=0
         while IFS= read -r REGION; do
             [ -n "$REGION" ] || continue
@@ -299,8 +297,6 @@ task SplitPreprocessedPLsForPhase {
                 --output "$PREFIX.bcf" \
                 ~{input_vcf}
             bcftools index --threads 3 --force "$PREFIX.bcf"
-            printf '%s\n' "$PREFIX.bcf" >> phase-pl-shards/vcfs.list
-            printf '%s\n' "$PREFIX.bcf.csi" >> phase-pl-shards/indexes.list
             i=$((i + 1))
         done < ~{write_lines(input_regions)}
 
@@ -311,8 +307,11 @@ task SplitPreprocessedPLsForPhase {
     >>>
 
     output {
-        Array[File] sharded_vcfs = read_lines("phase-pl-shards/vcfs.list")
-        Array[File] sharded_vcf_idxs = read_lines("phase-pl-shards/indexes.list")
+        # These must be glob outputs. Cromwell builds the Batch delocalization manifest
+        # before the command runs, so File paths discovered later through read_lines() are
+        # not uploaded from the task VM. Zero-padded shard names keep both arrays parallel.
+        Array[File] sharded_vcfs = glob("phase-pl-shards/shard-*.bcf")
+        Array[File] sharded_vcf_idxs = glob("phase-pl-shards/shard-*.bcf.csi")
     }
 
     runtime {
