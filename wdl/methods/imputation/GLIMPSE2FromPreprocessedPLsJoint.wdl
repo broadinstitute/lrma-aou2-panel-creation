@@ -1,5 +1,7 @@
 version 1.0
 
+import "../ConcatVcfs.wdl" as ConcatVcfs
+
 workflow GLIMPSE2FromPreprocessedPLsJoint {
     input {
         File input_preprocessed_joint_vcf
@@ -85,6 +87,8 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     File panel_bubble_split_sites_only_vcf_idx = pop_glimpse2_panel_resources[chromosome].panel_bubble_split_sites_only_vcf_idx
     File panel_id_split_vcf_gz = pop_glimpse2_panel_resources[chromosome].panel_id_split_vcf_gz
     File panel_id_split_vcf_gz_tbi = pop_glimpse2_panel_resources[chromosome].panel_id_split_vcf_gz_tbi
+    Array[String] pop_regions = select_first([pop_glimpse2_panel_resources[chromosome].pop_regions, output_regions])
+
     call SplitPreprocessedPLsForPhase {
         input:
             input_vcf = input_preprocessed_joint_vcf,
@@ -124,10 +128,8 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             docker = glimpse2_docker
     }
 
-    # pop-glimpse2 is a streaming transform with a bounded 500-kb ID window. Run one task for
-    # the chromosome instead of localizing the same chromosome-wide inputs into every GLIMPSE
-    # output region, then rewriting the result through a one-purpose concat task.
-    call PopAndMarginalizeCollisions { input:
+    scatter (k in range(length(pop_regions))) {
+        call PopAndMarginalizeCollisions { input:
             posteriors_vcf = GLIMPSE2Ligate.ligated_vcf,
             posteriors_vcf_idx = GLIMPSE2Ligate.ligated_vcf_idx,
             panel_bubble_split_sites_only_vcf = panel_bubble_split_sites_only_vcf,
@@ -135,9 +137,22 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             panel_id_split_vcf_gz = panel_id_split_vcf_gz,
             panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
             pop_glimpse2_binary = pop_glimpse2_binary,
-            region = chromosome,
+            region = pop_regions[k],
             zones = zones,
             output_prefix = output_prefix + ".glimpse2.popped"
+        }
+    }
+
+    call ConcatVcfs.ConcatVcfs as ConcatPopAndMarginalizeCollisions { input:
+        vcfs = PopAndMarginalizeCollisions.popped_vcf,
+        vcf_idxs = PopAndMarginalizeCollisions.popped_vcf_idx,
+        output_prefix = output_prefix + ".glimpse2.popped",
+        do_bcf = true,
+        do_sort = false,
+        extra_args = "--threads $(nproc) --naive",
+        regions = [],
+        do_sort_shard = false,
+        extra_args_shard = ""
     }
 
     # Conditionally trigger remapping tasks
@@ -153,8 +168,8 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 
         call RemapSampleNames as RemapPoppedPosteriors {
             input:
-                vcf = PopAndMarginalizeCollisions.popped_vcf,
-                vcf_idx = PopAndMarginalizeCollisions.popped_vcf_idx,
+                vcf = ConcatPopAndMarginalizeCollisions.concatenated_vcf,
+                vcf_idx = ConcatPopAndMarginalizeCollisions.concatenated_vcf_idx,
                 remap_file = select_first([remap_sample_names_file]),
                 zones = zones,
                 output_prefix = output_prefix + ".glimpse2.popped"
@@ -164,8 +179,8 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     output {
         File glimpse2_bubble_posteriors_vcf = select_first([RemapBubblePosteriors.output_vcf, GLIMPSE2Ligate.ligated_vcf])
         File glimpse2_bubble_posteriors_vcf_idx = select_first([RemapBubblePosteriors.output_vcf_idx, GLIMPSE2Ligate.ligated_vcf_idx])
-        File glimpse2_popped_posteriors_vcf = select_first([RemapPoppedPosteriors.output_vcf, PopAndMarginalizeCollisions.popped_vcf])
-        File glimpse2_popped_posteriors_vcf_idx = select_first([RemapPoppedPosteriors.output_vcf_idx, PopAndMarginalizeCollisions.popped_vcf_idx])
+        File glimpse2_popped_posteriors_vcf = select_first([RemapPoppedPosteriors.output_vcf, ConcatPopAndMarginalizeCollisions.concatenated_vcf])
+        File glimpse2_popped_posteriors_vcf_idx = select_first([RemapPoppedPosteriors.output_vcf_idx, ConcatPopAndMarginalizeCollisions.concatenated_vcf_idx])
     }
 }
 
@@ -208,6 +223,7 @@ struct PopAndMarginalizePanelResourcesChromosome {
     String panel_bubble_split_sites_only_vcf_idx
     String panel_id_split_vcf_gz
     String panel_id_split_vcf_gz_tbi
+    Array[String]? pop_regions
 }
 
 task SplitPreprocessedPLsForPhase {
@@ -738,27 +754,25 @@ task PopAndMarginalizeCollisions {
         RuntimeAttr? runtime_attr_override
     }
 
-    # Whole-chromosome pop writes a sites copy, sort temporaries, and a 250-sample output in
-    # addition to its localized inputs. Three input sizes plus 10 GB covers those files while
-    # the reduction from ~523 tasks to 22 removes far more provisioned disk overall.
-    Int disk_gb = 10 + 3 * ceil(size([posteriors_vcf, panel_bubble_split_sites_only_vcf, panel_id_split_vcf_gz], "GB"))
+    # Measured on chr20: 2 GB used of the 16 this produced. Two input sizes plus 10 GB leaves
+    # about 5x the observed high-water while keeping the short pop shards cheap to schedule.
+    Int disk_gb = 10 + 2 * ceil(size([posteriors_vcf, panel_bubble_split_sites_only_vcf, panel_id_split_vcf_gz], "GB"))
 
 
     #########################
-    # pop-glimpse2-joint-opt streams positions and retains only the current bubble plus a
-    # bounded 500-kb ID window, so its Rust memory does not scale with chromosome length.
-    # bcftools sort --max-mem=2G sets the other material memory floor. The measured worst peak
-    # was 4.68 GiB at 250 samples; retain the measured 8-GiB request.
+    # 8 GiB / 2 cpu, from eleven instrumented chr20 shards whose worst peak was 4.68 GiB.
+    # Retain regional pop parallelism: collapsing to one chromosome task would serialize
+    # roughly 20-30 short shards and turn a 5-8 minute Spot task into a long uncheckpointed
+    # critical path. bcftools sort --max-mem=2G sets the other material memory floor.
     RuntimeAttr default_attr = object {
         cpu_cores:          2,
         mem_gb:             8,
         disk_gb:            disk_gb,
         boot_disk_gb:       0,
         use_ssd:            true,
-        # Whole-chromosome pop has no checkpoint. On the measured backend, even 5-8 minute pop
-        # shards saw 40-60% preemption; restarting a chromosome-sized task on Spot would erase
-        # the task-count and localization savings. Run these 22 tasks on demand.
-        preemptible_tries:  0,
+        # Short pop shards restart cheaply. Four Spot attempts was the measured cost optimum
+        # at the observed 40-60% preemption rate before falling through to on-demand.
+        preemptible_tries:  4,
         max_retries:        1,
         docker:             "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust@sha256:0f25c4091c49d8eb0c3d8bcdb45e7680a093e0a691e74ccec2d3743758a7d22c"
     }
