@@ -348,6 +348,22 @@ task CountPanelVariantsPerShard {
         # bare `wait` blocked on the instrumentation sampler, which never exits -- and hung a
         # non-preemptible VM until it was cancelled.
         REGIONS_FILE=~{write_lines(input_regions)}
+        EXPECTED=$(awk 'END{print NR+0}' "$REGIONS_FILE")
+        if [ "$EXPECTED" -eq 0 ]; then
+            echo "ERROR: no input regions to count." >&2
+            exit 1
+        fi
+        DUPLICATES=$(sort "$REGIONS_FILE" | uniq -d)
+        if [ -n "$DUPLICATES" ]; then
+            echo "ERROR: duplicate input regions cannot be represented by a keyed count map:" >&2
+            printf '%s\n' "$DUPLICATES" >&2
+            exit 1
+        fi
+        if grep -Evq '^[^[:space:]"\\]+:[0-9]+-[0-9]+$' "$REGIONS_FILE"; then
+            echo "ERROR: input region is not a JSON-safe contig:start-end string." >&2
+            exit 1
+        fi
+
         : > counts.txt
         while read -r REGION; do
             # --regions-overlap 0 matches GLIMPSE2: a record counts if its POS is inside. The
@@ -357,7 +373,6 @@ task CountPanelVariantsPerShard {
         done < "$REGIONS_FILE"
 
         # awk rather than wc -l: wc pads its output with spaces on some platforms.
-        EXPECTED=$(awk 'END{print NR+0}' "$REGIONS_FILE")
         ACTUAL=$(awk 'END{print NR+0}' counts.txt)
         if [ "$ACTUAL" -ne "$EXPECTED" ]; then
             echo "ERROR: counted $ACTUAL regions, expected $EXPECTED." >&2
