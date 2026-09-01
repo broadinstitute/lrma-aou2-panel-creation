@@ -19,13 +19,13 @@ import "GLIMPSE2ChunkAndSplitPanel.wdl" as ChunkAndSplit
 # .bin contents and the variant counts change.
 #
 # It takes chunks.tsv rather than the full panel's chunked_panel JSON on purpose. Reading that
-# JSON would mean coercing it to ChunkedPanelChromosome, whose n_variants field a panel chunked
+# JSON would mean coercing it to ChunkedPanelChromosome, whose variant-count field a panel chunked
 # before that field existed does not have -- the exact gap scripts/add-panel-variant-counts.py
 # was written to backfill. chunks.tsv has no such dependency, and columns 3 and 4 are where
 # GLIMPSE2ChunkAndSplitPanel gets its own regions, so the boundaries are identical by
 # construction.
 #
-# n_variants IS recounted, against the leaveout panel's own sites. Dropping samples drops sites,
+# Variant counts ARE recomputed against the leaveout panel's own sites. Dropping samples drops sites,
 # so the full panel's counts would over-size the phase memory request. The counts are emitted
 # straight into the JSON, so no add-panel-variant-counts.py backfill is needed downstream.
 #
@@ -115,7 +115,7 @@ workflow GLIMPSE2SplitLeaveoutPanel {
             input_regions: input_regions,
             output_regions: output_regions,
             panel_split_chunk_bins: ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,
-            n_variants: CountLeaveoutPanelVariantsPerShard.n_variants
+            n_variants_by_region: CountLeaveoutPanelVariantsPerShard.n_variants_by_region
         }
         Pair[String, ChunkedPanelChromosome] leaveout_chunked_panel_chromosome_pair = (chromosome, leaveout_chunked_panel_chromosome)
     }

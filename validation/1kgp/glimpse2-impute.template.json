@@ -6,7 +6,7 @@
   "GLIMPSE2FromPreprocessedPLsJoint.chromosome": "chr22",
   "GLIMPSE2FromPreprocessedPLsJoint.output_prefix": "1kgp-validation.chr22",
 
-  "__comment_chunked_panel": "Output of GLIMPSE2SplitLeaveoutPanel -- the LEAVEOUT .bin files. NOT rw-long-reads-transfer-2026-07-24/chunked_panel, which was split from the full panel and would make this circular. n_variants is already in this JSON; no add-panel-variant-counts.py backfill needed.",
+  "__comment_chunked_panel": "Output of GLIMPSE2SplitLeaveoutPanel -- the LEAVEOUT .bin files. NOT rw-long-reads-transfer-2026-07-24/chunked_panel, which was split from the full panel and would make this circular. n_variants_by_region is already in this JSON; no add-panel-variant-counts.py backfill needed.",
   "GLIMPSE2FromPreprocessedPLsJoint.chunked_panel_json": "gs://BUCKET/1kgp-validation/aou_lr_phase2_v1.leaveout.json",
 
   "__comment_pop_resources": "Panel resources for the popping step. Use the LEAVEOUT panel's sites-only and id-split VCFs to match the panel imputed against.",

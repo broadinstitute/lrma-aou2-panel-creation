@@ -81,9 +81,10 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     Array[String] input_regions = chunked_panel[chromosome].input_regions
     Array[String] output_regions = chunked_panel[chromosome].output_regions
     Array[File] panel_split_chunk_bins = chunked_panel[chromosome].panel_split_chunk_bins
-    # Panel variants per shard, parallel to input_regions. Required: an absent field fails at
-    # input evaluation and a short array fails on the index below, both before any VM starts.
-    Array[Int] n_variants = chunked_panel[chromosome].n_variants
+    # Bind counts to region names instead of parallel array positions. A production manifest
+    # once contained the right counts in the wrong order and silently under-sized dense shards.
+    # A missing region key now fails during input evaluation, before any VM starts.
+    Map[String, Int] n_variants_by_region = chunked_panel[chromosome].n_variants_by_region
 
     Map[String, PopAndMarginalizePanelResourcesChromosome] pop_glimpse2_panel_resources = read_json(pop_glimpse2_panel_resources_json)
     File panel_bubble_split_sites_only_vcf = pop_glimpse2_panel_resources[chromosome].panel_bubble_split_sites_only_vcf
@@ -102,12 +103,15 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
     }
 
     scatter (k in range(length(output_regions))) {
+        String input_region = input_regions[k]
+        Int n_variants = n_variants_by_region[input_region]
+
         call GLIMPSE2Phase as ChunkedGLIMPSE2Phase {
             input:
                 input_vcf = SplitPreprocessedPLsForPhase.sharded_vcfs[k],
                 input_vcf_idx = SplitPreprocessedPLsForPhase.sharded_vcf_idxs[k],
                 panel_split_chunk_bin = panel_split_chunk_bins[k],
-                input_region = input_regions[k],
+                input_region = input_region,
                 output_region = output_regions[k],
                 genetic_map = genetic_map,
                 output_prefix = output_prefix + ".shard-" + k + ".glimpse2.phased",
@@ -115,7 +119,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
                 phase_threads = phase_threads,
                 phase_kpbwt = phase_kpbwt,
                 phase_disk_floor_gb = phase_disk_floor_gb,
-                n_variants = n_variants[k],
+                n_variants = n_variants,
                 zones = zones,
                 docker = glimpse2_docker
         }
@@ -214,11 +218,9 @@ struct ChunkedPanelChromosome {
     Array[String] input_regions
     Array[String] output_regions
     Array[String] panel_split_chunk_bins
-    # Panel variants in each shard's input (buffered) region -- GLIMPSE2's L, parallel to
-    # input_regions. Computed once when the panel is chunked, so every batch reads it instead
-    # of recounting the same numbers. NOT column 7 of chunks.tsv, which covers a different
-    # region: 403,101 against an actual 965,039 for chr20 shard 4.
-    Array[Int] n_variants
+    # Panel variants in each shard's input (buffered) region -- GLIMPSE2's L. Region keys make
+    # count-to-shard binding explicit instead of depending on two arrays remaining aligned.
+    Map[String, Int] n_variants_by_region
 }
 
 struct PopAndMarginalizePanelResourcesChromosome {
@@ -363,7 +365,7 @@ task GLIMPSE2Phase {
         Int phase_disk_floor_gb = 20
 
         # Panel variants in this shard's input region -- GLIMPSE2's L. Required, and supplied
-        # by the panel, parallel to input_regions, so it is bound to the shard it describes.
+        # by a region-keyed panel map so it is bound to the shard it describes.
         Int n_variants
 
         String zones = "us-central1-a"
