@@ -66,7 +66,7 @@ workflow GLIMPSE2ChunkAndSplitPanel {
             input_regions: input_regions,
             output_regions: output_regions,
             panel_split_chunk_bins: ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,
-            n_variants: CountPanelVariantsPerShard.n_variants
+            n_variants_by_region: CountPanelVariantsPerShard.n_variants_by_region
         }
         Pair[String, ChunkedPanelChromosome] chunked_panel_chromosome_pair = (chromosome, chunked_panel_chromosome)
     }
@@ -99,11 +99,9 @@ struct ChunkedPanelChromosome {
     Array[String] input_regions
     Array[String] output_regions
     Array[String] panel_split_chunk_bins
-    # Panel variants in each shard's input (buffered) region -- GLIMPSE2's L, parallel to
-    # input_regions. Computed once when the panel is chunked, so every batch reads it instead
-    # of recounting the same numbers. NOT column 7 of chunks.tsv, which covers a different
-    # region: 403,101 against an actual 965,039 for chr20 shard 4.
-    Array[Int] n_variants
+    # Panel variants in each shard's input (buffered) region -- GLIMPSE2's L. Keying by region
+    # prevents a reordered count list from silently assigning one shard's size to another.
+    Map[String, Int] n_variants_by_region
 }
 
 task GLIMPSE2Chunk {
@@ -371,13 +369,19 @@ task CountPanelVariantsPerShard {
             exit 1
         fi
 
-        # read_json wants a JSON array; read_lines gives Array[String], which does not coerce.
-        printf '[%s]\n' "$(paste -sd, counts.txt)" > ~{output_prefix}.n_variants.json
-        cat ~{output_prefix}.n_variants.json
+        # Emit a region-keyed object. Positional arrays are unsafe here: one shuffled array in
+        # production assigned chr7 shard 12's 1,346,888-site binary a 420,889-site count.
+        # GLIMPSE region strings contain no JSON-special characters.
+        paste "$REGIONS_FILE" counts.txt | awk '
+            BEGIN { printf "{" }
+            { printf "%s\"%s\":%s", (NR == 1 ? "" : ","), $1, $2 }
+            END { print "}" }
+        ' > ~{output_prefix}.n_variants_by_region.json
+        cat ~{output_prefix}.n_variants_by_region.json
     >>>
 
     output {
-        Array[Int] n_variants = read_json("~{output_prefix}.n_variants.json")
+        Map[String, Int] n_variants_by_region = read_json("~{output_prefix}.n_variants_by_region.json")
     }
     runtime {
         cpu:                    eff_cpu

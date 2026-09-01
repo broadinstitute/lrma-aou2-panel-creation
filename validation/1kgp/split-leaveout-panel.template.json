@@ -4,7 +4,7 @@
   "GLIMPSE2SplitLeaveoutPanel.chromosomes": ["chr22"],
   "GLIMPSE2SplitLeaveoutPanel.output_prefix": "aou_lr_phase2_v1",
 
-  "__comment_chunks": "The FULL panel's chunks.tsv, reused verbatim. Columns 3 and 4 are the buffered input region and the output region, which is exactly where GLIMPSE2ChunkAndSplitPanel gets its own -- so the shard boundaries are identical by construction and the per-shard concordance still lines up with Samuel's. Deliberately NOT the chunked_panel JSON: reading that would require its n_variants field, which a panel chunked before that field existed does not have.",
+  "__comment_chunks": "The FULL panel's chunks.tsv, reused verbatim. Columns 3 and 4 are the buffered input region and the output region, which is exactly where GLIMPSE2ChunkAndSplitPanel gets its own -- so the shard boundaries are identical by construction and the per-shard concordance still lines up with Samuel's. Deliberately NOT the chunked_panel JSON: reading that would require its n_variants_by_region field, which a panel chunked before that field existed does not have.",
   "GLIMPSE2SplitLeaveoutPanel.full_panel_chunks_tsvs": ["gs://BUCKET/rw-long-reads-transfer-2026-07-24/chunked_panel/chr22/aou_lr_phase2_v1.chr22.chunks.tsv"],
 
   "GLIMPSE2SplitLeaveoutPanel.leaveout_panel_bubble_split_vcfs": ["gs://BUCKET/panel_bubble_split_leaveout_vcf/aou_lr_phase2_v1.chr22.bubble.split.leaveout.bcf"],

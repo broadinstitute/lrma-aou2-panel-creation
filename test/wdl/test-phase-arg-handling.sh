@@ -504,19 +504,22 @@ BAREWAIT
 
     # The count comes from the panel, not a per-run task: it is a property of the panel and
     # recomputing it once per chromosome per batch produced the same numbers 4,400 times.
-    if grep -q 'Array\[Int\] n_variants = chunked_panel\[chromosome\].n_variants' "$WDL"; then
-        ok "consumer reads n_variants from the panel"
+    # It must be keyed by region: a positional production array had the right values shuffled
+    # into the wrong shards and under-sized chr7's dense shards.
+    if grep -q 'Map\[String, Int\] n_variants_by_region = chunked_panel\[chromosome\].n_variants_by_region' "$WDL" \
+       && grep -q 'Int n_variants = n_variants_by_region\[input_region\]' "$WDL"; then
+        ok "consumer binds each panel count by region"
     else
-        bad "consumer reads n_variants from the panel" "field not read"
+        bad "consumer binds each panel count by region" "keyed field not read"
     fi
-    if grep -q 'n_variants: CountPanelVariantsPerShard.n_variants' "$PANEL_WDL"; then
-        ok "producer emits n_variants into the panel JSON"
+    if grep -q 'n_variants_by_region: CountPanelVariantsPerShard.n_variants_by_region' "$PANEL_WDL"; then
+        ok "producer emits region-keyed counts into the panel JSON"
     else
-        bad "producer emits n_variants into the panel JSON" "field not emitted"
+        bad "producer emits region-keyed counts into the panel JSON" "field not emitted"
     fi
     # Both structs must agree or the JSON will not round-trip.
-    a=$(awk '/^struct ChunkedPanelChromosome/,/^}/' "$WDL" | grep -oE '^\s+(String|Array\[[A-Za-z]+\])\s+\w+' | tr -s ' ')
-    b=$(awk '/^struct ChunkedPanelChromosome/,/^}/' "$PANEL_WDL" | grep -oE '^\s+(String|Array\[[A-Za-z]+\])\s+\w+' | tr -s ' ')
+    a=$(awk '/^struct ChunkedPanelChromosome/,/^}/' "$WDL" | grep -oE '^\s+(String|Array\[[A-Za-z]+\]|Map\[String, Int\])\s+\w+' | tr -s ' ')
+    b=$(awk '/^struct ChunkedPanelChromosome/,/^}/' "$PANEL_WDL" | grep -oE '^\s+(String|Array\[[A-Za-z]+\]|Map\[String, Int\])\s+\w+' | tr -s ' ')
     if [ "$a" = "$b" ]; then
         ok "ChunkedPanelChromosome identical in producer and consumer"
     else

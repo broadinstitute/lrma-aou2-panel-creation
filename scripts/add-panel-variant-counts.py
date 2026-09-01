@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-Backfill n_variants into an existing chunked_panel.json.
+Write region-keyed variant counts into an existing chunked_panel.json.
 
 GLIMPSE2ChunkAndSplitPanel emits the field now, but a panel chunked before that change has a
-JSON without it, and GLIMPSE2FromPreprocessedPLsJoint requires it. Rechunking the panel to get
-one number per shard would mean regenerating hundreds of GB of .bin files; this reads the
-counts off the sites-only BCFs the panel already ships and rewrites the JSON in place.
+JSON without them, and GLIMPSE2FromPreprocessedPLsJoint requires them. Rechunking the panel to
+get one number per shard would mean regenerating hundreds of GB of .bin files; this reads the
+counts off the sites-only BCFs the panel already ships and writes a new JSON.
+
+Counts are keyed by the exact input-region string. Parallel arrays are deliberately unsupported:
+a production array was shuffled while retaining the correct length and values, silently assigning
+chr7 shard 12's 1,346,888-site binary a 420,889-site memory estimate.
 
     scripts/add-panel-variant-counts.py \\
         --chunked-panel  aou_lr_phase2_v1.chunked_panel.json \\
@@ -57,27 +61,31 @@ def main():
     ap.add_argument("--jobs", type=int, default=8)
     a = ap.parse_args()
 
-    panel = json.load(open(a.chunked_panel))
-    res = json.load(open(a.panel_resources))
+    with open(a.chunked_panel) as fh:
+        panel = json.load(fh)
+    with open(a.panel_resources) as fh:
+        res = json.load(fh)
 
     for chrom in sorted(panel, key=lambda c: int(re.sub(r"\D", "", c) or 0)):
         entry = panel[chrom]
-        if "n_variants" in entry:
-            print(f"  {chrom:<6} already has n_variants, skipping", file=sys.stderr)
-            continue
         sites = res[chrom]["panel_bubble_split_sites_only_vcf"]
         regions = entry["input_regions"]
         with cf.ThreadPoolExecutor(max_workers=a.jobs) as pool:
             counts = list(pool.map(lambda r: count_region(sites, r), regions))
         if any(c == 0 for c in counts):
             raise SystemExit(f"{chrom}: a region counted zero variants -- refusing to write")
-        entry["n_variants"] = counts
+        entry.pop("n_variants", None)
+        entry["n_variants_by_region"] = dict(zip(regions, counts, strict=True))
         print(f"  {chrom:<6} {len(counts):>3} shards   L {min(counts):>9,} .. {max(counts):>9,}",
               file=sys.stderr)
 
-    missing = [c for c, e in panel.items() if len(e["n_variants"]) != len(e["input_regions"])]
-    if missing:
-        raise SystemExit(f"length mismatch on {missing} -- refusing to write")
+    invalid = [
+        c for c, e in panel.items()
+        if set(e["n_variants_by_region"]) != set(e["input_regions"])
+        or any(n <= 0 for n in e["n_variants_by_region"].values())
+    ]
+    if invalid:
+        raise SystemExit(f"region/count mismatch on {invalid} -- refusing to write")
 
     with open(a.out, "w") as fh:
         json.dump(panel, fh, indent=2)
