@@ -79,12 +79,15 @@ nonterm=$(awk -F'\t' '$2!="Succeeded" && $2!="Failed" && $2!="Aborted"' "$WORK/w
 [ "$nonterm" = "0" ] || die "$nonterm workflow(s) still active — batch not complete"
 
 # ---- #4 idempotency: are deliverables already complete & valid? ----
-declare -A SETMD5
+# Plain indexed array (bash 3.2 compatible; `declare -A` needs bash 4+, which the
+# deploy environment does not guarantee). One md5 per verified chromosome; the loop
+# runs chr1..22 exactly once each, so 22 entries means 22 distinct chromosomes.
+SETMD5=()
 secure_and_verify_chr() {  # $1=chrom
-  local chrom="$1" existing bcf wid
+  local chrom="$1" existing bcf wid md5
   existing=$(gcloud storage ls "$DELIV/*.batch-$BATCH.$chrom.*popped.bcf" 2>/dev/null | head -1 || true)
   if [ -n "$existing" ] && md5=$(verify_bcf "$existing" "$chrom" 2>/dev/null); then
-    SETMD5[$chrom]="$md5"; return 0                       # already secured & valid -> reuse (#4)
+    SETMD5+=("$md5"); return 0                            # already secured & valid -> reuse (#4)
   fi
   # otherwise fetch the popped BCF path from a Succeeded workflow's outputs
   wid=$(awk -F'\t' -v c="$chrom" '$3==c && $2=="Succeeded"{print $1; exit}' "$WORK/wf.tsv")
@@ -99,8 +102,8 @@ PY
   [ -n "$bcf" ] || die "no popped BCF output for $chrom ($wid)"
   gcloud storage cp "$bcf"     "$DELIV/" --quiet || die "copy failed: $bcf"
   gcloud storage cp "$bcf.csi" "$DELIV/" --quiet || die "index copy failed: $bcf.csi"  # #2 no '|| true'
-  local md5; md5=$(verify_bcf "$bcf" "$chrom") || die "verification failed for $chrom"
-  SETMD5[$chrom]="$md5"
+  md5=$(verify_bcf "$bcf" "$chrom") || die "verification failed for $chrom"
+  SETMD5+=("$md5")
 }
 
 log "securing + verifying 22 deliverables"
