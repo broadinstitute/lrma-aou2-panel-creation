@@ -84,7 +84,10 @@ def summarise(task, recs):
     disk = [(u, t) for u, t in disk if u and t]
     if disk:
         worst_u, worst_t = max(disk, key=lambda p: p[0] / p[1])
-        print(f"  disk high-water : {worst_u:.0f} / {worst_t:.0f} GB ({worst_u / worst_t:.0%} of the smallest margin)")
+        # disk_used_gb is sampled once at task exit, so a transient mid-run peak (localization,
+        # sort spill, checkpoint) can be higher. Report it as a lower bound, not a high-water mark.
+        print(f"  disk at exit    : {worst_u:.0f} / {worst_t:.0f} GB ({worst_u / worst_t:.0%} of total;"
+              f" exit-time sample = LOWER bound, do not size disk down on this alone)")
 
 
 DEFAULT_WDL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "wdl",
@@ -115,7 +118,16 @@ def check_phase_model(recs):
     """
     const, coeff = wdl_model()
     pts = []
+    # A shard killed at rc!=0 (OOM: rc=137) is a CENSORED observation: peak_rss is where the
+    # kernel stopped it, a lower bound on demand, not the demand. Including such rows in the fit
+    # understates the coefficient and can report a passing bound for memory that actually OOMed.
+    # Fit on successful (rc=0) shards only, and surface the kills as a breach.
+    censored = 0
     for r in recs:
+        rc = r.get("rc")
+        if rc is not None and rc != "0":
+            censored += 1
+            continue
         peak, L = num(r, "peak_rss_gib"), num(r, "n_variants")
         t, kp = num(r, "threads"), num(r, "kpbwt")
         if None in (peak, L, t, kp) or L * t * kp == 0:
@@ -125,20 +137,28 @@ def check_phase_model(recs):
         # decimal -- a ~7% conservative bias baked into the request. Subtracting CONST * GIB
         # keeps the recovered coefficient from inheriting that skew as a false bound breach.
         pts.append((((peak * GIB) - (const or 2) * GIB) / (L * t * kp), L, peak))
+    print("\n=== phase memory model ===")
+    if censored:
+        print(f"  *** {censored} shard(s) were killed at rc!=0 (OOM): the memory bound was BREACHED.")
+        print(f"      Their peak RSS is censored (a lower bound), so they are excluded from the fit")
+        print(f"      below, which is therefore itself a LOWER bound. Do not size memory down.")
     if not pts:
+        print("  no successful (rc=0) shards with peak RSS -- nothing to fit")
         return
     coeffs = sorted(c for c, _, _ in pts)
-    print("\n=== phase memory model ===")
     if coeff is None:
         print("  could not read the sizing constants from the WDL; skipping comparison")
         return
     print(f"  WDL assumes         : {coeff:.2f} bytes per site per thread per state,"
           f" plus {const:.0f} GiB")
-    print(f"  observed            : median {statistics.median(coeffs):.2f}  max {max(coeffs):.2f}"
+    print(f"  observed (rc=0 only): median {statistics.median(coeffs):.2f}  max {max(coeffs):.2f}"
           f"   (n={len(coeffs)})")
     if max(coeffs) > coeff:
-        print("  *** the assumption is NOT an upper bound -- a shard exceeded it."
+        print("  *** the assumption is NOT an upper bound -- a successful shard exceeded it."
               " Do not size down.")
+    elif censored:
+        print("  the surviving shards fit under the assumption, but the kill(s) above mean the"
+              " bound did not hold in practice. Do not size down.")
     else:
         print(f"  holds with margin; the worst shard needed {max(coeffs):.2f},"
               f" {(1 - max(coeffs) / coeff):.0%} below what is requested")
