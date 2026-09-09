@@ -492,3 +492,42 @@ fn main() -> Result<()> {
     println!("[INFO] Preprocessed imputation BCF generated successfully.");
     std::process::exit(0);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::gl_index;
+
+    #[test]
+    fn gl_index_matches_vcf_ordering() {
+        // Standard diploid PL/GL order for allele pairs (a<=b): idx = b(b+1)/2 + a.
+        let cases = [((0, 0), 0), ((0, 1), 1), ((1, 1), 2), ((0, 2), 3),
+                     ((1, 2), 4), ((2, 2), 5), ((0, 3), 6), ((3, 3), 9)];
+        for ((a, b), want) in cases {
+            assert_eq!(gl_index(a, b), want, "gl_index({a},{b})");
+        }
+    }
+
+    #[test]
+    fn gl_index_is_symmetric() {
+        for a in 0..6 {
+            for b in 0..6 {
+                assert_eq!(gl_index(a, b), gl_index(b, a));
+            }
+        }
+    }
+
+    #[test]
+    fn lpl_local_to_global_biallelic_mapping() {
+        // Sample with LAA=[2]: its one local alt (local index 1) is global ALT #2. Local
+        // genotypes must land on the GLOBAL PL positions the downstream biallelic extractor
+        // reads for ALT k=2: 0/0 -> 0, 0/2 -> k(k+1)/2 = 3, 2/2 -> k(k+1)/2 + k = 5.
+        let laa = [2usize];
+        let g = |l: usize| if l == 0 { 0 } else { laa[l - 1] };
+        assert_eq!(gl_index(g(0), g(0)), 0);
+        assert_eq!(gl_index(g(0), g(1)), 3);
+        assert_eq!(gl_index(g(1), g(1)), 5);
+        // The old positional copy would have written local idx 2 (local 1/1) to global idx 2
+        // (global 1/1), the wrong genotype -- this is exactly the bug the LAA map fixes.
+        assert_ne!(gl_index(g(1), g(1)), 2);
+    }
+}
