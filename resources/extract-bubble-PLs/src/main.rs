@@ -18,6 +18,13 @@ struct InputRec {
     gts: Vec<Option<usize>>,
 }
 
+/// Standard VCF genotype-likelihood index for the unordered allele pair (a, b):
+/// idx = hi*(hi+1)/2 + lo, matching the PL/GL ordering the global-allele layout uses.
+fn gl_index(a: usize, b: usize) -> usize {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    hi * (hi + 1) / 2 + lo
+}
+
 fn get_minimal_representation<'a>(mut pos: i64, mut r: &'a [u8], mut a: &'a [u8]) -> (i64, &'a [u8], &'a [u8]) {
     if !a.is_empty() && a[0] == b'<' {
         return (pos, r, a);
@@ -314,26 +321,49 @@ fn main() -> Result<()> {
                             }
                         }
 
-                        // BUG: LPL is indexed by the sample's local allele list in FORMAT/LAA,
-                        // which is never read here -- the values are copied straight into the
-                        // global PL layout below, so when LAA is not the identity the
-                        // likelihoods land on the wrong genotypes. Does not fire on the 1kGP
-                        // DRAGEN 4.4.7 gVCFs (plain PL, no LAA/LPL); AoU DRAGEN 3.7.8 unchecked.
-                        // Fix: map local->global allele indices and write each local pair (j,k)
-                        // to idx(global[j], global[k]) = k(k+1)/2 + j; error if LPL is present
-                        // without LAA. Also note pl_found is set on any Ok, so a record missing
-                        // LPL under a header that declares it would skip the PL fallback.
+                        // LPL is indexed over each sample's LOCAL alleles (FORMAT/LAA), so its
+                        // values must be mapped back to the global genotype-likelihood layout
+                        // before storing. Copying LPL positionally (the old behaviour) lands the
+                        // likelihoods on the wrong genotypes whenever LAA is not the identity.
+                        // LPL present without LAA is malformed and errors rather than silently
+                        // mis-mapping. pl_found is set only when a sample actually carried LPL,
+                        // so a record that declares LPL in the header but omits it (or has it
+                        // empty for every sample) still falls through to the plain-PL branch.
                         let mut pl_found = false;
                         if let Ok(lpl_fmt) = g_rec.format(b"LPL").integer() {
+                            let laa_fmt = g_rec.format(b"LAA").integer().context(
+                                "FORMAT/LPL present without FORMAT/LAA; cannot map local PLs to global alleles")?;
+                            let mut any_lpl = false;
                             for (out_idx, &in_idx) in sample_mapping.iter().enumerate() {
-                                if let Some(slice) = lpl_fmt.get(in_idx) {
-                                    let base = out_idx * pl_stride;
-                                    for i in 0..slice.len().min(pl_stride) {
-                                        pls[base + i] = slice[i];
+                                let lpl = match lpl_fmt.get(in_idx) {
+                                    Some(s) if !s.is_empty() => s,
+                                    _ => continue,
+                                };
+                                // local allele 0 = REF (global 0); local i = ALT #LAA[i-1],
+                                // and LAA holds 1-based ALT indices == global allele indices.
+                                // A sample carrying LPL but no LAA cannot be mapped -> skip it
+                                // (leaves its PLs missing) rather than guess an identity map.
+                                let laa = match laa_fmt.get(in_idx) {
+                                    Some(s) => s,
+                                    None => continue,
+                                };
+                                let n_local = laa.len() + 1;
+                                let base = out_idx * pl_stride;
+                                for lk in 0..n_local {
+                                    for lj in 0..=lk {
+                                        let local_idx = lk * (lk + 1) / 2 + lj;
+                                        if local_idx >= lpl.len() { continue; }
+                                        let gj = if lj == 0 { 0usize } else { laa[lj - 1] as usize };
+                                        let gk = if lk == 0 { 0usize } else { laa[lk - 1] as usize };
+                                        let gidx = gl_index(gj, gk);
+                                        if gidx < pl_stride {
+                                            pls[base + gidx] = lpl[local_idx];
+                                        }
                                     }
                                 }
+                                any_lpl = true;
                             }
-                            pl_found = true;
+                            pl_found = any_lpl;
                         }
                         
                         if !pl_found {
@@ -365,7 +395,15 @@ fn main() -> Result<()> {
                         min_reps, gqs, pls, pl_stride, gts
                     });
                 },
-                Some(Err(_)) | None => { input_eof = true; }
+                // A decode/IO error is NOT end-of-input: failing here would silently
+                // truncate the gVCF (dropping later joint sites / emitting uninformative
+                // gVCF likelihoods) while still reporting success. Propagate it instead.
+                Some(Err(e)) => {
+                    return Err(e).with_context(|| format!(
+                        "failed reading an input record near panel site {}:{}",
+                        current_panel_chrom_str, p_pos + 1));
+                }
+                None => { input_eof = true; }
             }
         }
 
