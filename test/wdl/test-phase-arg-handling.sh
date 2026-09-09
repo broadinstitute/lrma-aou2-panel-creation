@@ -112,7 +112,7 @@ expect_contains "preserved: --threads 4 (not --thread)" "--threads 4 --main 10" 
 
 # ---------------------------------------------------------------------------
 # Per-shard sizing: mem = 2 + ceil(8 * threads * Kpbwt * L / 1e9), cpu = even(max(threads,
-# ceil(mem/6.5))). Must clear the observed OOM boundary, stay under the N1 6.5 GB/cpu limit,
+# ceil(mem/8.0))). Must clear the observed OOM boundary, stay under the N2D 8.0 GB/cpu limit,
 # and stay even.
 # ---------------------------------------------------------------------------
 echo
@@ -127,7 +127,7 @@ CONST, COEFF = (float(m.group(1)), float(m.group(2))) if m else (2.0, 8.0)
 f = re.search(r"if computed_mem_gb > (\d+) then computed_mem_gb else \1", open(sys.argv[4]).read())
 FLOOR = float(f.group(1)) if f else 0.0
 mem = max(FLOOR, CONST + math.ceil(COEFF * t * kp * L / 1e9))
-r = math.ceil(mem / 6.5)
+r = math.ceil(mem / 8.0)
 u = r if r > t else t
 print(int(mem), u + (u % 2))' "$1" "$2" "$3" "$WDL"
 }
@@ -218,10 +218,10 @@ for probe in "12.39 measured_chr20_seam" "13.45 projected_chr7_seam"; do
         bad "ligate $2 ${1} GiB fits ${LIG_MEM} GiB" "${ratio}% -- too tight"
     fi
 done
-if python3 -c "import sys; sys.exit(0 if $LIG_MEM/$LIG_CPU <= 6.5 else 1)"; then
-    ok "ligate shape ${LIG_MEM}/${LIG_CPU} within the N1 6.5 GB/cpu limit"
+if python3 -c "import sys; sys.exit(0 if $LIG_MEM/$LIG_CPU <= 8.0 else 1)"; then
+    ok "ligate shape ${LIG_MEM}/${LIG_CPU} within the N2D 8.0 GB/cpu limit"
 else
-    bad "ligate shape ${LIG_MEM}/${LIG_CPU} within the N1 limit" "exceeds 6.5"
+    bad "ligate shape ${LIG_MEM}/${LIG_CPU} within the N2D limit" "exceeds 8.0"
 fi
 
 # Pop: measured worst peak 4.68 GiB across eleven chr20 shards. It scatters ~523 times per
@@ -234,9 +234,9 @@ if [ "$pop_ratio" -le 75 ]; then
 else
     bad "pop measured 4.68 GiB fits ${POP_MEM} GiB" "${pop_ratio}% -- too tight"
 fi
-python3 -c "import sys; sys.exit(0 if $POP_MEM/$POP_CPU <= 6.5 else 1)" \
-    && ok "pop shape ${POP_MEM}/${POP_CPU} within the N1 6.5 GB/cpu limit" \
-    || bad "pop shape ${POP_MEM}/${POP_CPU}" "exceeds 6.5 GB/cpu"
+python3 -c "import sys; sys.exit(0 if $POP_MEM/$POP_CPU <= 8.0 else 1)" \
+    && ok "pop shape ${POP_MEM}/${POP_CPU} within the N2D 8.0 GB/cpu limit" \
+    || bad "pop shape ${POP_MEM}/${POP_CPU}" "exceeds 8.0 GB/cpu"
 
 # Threading must not exceed the cpu the task pays for, or the threads contend.
 LIG_TH=$(awk '/task GLIMPSE2Ligate/,/^}/' "$WDL" | grep -oE 'Int ligate_threads = [0-9]+' | grep -oE '[0-9]+$' | head -1)
@@ -258,10 +258,10 @@ for combo in "1000 4 400000" "1000 4 1346888" "1000 8 1346888" "2000 4 1346888" 
              "500 4 400000" "1000 5 900000" "1000 1 400000" "1000 3 700000" "1000 4 100000"; do
     set -- $combo
     read -r mem cpu <<<"$(sizing "$1" "$2" "$3")"
-    within=$(python3 -c "print(1 if $mem/$cpu <= 6.5 else 0)")
+    within=$(python3 -c "print(1 if $mem/$cpu <= 8.0 else 0)")
     even=$(python3 -c "print(1 if $cpu % 2 == 0 else 0)")
     if [ "$within" -eq 1 ] && [ "$even" -eq 1 ]; then
-        ok "Kpbwt=$1 threads=$2 L=$3 -> ${mem} GiB / ${cpu} cpu (even, <=6.5 GB/cpu)"
+        ok "Kpbwt=$1 threads=$2 L=$3 -> ${mem} GiB / ${cpu} cpu (even, <=8.0 GB/cpu)"
     else
         bad "Kpbwt=$1 threads=$2 L=$3" "${mem}/${cpu} within=${within} even=${even}"
     fi
@@ -291,7 +291,7 @@ m = re.search(r"Int computed_mem_gb\s*=\s*(\d+(?:\.\d+)?)\s*\+\s*"
 CONST, COEFF = (float(m.group(1)), float(m.group(2))) if m else (2.0, 8.0)
 def size(L, t=4, kp=1000):
     m = CONST + math.ceil(COEFF * t * kp * L / 1e9)
-    r = math.ceil(m / 6.5); u = r if r > t else t
+    r = math.ceil(m / 8.0); u = r if r > t else t
     return m, u + (u % 2)
 def cost(n, cpu, gb, mins): return n * (cpu*CPU + gb*MEM) * (mins/60) * SPOT
 Ls = [400000]*491 + [657784,765770,965039,1005104,1346888] + [600000]*27
@@ -418,7 +418,7 @@ PASSTHRU
 
     # Structural, so a task added later cannot silently miss either fix. Every task with a
     # runtime block must re-derive cpu from effective memory (or a partial runtime_attr_override
-    # breaches the N1 ratio) and must install the EXIT-trap instrumentation (or it reports
+    # breaches the N2D ratio) and must install the EXIT-trap instrumentation (or it reports
     # nothing from the OOMs that matter).
     if python3 - "$WDL" <<'AUDIT'
 import re, sys

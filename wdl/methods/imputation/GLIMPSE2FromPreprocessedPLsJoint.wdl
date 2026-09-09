@@ -260,7 +260,7 @@ task SplitPreprocessedPLsForPhase {
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
-    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 8.0)
     Int eff_unrounded = if eff_ratio_cpu > 4 then eff_ratio_cpu else 4
     Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
 
@@ -425,9 +425,12 @@ task GLIMPSE2Phase {
     # for the large shards it was built for and let the measured value hold the floor.
     Int computed_mem_gb = 4 + ceil((((11.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
     Int final_mem_gb    = if computed_mem_gb > 16 then computed_mem_gb else 16
-    # N1 allows <= 6.5 GB/cpu and rounds any cpu count but 1 up to even; doing both here keeps
-    # the requested shape visible instead of letting Cromwell adjust it silently.
-    Int ratio_min_cpu = ceil(final_mem_gb / 6.5)
+    # The task pins AMD Rome, so Cromwell provisions N2D custom, which allows up to 8 GiB/vCPU
+    # (N1 was 6.5) and requires an even vCPU count (>1). Size at 8 and round to even so the
+    # requested shape matches what Batch provisions instead of Cromwell silently widening it:
+    # at 6.5 a 32/64 GiB shard requested 6/10 vCPUs and Batch rounded up to 8/16; at 8.0 it is
+    # 4/8, halving the vCPU bill for those shards while keeping the 4 GLIMPSE threads covered.
+    Int ratio_min_cpu = ceil(final_mem_gb / 8.0)
     Int unrounded_cpu = if ratio_min_cpu > phase_threads then ratio_min_cpu else phase_threads
     Int final_cpu     = unrounded_cpu + (unrounded_cpu % 2)
 
@@ -462,7 +465,7 @@ task GLIMPSE2Phase {
     # computed for the DEFAULT memory (64 GiB with 4 cpu is 16 GB/cpu, silently widened by
     # Cromwell). Re-derive from whichever memory won; an explicit cpu_cores still wins.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
-    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 8.0)
     Int eff_unrounded = if eff_ratio_cpu > phase_threads then eff_ratio_cpu else phase_threads
     Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
     command <<<
@@ -678,7 +681,7 @@ task GLIMPSE2Ligate {
     # computed for the DEFAULT memory (64 GiB with 4 cpu is 16 GB/cpu, silently widened by
     # Cromwell). Re-derive from whichever memory won; an explicit cpu_cores still wins.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
-    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 8.0)
     Int eff_unrounded = if eff_ratio_cpu > ligate_threads then eff_ratio_cpu else ligate_threads
     Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
     command <<<
@@ -716,8 +719,9 @@ task GLIMPSE2Ligate {
         # is 2 and what would justify raising it.
         #
         # NOTE: eff_cpu is 4 here while only 2 threads run, and that is deliberate. The cpu
-        # count is set by the N1 memory ratio -- 24 GiB needs ceil(24/6.5) = 4 cpu -- not by
-        # any parallelism target. The two idle cores are the price of the memory, not an
+        # count is set by the N2D memory ratio -- 24 GiB needs ceil(24/8) = 3 cpu, rounded up
+        # to the even 4 -- not by any parallelism target. The two idle cores are the price of
+        # the memory (24 GiB at 4 vCPU is 6 GiB/vCPU, within N2D's 8 GiB/vCPU ceiling), not an
         # oversight, and matching threads to them would change the configuration the 12.39 GiB
         # measurement was taken under.
         if [ ~{length(phased_vcfs)} -eq 0 ]; then
@@ -821,7 +825,7 @@ task PopAndMarginalizeCollisions {
     # computed for the DEFAULT memory (64 GiB with 4 cpu is 16 GB/cpu, silently widened by
     # Cromwell). Re-derive from whichever memory won; an explicit cpu_cores still wins.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
-    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 8.0)
     Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2
     Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
     command <<<
@@ -914,7 +918,7 @@ task RemapSampleNames {
     # Same partial-override fix as the other tasks: select_first is per field, so overriding
     # only mem_gb would keep a cpu computed for the default memory and breach the N1 ratio.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
-    Int eff_ratio_cpu = ceil(eff_mem_gb / 6.5)
+    Int eff_ratio_cpu = ceil(eff_mem_gb / 8.0)
     Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2
     Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
     command <<<
