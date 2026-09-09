@@ -21,6 +21,9 @@ workflow VcfdistEvaluation {
         File eval_vcf_idx
         Array[File] truth_vcfs
         Array[File]? truth_vcf_idxs
+        # WDL 1.0 has no None literal; this unset optional supplies the File? "no index"
+        # value for SubsetSampleFromVcfTruth when truth_vcf_idxs is absent. Leave it unset.
+        File? no_truth_vcf_idx
 
         Array[File] confident_regions_bed_files
 
@@ -53,7 +56,7 @@ workflow VcfdistEvaluation {
 
         call SubsetSampleFromVcf as SubsetSampleFromVcfTruth { input:
             vcf = truth_vcfs[i],
-            vcf_idx = if defined(truth_vcf_idxs) then select_first([truth_vcf_idxs])[i]  else truth_vcf_idxs,
+            vcf_idx = if defined(truth_vcf_idxs) then select_first([truth_vcf_idxs])[i] else no_truth_vcf_idx,
             original_sample_name = truth_sample_names[i],
             sample_name = eval_sample_names[i],     # rename truth to match eval
             region = region,
