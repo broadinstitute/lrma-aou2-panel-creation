@@ -100,9 +100,11 @@ print(next((v for v in o.values() if isinstance(v,str) and v.endswith('popped.bc
 PY
 )
   [ -n "$bcf" ] || die "no popped BCF output for $chrom ($wid)"
+  local dest="$DELIV/$(basename "$bcf")"
   gcloud storage cp "$bcf"     "$DELIV/" --quiet || die "copy failed: $bcf"
   gcloud storage cp "$bcf.csi" "$DELIV/" --quiet || die "index copy failed: $bcf.csi"  # #2 no '|| true'
-  md5=$(verify_bcf "$bcf" "$chrom") || die "verification failed for $chrom"
+  # verify the DESTINATION deliverable (what survives the delete), not the source copy
+  md5=$(verify_bcf "$dest" "$chrom") || die "verification failed for deliverable $dest"
   SETMD5+=("$md5")
 }
 
@@ -120,6 +122,8 @@ log "deleting execution intermediates"
 fails=0
 awk -F'\t' '{print $1}' "$WORK/wf.tsv" | sort -u | while read -r u; do
   [ -n "$u" ] || continue
+  # #4 idempotent re-run: an already-deleted dir is success, not a failure.
+  if ! gcloud storage ls "$EXEC_ROOT/$u" >/dev/null 2>&1; then log "  already gone $u"; continue; fi
   if gcloud storage rm -r "$EXEC_ROOT/$u" --quiet 2>/dev/null; then log "  del $u"
   else log "  FAILED to delete $u"; echo x >> "$WORK/fails"; fi
 done

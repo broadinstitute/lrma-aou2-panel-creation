@@ -38,14 +38,15 @@ run_case() {  # $1=name $2=mode(headeronly|good|missing_csi)  expected exit beha
   # stub gcloud + bcftools on PATH
   cat > "$tmp/gcloud" <<EOF
 #!/usr/bin/env bash
-# record rm calls; answer ls for csi + deliverable listing
 if [ "\$1" = storage ] && [ "\$2" = rm ]; then echo "\$@" >> "$tmp/rm.log"; exit 0; fi
 if [ "\$1" = storage ] && [ "\$2" = cp ]; then exit 0; fi
 if [ "\$1" = storage ] && [ "\$2" = ls ]; then
-  arg="\$3"
-  case "\$arg" in
-    *.csi) [ "$mode" = missing_csi ] && exit 1; echo "\$arg"; exit 0;;
-    *deliverables*'*'*) for c in \$(seq 1 22); do echo "gs://b/deliverables/batch-003/aou2.batch-003.chr\$c.popped.bcf"; done; exit 0;;
+  case "\$3" in
+    *.csi) [ "$mode" = missing_csi ] && exit 1; echo "\$3"; exit 0;;
+    *deliverables*batch-003.chr*)  # per-chr existing-deliverable check
+      if [ "$mode" = rerun ]; then c=\$(echo "\$3"|grep -oE 'chr[0-9]+'|head -1); echo "gs://b/deliverables/batch-003/aou2.batch-003.\$c.popped.bcf"; fi
+      exit 0;;                      # empty otherwise -> fetch path
+    *cromwell-executions*uuid-*) [ "$mode" = rerun ] && exit 1; exit 0;;   # exec dir gone on rerun
     *glimpse2_phase*) exit 0;;
   esac
   exit 0
@@ -84,6 +85,12 @@ echo "== case 3: good batch deletes exactly its 22 UUIDs =="
 res=$(run_case c3 good); rc="${res%%|*}"; tmp="${res#*|}"
 n=$(grep -c 'GLIMPSE2FromPreprocessedPLsJoint/uuid-chr' "$tmp/rm.log" 2>/dev/null); n=${n:-0}
 { [ "$rc" -eq 0 ] && [ "$n" -eq 22 ]; } && ok "good batch: 22 UUIDs deleted" || bad "good: rc=$rc deleted=$n"
+
+echo "== case 4: rerun (valid deliverables, exec dirs already gone) must be a clean no-op =="
+res=$(run_case c4 rerun); rc="${res%%|*}"; tmp="${res#*|}"
+d=$(grep -c 'already gone' "$tmp/out.log" 2>/dev/null); d=${d:-0}
+f=$(grep -c 'FAILED to delete' "$tmp/out.log" 2>/dev/null); f=${f:-0}
+{ [ "$rc" -eq 0 ] && [ "$f" -eq 0 ] && [ "$d" -eq 22 ]; } && ok "rerun: 22 already-gone, 0 failures, rc=0" || bad "rerun: rc=$rc already_gone=$d failed=$f"
 
 echo "----"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
