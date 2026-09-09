@@ -118,15 +118,22 @@ def check_phase_model(recs):
     """
     const, coeff = wdl_model()
     pts = []
-    # A shard killed at rc!=0 (OOM: rc=137) is a CENSORED observation: peak_rss is where the
-    # kernel stopped it, a lower bound on demand, not the demand. Including such rows in the fit
-    # understates the coefficient and can report a passing bound for memory that actually OOMed.
-    # Fit on successful (rc=0) shards only, and surface the kills as a breach.
-    censored = 0
+    # Only fit on cleanly-successful (rc=0) shards. Classify the rest by cause, because they
+    # mean different things for sizing:
+    #   * rc=137 (SIGKILL, ~OOM): a memory-bound BREACH. peak_rss is censored (a lower bound on
+    #     demand), so it is excluded from the fit AND flagged -- do not size memory down.
+    #   * any other non-zero rc (e.g. rc=2): failed for a NON-memory reason. Also unreliable for
+    #     the fit, so excluded, but it is NOT evidence about memory and must not read as a breach
+    #     (that would discourage valid downsizing or motivate needless memory increases).
+    oom = 0
+    other_fail = 0
     for r in recs:
         rc = r.get("rc")
+        if rc == "137":
+            oom += 1
+            continue
         if rc is not None and rc != "0":
-            censored += 1
+            other_fail += 1
             continue
         peak, L = num(r, "peak_rss_gib"), num(r, "n_variants")
         t, kp = num(r, "threads"), num(r, "kpbwt")
@@ -138,10 +145,13 @@ def check_phase_model(recs):
         # keeps the recovered coefficient from inheriting that skew as a false bound breach.
         pts.append((((peak * GIB) - (const or 2) * GIB) / (L * t * kp), L, peak))
     print("\n=== phase memory model ===")
-    if censored:
-        print(f"  *** {censored} shard(s) were killed at rc!=0 (OOM): the memory bound was BREACHED.")
-        print(f"      Their peak RSS is censored (a lower bound), so they are excluded from the fit")
-        print(f"      below, which is therefore itself a LOWER bound. Do not size memory down.")
+    if oom:
+        print(f"  *** {oom} shard(s) OOM-killed (rc=137): the memory bound was BREACHED. Their peak")
+        print(f"      RSS is censored (a lower bound), excluded from the fit -- which is therefore")
+        print(f"      itself a LOWER bound. Do not size memory down.")
+    if other_fail:
+        print(f"  ({other_fail} shard(s) failed at a non-zero rc other than 137 -- a non-memory")
+        print(f"   failure; excluded from the fit, NOT counted as a memory breach.)")
     if not pts:
         print("  no successful (rc=0) shards with peak RSS -- nothing to fit")
         return
@@ -156,9 +166,9 @@ def check_phase_model(recs):
     if max(coeffs) > coeff:
         print("  *** the assumption is NOT an upper bound -- a successful shard exceeded it."
               " Do not size down.")
-    elif censored:
-        print("  the surviving shards fit under the assumption, but the kill(s) above mean the"
-              " bound did not hold in practice. Do not size down.")
+    elif oom:
+        print("  the surviving shards fit under the assumption, but the OOM kill(s) above mean the"
+              " memory bound did not hold in practice. Do not size down.")
     else:
         print(f"  holds with margin; the worst shard needed {max(coeffs):.2f},"
               f" {(1 - max(coeffs) / coeff):.0%} below what is requested")
