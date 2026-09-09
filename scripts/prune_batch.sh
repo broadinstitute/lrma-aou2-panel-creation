@@ -31,6 +31,15 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 log(){ echo "[prune batch-$BATCH] $*"; }
 die(){ echo "[prune batch-$BATCH] ERROR: $*" >&2; exit 1; }
 
+# bcftools reads gs:// through htslib, which needs a GCS token (gcloud's ADC is not enough).
+# Without it every verify_bcf reads 0 samples and the prune aborts (safely, but never runs).
+# One token per batch invocation is fine; a single-batch prune finishes well inside its TTL.
+if [ -z "${GCS_OAUTH_TOKEN:-}" ]; then
+  GCS_OAUTH_TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
+  export GCS_OAUTH_TOKEN
+fi
+[ -n "${GCS_OAUTH_TOKEN:-}" ] || die "could not obtain a GCS token for bcftools (gcloud auth?)"
+
 # ---- #3 paginated Cromwell query: emit id<TAB>status<TAB>chr for the batch ----
 query_workflows() {
   python3 - "$CROMWELL" "$BATCH" <<'PY'
@@ -127,13 +136,17 @@ awk -F'\t' '{print $1}' "$WORK/wf.tsv" | sort -u | while read -r u; do
   if gcloud storage rm -r "$EXEC_ROOT/$u" --quiet 2>/dev/null; then log "  del $u"
   else log "  FAILED to delete $u"; echo x >> "$WORK/fails"; fi
 done
-# #1 managed-backend outputs: match the batch number EXACTLY (integer), never substring
-gcloud storage ls "$BUCKET/glimpse2_phase/" 2>/dev/null | while read -r p; do
+# #1 managed-backend outputs: match the batch number EXACTLY (integer), never substring.
+# Tolerate glimpse2_phase/ being absent (already pruned): under pipefail+set -e a failed
+# `ls | while` would abort the script AFTER a successful delete and wrongly report failure.
+{ gcloud storage ls "$BUCKET/glimpse2_phase/" 2>/dev/null || true; } | while read -r p; do
   b=$(printf '%s\n' "$p" | grep -oE 'batch[_-]?0*[0-9]+' | grep -oE '[0-9]+$' | head -1 || true)
   [ -n "$b" ] && [ "$((10#$b))" -eq "$BATCH_N" ] || continue
   if gcloud storage rm -r "$p" --quiet 2>/dev/null; then log "  del managed $p"
   else log "  FAILED to delete $p"; echo x >> "$WORK/fails"; fi
 done
-[ -s "$WORK/fails" ] && die "$(wc -l < "$WORK/fails" | tr -d ' ') deletion(s) failed — cleanup incomplete, NOT reporting done"
+if [ -s "$WORK/fails" ]; then
+  die "$(wc -l < "$WORK/fails" | tr -d ' ') deletion(s) failed — cleanup incomplete, NOT reporting done"
+fi
 
 log "DONE — batch-$BATCH pruned; 22 verified deliverables kept in $DELIV"

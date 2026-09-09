@@ -63,7 +63,7 @@ case "\$1" in
 esac
 EOF
   chmod +x "$tmp/gcloud" "$tmp/bcftools"
-  PANEL_BUCKET=gs://b CROMWELL_URL="http://127.0.0.1:$port" \
+  PANEL_BUCKET=gs://b CROMWELL_URL="http://127.0.0.1:$port" GCS_OAUTH_TOKEN=faketoken \
     PATH="$tmp:$PATH" bash "$SCRIPT" 003 > "$tmp/out.log" 2>&1
   local rc=$?
   echo "$rc|$tmp"
