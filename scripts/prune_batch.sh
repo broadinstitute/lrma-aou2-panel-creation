@@ -51,26 +51,47 @@ fi
 query_workflows() {
   if [ "$BACKEND" = managed ]; then query_workflows_managed; else query_workflows_local; fi
 }
-# managed: one `wb` job per chromosome, display name bNNN-chrK. wb statuses are mapped onto
-# Cromwell's so the rest of the script is backend-agnostic. Refuses if the list hits its own
-# limit (possible truncation) — the same fail-closed rule as the paginated local query (#3).
+# managed: jobs come from two `wb` submission styles and BOTH must be seen:
+#   - plain:  one `wb workflow job run` per chromosome (display name bNNN-chrK), in `job list`
+#   - bulk:   one CSV per batch (display name bNNN, 22 sub-jobs bNNN_<row>) whose sub-jobs are
+#             ONLY visible through `job list --batch-job-id=<batch runId>`
+# Identity is taken from the workflow input output_prefix (aou2_50k_init.batch-NNN.chrK.*),
+# with the plain display name as fallback, so the submission style does not matter. wb statuses
+# are mapped onto Cromwell's so the rest of the script is backend-agnostic. Refuses if any list
+# hits its own limit (possible truncation) — the same fail-closed rule as the local query (#3).
 query_workflows_managed() {
-  local limit=1000
-  # (the JSON goes through a file: `python3 -` already uses stdin for the program text)
+  local limit=1000 bid
+  # (JSON via files: `python3 -` already uses stdin for the program text)
   wb workflow job list --limit=$limit --format=JSON > "$WORK/wb.json" 2>/dev/null || true
-  python3 - "$BATCH" "$limit" "$WORK/wb.json" <<'PY'
+  wb workflow job batch list --format=JSON > "$WORK/wbb.json" 2>/dev/null || true
+  for bid in $(python3 - "$BATCH_N" "$WORK/wbb.json" <<'PY'
 import json,sys,re
-batch,limit=sys.argv[1],int(sys.argv[2])
-try: jobs=json.load(open(sys.argv[3]))
-except Exception as e: sys.stderr.write(f"wb job list unparsable: {e}\n"); sys.exit(3)
-if len(jobs)>=limit: sys.stderr.write(f"wb job list returned {len(jobs)} >= limit {limit}; refusing\n"); sys.exit(3)
+n=int(sys.argv[1])
+try: b=json.load(open(sys.argv[2]))
+except Exception: b=[]
+for r in b:
+    m=re.match(r'^b0*(\d+)$', r.get('displayName') or '')
+    if m and int(m.group(1))==n: print(r['runId'])
+PY
+  ); do
+    wb workflow job list --batch-job-id="$bid" --limit=$limit --format=JSON > "$WORK/wb.sub.$bid.json" 2>/dev/null || true
+  done
+  python3 - "$BATCH_N" "$limit" "$WORK" <<'PY'
+import json,sys,re,glob
+n,limit,work=int(sys.argv[1]),int(sys.argv[2]),sys.argv[3]
+jobs=[]
+for f in [f"{work}/wb.json"]+sorted(glob.glob(f"{work}/wb.sub.*.json")):
+    try: j=json.load(open(f))
+    except Exception as e: sys.stderr.write(f"{f} unparsable: {e}\n"); sys.exit(3)
+    if len(j)>=limit: sys.stderr.write(f"{f}: {len(j)} rows >= limit {limit}; refusing (possible truncation)\n"); sys.exit(3)
+    jobs+=j
 MAP={'COMPLETED':'Succeeded','FAILED':'Failed','CANCELLED':'Aborted'}
-pat=re.compile(rf'^b{batch}-(chr\d+)$')
+pre=re.compile(r'\.batch-0*(\d+)\.(chr\d+)\.'); dn=re.compile(r'^b0*(\d+)-(chr\d+)$')
 for j in jobs:
-    m=pat.match(j.get('displayName') or '')
-    if not m: continue
+    m=pre.search((j.get('inputs') or {}).get('GLIMPSE2FromPreprocessedPLsJoint.output_prefix') or '') or dn.match(j.get('displayName') or '')
+    if not m or int(m.group(1))!=n: continue
     root=((j.get('engineAttributes') or {}).get('gcpCromwell') or {}).get('jesGcsRoot') or ''
-    print(f"{j['runId']}\t{MAP.get(j['status'],j['status'])}\t{m.group(1)}\t{root}")
+    print(f"{j['runId']}\t{MAP.get(j['status'],j['status'])}\t{m.group(2)}\t{root}")
 PY
 }
 # local (deprecated): #3 paginated Cromwell query
@@ -208,4 +229,7 @@ if [ -s "$WORK/fails" ]; then
   die "$(wc -l < "$WORK/fails" | tr -d ' ') deletion(s) failed — cleanup incomplete, NOT reporting done"
 fi
 
+# marker so the driver can skip this batch cheaply on every later run
+printf 'pruned %s backend=%s\n' "$(date -u +%FT%TZ)" "$BACKEND" | gcloud storage cp - "$DELIV/PRUNED.ok" --quiet 2>/dev/null \
+  || log "  (could not write $DELIV/PRUNED.ok marker; driver will re-check this batch next run)"
 log "DONE — batch-$BATCH pruned; 22 verified deliverables kept in $DELIV"

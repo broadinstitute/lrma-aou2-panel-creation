@@ -39,15 +39,23 @@ write_wb_json() {  # $1=file $2=mode
   python3 - "$1" "$2" <<'PY'
 import json,sys
 out,mode=sys.argv[1],sys.argv[2]
-def job(name,st,rid):
-    root="gs://b/glimpse2_phase/batch003/"+name.split('-')[1]+"/"+name
-    return {"runId":rid,"displayName":name,"status":st,"engineAttributes":{"gcpCromwell":{"jesGcsRoot":root}}}
-jobs=[job(f"b003-chr{c}","COMPLETED",f"run-chr{c}") for c in range(1,23)]
-jobs.append(job("b003-chr1","CANCELLED","run-chr1-dup"))          # cancelled duplicate must be ignored
-jobs.append(job("b030-chr1","RUNNING","run-b030"))                 # other batch must not leak in
-if mode=="mfailed":  jobs[4]["status"]="FAILED"
-if mode=="mrunning": jobs[4]["status"]="RUNNING"
-json.dump(jobs,open(out,"w"))
+def job(name,st,rid,chrom,root,batch="003"):
+    return {"runId":rid,"displayName":name,"status":st,"engineAttributes":{"gcpCromwell":{"jesGcsRoot":root}},
+            "inputs":{"GLIMPSE2FromPreprocessedPLsJoint.chromosome":chrom,
+                      "GLIMPSE2FromPreprocessedPLsJoint.output_prefix":f"aou2.batch-{batch}.{chrom}.prod-x"}}
+plain=[]; sub=[]
+if mode.startswith("mbulk"):   # batch 003 submitted as one CSV: sub-jobs b003_<row>, shared root
+    sub=[job(f"b003_{c-1}","COMPLETED",f"run-chr{c}",f"chr{c}","gs://b/glimpse2_phase/batch003/b003") for c in range(1,23)]
+    batches=[{"runId":"batchrun-003","displayName":"b003","status":"COMPLETED"},
+             {"runId":"batchrun-030","displayName":"b030","status":"RUNNING"}]
+else:                          # batch 003 submitted per chromosome
+    plain=[job(f"b003-chr{c}","COMPLETED",f"run-chr{c}",f"chr{c}",f"gs://b/glimpse2_phase/batch003/chr{c}/b003-chr{c}") for c in range(1,23)]
+    plain.append(job("b003-chr1","CANCELLED","run-chr1-dup","chr1","gs://b/glimpse2_phase/batch003/chr1/b003-chr1"))  # cancelled dup ignored
+    plain.append(job("b030-chr1","RUNNING","run-b030","chr1","gs://b/glimpse2_phase/batch030/chr1/b030-chr1","030"))  # other batch
+    batches=[]
+    if mode=="mfailed":  plain[4]["status"]="FAILED"
+    if mode=="mrunning": plain[4]["status"]="RUNNING"
+json.dump(plain,open(out,"w")); json.dump(batches,open(out+".batches","w")); json.dump(sub,open(out+".sub","w"))
 PY
 }
 
@@ -58,7 +66,12 @@ run_case() {  # $1=name $2=mode  -> "rc|tmpdir"
   write_wb_json "$tmp/wb.json" "$mode"
   cat > "$tmp/wb" <<EOF
 #!/usr/bin/env bash
-cat "$tmp/wb.json"
+# dispatch on the three list forms prune uses
+case "\$*" in
+  *"job batch list"*) cat "$tmp/wb.json.batches";;
+  *--batch-job-id=*)  cat "$tmp/wb.json.sub";;
+  *)                  cat "$tmp/wb.json";;
+esac
 EOF
   # stub gcloud + bcftools on PATH
   cat > "$tmp/gcloud" <<EOF
@@ -67,6 +80,7 @@ if [ "\$1" = storage ] && [ "\$2" = rm ]; then echo "\$@" >> "$tmp/rm.log"; exit
 if [ "\$1" = storage ] && [ "\$2" = cp ]; then exit 0; fi
 if [ "\$1" = storage ] && [ "\$2" = ls ]; then
   case "\$3" in
+    *PRUNED.ok) exit 1;;               # no marker in these fixtures
     *.csi) [ "$mode" = missing_csi ] && exit 1; echo "\$3"; exit 0;;
     *deliverables*batch-003.chr*)  # per-chr existing-deliverable check
       if [ "$mode" = rerun ] || [ "$mode" = mrerun ]; then c=\$(echo "\$3"|grep -oE 'chr[0-9]+'|head -1); echo "gs://b/deliverables/batch-003/aou2.batch-003.\$c.popped.bcf"; fi
@@ -161,6 +175,27 @@ cp "$DRIVER" "$tmp/driver.sh"
 out=$(PRUNE_BACKEND=managed PATH="$tmp:$PATH" bash "$tmp/driver.sh" 2>&1)
 { echo "$out" | grep -q 'pruning batch-003 (23 workflows' && echo "$out" | grep -q 'skip batch-030' && echo "$out" | grep -q 'stub prune 003'; } \
   && ok "driver: 003 pruned, 030 skipped" || bad "driver: $out"
+
+echo "== managed 11: BULK-submitted batch (sub-jobs only via --batch-job-id) is found, secured, deleted =="
+res=$(run_case m11 mbulk); rc="${res%%|*}"; tmp="${res#*|}"
+t=$(grep -c 'glimpse2_phase/batch003/' "$tmp/rm.log" 2>/dev/null); t=${t:-0}
+{ [ "$rc" -eq 0 ] && [ "$t" -eq 1 ] && grep -q 'DONE' "$tmp/out.log"; } && ok "bulk batch: 22 sub-jobs found, tree deleted once" || bad "bulk: rc=$rc tree=$t $(tail -2 "$tmp/out.log")"
+
+echo "== driver 12: bulk batches: b003 COMPLETED -> READY, b030 RUNNING -> skip; PRUNED.ok marker -> skip =="
+tmp="$(mktemp -d)"; write_wb_json "$tmp/wb.json" mbulk
+cat > "$tmp/wb" <<EOF
+#!/usr/bin/env bash
+case "\$*" in *"job batch list"*) cat "$tmp/wb.json.batches";; *--batch-job-id=*) cat "$tmp/wb.json.sub";; *) cat "$tmp/wb.json";; esac
+EOF
+cat > "$tmp/gcloud" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = storage ] && [ "\$2" = ls ]; then case "\$3" in *batch-030/PRUNED.ok) exit 0;; esac; exit 1; fi; exit 0
+EOF
+printf '#!/usr/bin/env bash\necho "stub prune $*"\n' > "$tmp/prune_batch.sh"; chmod +x "$tmp/wb" "$tmp/gcloud" "$tmp/prune_batch.sh"
+cp "$DRIVER" "$tmp/driver.sh"
+out=$(PRUNE_BACKEND=managed PATH="$tmp:$PATH" bash "$tmp/driver.sh" 2>&1)
+{ echo "$out" | grep -q 'pruning batch-003' && echo "$out" | grep -q 'batch-030 already pruned' && ! echo "$out" | grep -q 'stub prune 030'; } \
+  && ok "driver bulk: 003 pruned, 030 skipped by marker" || bad "driver bulk: $out"
 
 echo "----"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

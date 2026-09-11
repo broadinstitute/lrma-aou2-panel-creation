@@ -21,18 +21,29 @@ LIST="$(mktemp)"; WBJSON="$(mktemp)"; trap 'rm -f "$LIST" "$WBJSON"' EXIT
 
 # emit "<batchnum> READY|RUNNING <count>" per batch
 if [ "$BACKEND" = managed ]; then
-  # (JSON via a file: `python3 -` already uses stdin for the program text)
+  # Two submission styles (see prune_batch.sh): plain per-chromosome jobs in `job list`, and
+  # bulk CSV batches in `job batch list` (whose sub-jobs are hidden from `job list`). A bulk batch
+  # is terminal when its own status is; a plain batch when all its chromosome jobs are.
+  # (JSON via files: `python3 -` already uses stdin for the program text)
   wb workflow job list --limit=1000 --format=JSON > "$WBJSON" 2>/dev/null || true
-  python3 - "$WBJSON" <<'PY' > "$LIST"
+  wb workflow job batch list --format=JSON > "$WBJSON.batches" 2>/dev/null || true
+  python3 - "$WBJSON" "$WBJSON.batches" <<'PY' > "$LIST"
 import json,sys,re,collections
-try: jobs=json.load(open(sys.argv[1]))
-except Exception as e: sys.stderr.write(f"wb job list unparsable: {e}\n"); sys.exit(3)
+def load(f):
+    try: return json.load(open(f))
+    except Exception as e: sys.stderr.write(f"{f} unparsable: {e}\n"); return None
+jobs=load(sys.argv[1]); batches=load(sys.argv[2])
+if jobs is None or batches is None: sys.exit(3)
 if len(jobs)>=1000: sys.stderr.write("wb job list hit its limit; refusing (possible truncation)\n"); sys.exit(3)
 TERM={'COMPLETED','FAILED','CANCELLED'}
-st=collections.defaultdict(list); pat=re.compile(r'^b(\d+)-chr\d+$')
+st=collections.defaultdict(list)
+pre=re.compile(r'\.batch-0*(\d+)\.chr\d+\.'); dn=re.compile(r'^b0*(\d+)-chr\d+$'); bn=re.compile(r'^b0*(\d+)$')
 for j in jobs:
-    m=pat.match(j.get('displayName') or '')
+    m=pre.search((j.get('inputs') or {}).get('GLIMPSE2FromPreprocessedPLsJoint.output_prefix') or '') or dn.match(j.get('displayName') or '')
     if m: st[int(m.group(1))].append(j['status'])
+for b in batches:
+    m=bn.match(b.get('displayName') or '')
+    if m: st[int(m.group(1))].append(b['status'])
 for b in sorted(st):
     print(f"{b:03d} {'READY' if all(s in TERM for s in st[b]) else 'RUNNING'} {len(st[b])}")
 PY
@@ -64,7 +75,11 @@ PY
 fi
 
 [ -s "$LIST" ] || { echo "no batches found on $BACKEND backend"; exit 0; }
+BUCKET="${PANEL_BUCKET:-gs://longreadsphase2imputation}"
 while read -r batch state n; do
+  if gcloud storage ls "$BUCKET/deliverables/batch-$batch/PRUNED.ok" >/dev/null 2>&1; then
+    echo "=== batch-$batch already pruned (marker present), skip ==="; continue
+  fi
   if [ "$state" = "READY" ]; then
     echo "=== pruning batch-$batch ($n workflows, all terminal) ==="
     "$HERE/prune_batch.sh" "$batch" || echo "  (batch-$batch prune failed — left intact, will retry next run)"
