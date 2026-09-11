@@ -5,6 +5,9 @@
 # to gs://<bucket>/deliverables/batch-<BATCH>/, VERIFY them, and only then delete
 # that batch's Cromwell execution intermediates.
 #
+# Backends (PRUNE_BACKEND): "managed" (default) reads job state from `wb workflow job list`
+# and finds outputs in the run's GCS tree; "local" is the deprecated laptop Cromwell.
+#
 # Correctness guards (addressing review of the first version):
 #   #1 batch identity is compared as an integer, never by unanchored substring —
 #      batch 3 never matches batch-30/300, batch 1 never matches batch-100.
@@ -27,6 +30,10 @@ BUCKET="${PANEL_BUCKET:-gs://longreadsphase2imputation}"
 EXPECT_SAMPLES="${EXPECT_SAMPLES:-250}"
 EXEC_ROOT="$BUCKET/workflows/cromwell-executions/GLIMPSE2FromPreprocessedPLsJoint"
 DELIV="$BUCKET/deliverables/batch-$BATCH"
+# managed = VWB's cloud Cromwell, driven through `wb` (production since 2026-09-11);
+# local  = the deprecated laptop Cromwell at localhost:8000 (kept for the old test fixtures).
+BACKEND="${PRUNE_BACKEND:-managed}"
+WF_NAME="GLIMPSE2FromPreprocessedPLsJoint"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 log(){ echo "[prune batch-$BATCH] $*"; }
 die(){ echo "[prune batch-$BATCH] ERROR: $*" >&2; exit 1; }
@@ -40,8 +47,34 @@ if [ -z "${GCS_OAUTH_TOKEN:-}" ]; then
 fi
 [ -n "${GCS_OAUTH_TOKEN:-}" ] || die "could not obtain a GCS token for bcftools (gcloud auth?)"
 
-# ---- #3 paginated Cromwell query: emit id<TAB>status<TAB>chr for the batch ----
+# ---- workflow discovery: emit id<TAB>status<TAB>chr[<TAB>gcs_root] for the batch ----
 query_workflows() {
+  if [ "$BACKEND" = managed ]; then query_workflows_managed; else query_workflows_local; fi
+}
+# managed: one `wb` job per chromosome, display name bNNN-chrK. wb statuses are mapped onto
+# Cromwell's so the rest of the script is backend-agnostic. Refuses if the list hits its own
+# limit (possible truncation) — the same fail-closed rule as the paginated local query (#3).
+query_workflows_managed() {
+  local limit=1000
+  # (the JSON goes through a file: `python3 -` already uses stdin for the program text)
+  wb workflow job list --limit=$limit --format=JSON > "$WORK/wb.json" 2>/dev/null || true
+  python3 - "$BATCH" "$limit" "$WORK/wb.json" <<'PY'
+import json,sys,re
+batch,limit=sys.argv[1],int(sys.argv[2])
+try: jobs=json.load(open(sys.argv[3]))
+except Exception as e: sys.stderr.write(f"wb job list unparsable: {e}\n"); sys.exit(3)
+if len(jobs)>=limit: sys.stderr.write(f"wb job list returned {len(jobs)} >= limit {limit}; refusing\n"); sys.exit(3)
+MAP={'COMPLETED':'Succeeded','FAILED':'Failed','CANCELLED':'Aborted'}
+pat=re.compile(rf'^b{batch}-(chr\d+)$')
+for j in jobs:
+    m=pat.match(j.get('displayName') or '')
+    if not m: continue
+    root=((j.get('engineAttributes') or {}).get('gcpCromwell') or {}).get('jesGcsRoot') or ''
+    print(f"{j['runId']}\t{MAP.get(j['status'],j['status'])}\t{m.group(1)}\t{root}")
+PY
+}
+# local (deprecated): #3 paginated Cromwell query
+query_workflows_local() {
   python3 - "$CROMWELL" "$BATCH" <<'PY'
 import json,sys,urllib.request
 base,batch=sys.argv[1],sys.argv[2]
@@ -78,8 +111,34 @@ verify_bcf() {  # $1=gs bcf  $2=expected chrom (e.g. chr7)  -> prints sample-set
   bcftools query -l "$f" 2>/dev/null | sort | md5
 }
 
-log "checking Cromwell for this batch (paginated)"
-query_workflows > "$WORK/wf.tsv" || die "Cromwell query failed"
+# ---- popped-BCF lookup per backend ----
+popped_bcf_local() {  # $1=workflow id -> workflow-level output path from Cromwell metadata
+  python3 - "$CROMWELL" "$1" <<'PY'
+import json,sys,urllib.request
+d=json.load(urllib.request.urlopen(f"{sys.argv[1]}/api/workflows/v1/{sys.argv[2]}/metadata?expandSubWorkflows=false",timeout=30))
+o=d.get('outputs',{})
+print(next((v for v in o.values() if isinstance(v,str) and v.endswith('popped.bcf')),''))
+PY
+}
+# managed: `wb` exposes no workflow outputs, so find the workflow-level popped BCF in the run's
+# GCS tree (<jesGcsRoot>/<WF>/<runId>/...). The per-region PopAndMarginalizeCollisions shards
+# write the SAME basename, so only the ConcatVcfs (or RemapPoppedPosteriors) call dir counts,
+# and exactly one candidate must remain — anything else is refused rather than guessed.
+popped_bcf_managed() {  # $1=runId
+  local wid="$1" root all pick n
+  root=$(awk -F'\t' -v w="$wid" '$1==w{print $4; exit}' "$WORK/wf.tsv")
+  [ -n "$root" ] || { echo "no gcs root recorded for $wid" >&2; return 1; }
+  all=$(gcloud storage ls "$root/$WF_NAME/$wid/**/*.glimpse2.popped.bcf" 2>/dev/null \
+        | grep -v '/call-PopAndMarginalizeCollisions/' | grep -v '/call-ShardConcatVcfs/' || true)
+  pick=$(printf '%s\n' "$all" | grep '/call-RemapPoppedPosteriors/' || true)
+  [ -n "$pick" ] || pick=$(printf '%s\n' "$all" | grep '/call-ConcatPopAndMarginalizeCollisions/' | grep '/call-ConcatVcfs/' || true)
+  n=$(printf '%s\n' "$pick" | grep -c . || true)
+  [ "$n" = "1" ] || { echo "expected exactly 1 popped BCF under $root/$WF_NAME/$wid, got $n: $pick" >&2; return 1; }
+  printf '%s\n' "$pick"
+}
+
+log "checking $BACKEND backend for this batch"
+query_workflows > "$WORK/wf.tsv" || die "$BACKEND workflow query failed"
 nwf=$(wc -l < "$WORK/wf.tsv" | tr -d ' ')
 [ "$nwf" -gt 0 ] || { log "no workflows labelled batch:batch-$BATCH — nothing to prune"; exit 0; }
 
@@ -98,16 +157,11 @@ secure_and_verify_chr() {  # $1=chrom
   if [ -n "$existing" ] && md5=$(verify_bcf "$existing" "$chrom" 2>/dev/null); then
     SETMD5+=("$md5"); return 0                            # already secured & valid -> reuse (#4)
   fi
-  # otherwise fetch the popped BCF path from a Succeeded workflow's outputs
+  # otherwise locate the popped BCF of a Succeeded workflow
   wid=$(awk -F'\t' -v c="$chrom" '$3==c && $2=="Succeeded"{print $1; exit}' "$WORK/wf.tsv")
   [ -n "$wid" ] || die "no Succeeded workflow for $chrom and no valid existing deliverable"
-  bcf=$(python3 - "$CROMWELL" "$wid" <<'PY'
-import json,sys,urllib.request
-d=json.load(urllib.request.urlopen(f"{sys.argv[1]}/api/workflows/v1/{sys.argv[2]}/metadata?expandSubWorkflows=false",timeout=30))
-o=d.get('outputs',{})
-print(next((v for v in o.values() if isinstance(v,str) and v.endswith('popped.bcf')),''))
-PY
-)
+  if [ "$BACKEND" = managed ]; then bcf=$(popped_bcf_managed "$wid") || die "no unique popped BCF for $chrom ($wid)"
+  else bcf=$(popped_bcf_local "$wid"); fi
   [ -n "$bcf" ] || die "no popped BCF output for $chrom ($wid)"
   local dest="$DELIV/$(basename "$bcf")"
   gcloud storage cp "$bcf"     "$DELIV/" --quiet || die "copy failed: $bcf"
@@ -129,6 +183,9 @@ log "verified: 22/22 @ $EXPECT_SAMPLES samples, records>0, single-contig, one co
 # ---- delete: exact UUID dirs from Cromwell; propagate any failure (#4) ----
 log "deleting execution intermediates"
 fails=0
+# local backend only: exact UUID dirs under the laptop Cromwell's execution root. Managed runs
+# live entirely under glimpse2_phase/<batch>/ and are removed by the loop below.
+if [ "$BACKEND" = local ]; then
 awk -F'\t' '{print $1}' "$WORK/wf.tsv" | sort -u | while read -r u; do
   [ -n "$u" ] || continue
   # #4 idempotent re-run: an already-deleted dir is success, not a failure.
@@ -136,7 +193,9 @@ awk -F'\t' '{print $1}' "$WORK/wf.tsv" | sort -u | while read -r u; do
   if gcloud storage rm -r "$EXEC_ROOT/$u" --quiet 2>/dev/null; then log "  del $u"
   else log "  FAILED to delete $u"; echo x >> "$WORK/fails"; fi
 done
-# #1 managed-backend outputs: match the batch number EXACTLY (integer), never substring.
+fi
+# #1 managed run trees (glimpse2_phase/batchNNN/, plus legacy prod_*_batchNNN_* dirs):
+# match the batch number EXACTLY (integer), never substring.
 # Tolerate glimpse2_phase/ being absent (already pruned): under pipefail+set -e a failed
 # `ls | while` would abort the script AFTER a successful delete and wrongly report failure.
 { gcloud storage ls "$BUCKET/glimpse2_phase/" 2>/dev/null || true; } | while read -r p; do

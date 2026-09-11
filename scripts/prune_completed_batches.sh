@@ -1,18 +1,43 @@
 #!/usr/bin/env bash
 # prune_completed_batches.sh
 #
-# Driver for prune_batch.sh: finds every batch Cromwell knows about whose
-# workflows are ALL terminal and prunes each. Idempotent and safe to run
-# repeatedly; skips batches that are still running or already pruned.
+# Driver for prune_batch.sh: finds every batch whose workflows are ALL terminal and
+# prunes each. Idempotent and safe to run repeatedly; skips batches that are still
+# running or already pruned.
 #
-# #3 The batch enumeration is fully paginated and cross-checked against
-#    totalResultsCount, so no batch is dropped once the run exceeds one page.
+# Backend (PRUNE_BACKEND): "managed" (default) enumerates VWB cloud-Cromwell jobs via
+# `wb workflow job list` (display names bNNN-chrK); "local" queries the deprecated
+# laptop Cromwell with the fully paginated, count-cross-checked query (#3).
 set -euo pipefail
 CROMWELL="${CROMWELL_URL:-http://localhost:8000}"
+BACKEND="${PRUNE_BACKEND:-managed}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# `wb` is a Java CLI; cron's environment has neither JAVA_HOME nor the brew JDK on PATH.
+if [ -d /opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home ]; then
+  export JAVA_HOME=/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home
+  export PATH=/opt/homebrew/opt/openjdk/bin:$PATH
+fi
+LIST="$(mktemp)"; WBJSON="$(mktemp)"; trap 'rm -f "$LIST" "$WBJSON"' EXIT
 
-# paginated: emit "<batchnum> READY|RUNNING <count>" per batch
-python3 - "$CROMWELL" <<'PY' > /tmp/prune_driver_batches.txt
+# emit "<batchnum> READY|RUNNING <count>" per batch
+if [ "$BACKEND" = managed ]; then
+  # (JSON via a file: `python3 -` already uses stdin for the program text)
+  wb workflow job list --limit=1000 --format=JSON > "$WBJSON" 2>/dev/null || true
+  python3 - "$WBJSON" <<'PY' > "$LIST"
+import json,sys,re,collections
+try: jobs=json.load(open(sys.argv[1]))
+except Exception as e: sys.stderr.write(f"wb job list unparsable: {e}\n"); sys.exit(3)
+if len(jobs)>=1000: sys.stderr.write("wb job list hit its limit; refusing (possible truncation)\n"); sys.exit(3)
+TERM={'COMPLETED','FAILED','CANCELLED'}
+st=collections.defaultdict(list); pat=re.compile(r'^b(\d+)-chr\d+$')
+for j in jobs:
+    m=pat.match(j.get('displayName') or '')
+    if m: st[int(m.group(1))].append(j['status'])
+for b in sorted(st):
+    print(f"{b:03d} {'READY' if all(s in TERM for s in st[b]) else 'RUNNING'} {len(st[b])}")
+PY
+else
+  python3 - "$CROMWELL" <<'PY' > "$LIST"
 import json,sys,urllib.request,collections
 base=sys.argv[1]; rows=[]; page=1; size=100; total=None
 while True:
@@ -36,8 +61,9 @@ for b in sorted(st):
     ready=all(s in TERM for s in st[b])
     print(f"{b.split('-')[-1]} {'READY' if ready else 'RUNNING'} {len(st[b])}")
 PY
+fi
 
-[ -s /tmp/prune_driver_batches.txt ] || { echo "no batches found in Cromwell"; exit 0; }
+[ -s "$LIST" ] || { echo "no batches found on $BACKEND backend"; exit 0; }
 while read -r batch state n; do
   if [ "$state" = "READY" ]; then
     echo "=== pruning batch-$batch ($n workflows, all terminal) ==="
@@ -45,4 +71,4 @@ while read -r batch state n; do
   else
     echo "=== skip batch-$batch ($n workflows, still running) ==="
   fi
-done < /tmp/prune_driver_batches.txt
+done < "$LIST"
