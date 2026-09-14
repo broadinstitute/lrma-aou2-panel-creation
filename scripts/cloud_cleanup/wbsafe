@@ -1,0 +1,9 @@
+#!/bin/bash
+# wbsafe <wb args...>: run a wb command only if the Workbench session is valid.
+# `wb auth status` never opens a browser. Any other wb command does when logged out, then blocks
+# on localhost:3000 until killed, so every scripted wb call must go through this guard.
+export JAVA_HOME=/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk/bin:$PATH
+if ! timeout 120 wb auth status 2>/dev/null | grep -qx 'LOGGED IN'; then
+  echo "WBSAFE: not logged in, refusing to run: wb $*" >&2; exit 4
+fi
+exec timeout "${WBSAFE_TIMEOUT:-900}" wb "$@"
