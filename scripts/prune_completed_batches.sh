@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# RETIRED 2026-09-13: laptop cron pruning is no longer used. Cleanup now runs in the cloud as
+# wdl/methods/imputation/SecureAndPruneBatch.wdl (workspace workflow `secure-prune-batch`).
+# Kept only as a reference for the verification rules it implemented.
 # prune_completed_batches.sh
 #
 # Driver for prune_batch.sh: finds every batch whose workflows are ALL terminal and

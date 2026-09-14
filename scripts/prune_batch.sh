@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# RETIRED 2026-09-13: laptop cron pruning is no longer used. Cleanup now runs in the cloud as
+# wdl/methods/imputation/SecureAndPruneBatch.wdl (workspace workflow `secure-prune-batch`).
+# Kept only as a reference for the verification rules it implemented.
 # prune_batch.sh <BATCH>   (e.g. prune_batch.sh 003)
 #
 # After a batch's 22 chromosomes finish, secure the final popped BCFs (+indexes)
