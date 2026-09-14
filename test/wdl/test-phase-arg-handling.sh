@@ -432,11 +432,10 @@ for m in re.finditer(r"task (\w+) \{", s):
         continue
     missing = [n for n, ok in (("eff_cpu", "Int eff_cpu" in seg),
                                ("instrumentation", "trap _instr_report" in seg),
-                               # boot_disk_gb must stay WIRED, not a silent no-op: an explicit
-                               # 0 is provably identical to omitting the attribute (Cromwell's
-                               # BootDiskSizeValidation gives 0 + 30 either way), so there is
-                               # no reason for the override to be dead.
-                               ("boot_disk default", "boot_disk_gb:       0," in seg),
+                               # boot_disk_gb must stay WIRED at -20: Cromwell adds 30 and Batch
+                               # adds 10 and floors at 30, so -20 is the smallest boot disk
+                               # (30 GB) and 0 would silently cost 11 GB of SSD quota per VM.
+                               ("boot_disk default", "boot_disk_gb:       -20," in seg),
                                ("bootDiskSizeGb wired", "bootDiskSizeGb:" in seg)) if not ok]
     if missing:
         bad.append("%s (%s)" % (m.group(1), ", ".join(missing)))

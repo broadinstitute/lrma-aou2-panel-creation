@@ -195,17 +195,14 @@ struct RuntimeAttr {
     Float? mem_gb
     Int? cpu_cores
     Int? disk_gb
-    # EXTRA boot disk added to the backend default, so 0 is correct.
-    # From BootDiskSizeValidation in Cromwell 91:
-    #     override protected def staticDefaultOption: Option[WomInteger] = Option(WomInteger(0))
-    #     case WomInteger(value) => (value + defaultBootDiskSize).validNel
-    # so an absent attribute takes the static default of 0 and an explicit 0 takes the same
-    # path -- both yield 0 + 30 = 30 GB, and there is no positive-int guard to trip. That is
-    # why the old value of 10 provisioned 40. CONFIRMED on a live job: bootDiskMib 28611
-    # (30 GB), against 38148 (40 GB) before -- 10 GB per shard, ~5.2 TB per batch.
-    #
-    # Passing 0 explicitly rather than omitting the attribute keeps this override usable by a
-    # caller running a larger custom Docker image, at identical default behaviour.
+    # Boot disk, as an OFFSET from Cromwell's 30 GB default: BootDiskSizeValidation (Cromwell 91)
+    # computes value + 30 with no sign check, and the Batch backend sends that as the per-task
+    # computeResource.bootDiskMib (x953.7). Batch then sizes the VM boot disk as 10 GB reserved
+    # plus the task figure, floored at its 30 GB minimum -- so 0 here gave a 41 GB pd-balanced
+    # boot disk on every VM (measured: lsblk 41G; with 5 it was 46G). That boot disk counts
+    # against the SSD_TOTAL_GB quota that caps concurrency, alongside the 20 GB work disk.
+    # -20 yields a 10 GB task figure, i.e. the 30 GB floor: 11 GB less per VM, ~22% more
+    # concurrent shards under the same quota. The images used here are ~3 GB, so 30 GB is ample.
     Int? boot_disk_gb
     Boolean? use_ssd
     Int? preemptible_tries
@@ -252,7 +249,7 @@ task SplitPreprocessedPLsForPhase {
         cpu_cores:          4,
         mem_gb:             8,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       0,
+        boot_disk_gb:       -20,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
@@ -439,7 +436,7 @@ task GLIMPSE2Phase {
         cpu_cores:          final_cpu,
         mem_gb:             final_mem_gb,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       0,
+        boot_disk_gb:       -20,
         use_ssd:            true,
         # Spot is worth it, measured: 415 successful VM-minutes against 286 wasted over 32
         # preemptions (1.69x VM-time) still costs ~0.58x on-demand. Not 0.51x -- spot
@@ -654,7 +651,7 @@ task GLIMPSE2Ligate {
         cpu_cores:          4,
         mem_gb:             24,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       0,
+        boot_disk_gb:       -20,
         use_ssd:            true,
         # 2, unlike pop's 4, and for a reason rather than by inheritance. The spot arithmetic
         # that justified raising pop barely applies here: ligate is 22 tasks costing ~$0.26 per
@@ -803,7 +800,7 @@ task PopAndMarginalizeCollisions {
         cpu_cores:          2,
         mem_gb:             8,
         disk_gb:            disk_gb,
-        boot_disk_gb:       0,
+        boot_disk_gb:       -20,
         use_ssd:            true,
         # Short pop shards restart cheaply. Four Spot attempts was the measured cost optimum
         # at the observed 40-60% preemption rate before falling through to on-demand.
@@ -899,7 +896,7 @@ task RemapSampleNames {
         cpu_cores:          2,
         mem_gb:             4,
         disk_gb:            disk_size_gb,
-        boot_disk_gb:       0,
+        boot_disk_gb:       -20,
         use_ssd:            true,
         preemptible_tries:  2,
         max_retries:        1,
