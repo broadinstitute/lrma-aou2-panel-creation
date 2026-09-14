@@ -28,8 +28,19 @@ if [ "$1" = storage ] && [ "$2" = ls ]; then
       for k in $(seq 1 22); do
         if [ "$MODE" = missingchr ] && [ "$k" = 7 ]; then continue; fi
         base="aou2.batch-005.chr$k.prod-x.glimpse2.popped.bcf"; run="$R/b005/GLIMPSE2FromPreprocessedPLsJoint/run$k"
+        # attemptdir: chr4's ConcatVcfs was retried, so its only output is under attempt-2/.
+        # twoattempts: chr16 has the first attempt's output AND a retry's; the retry is final.
+        if [ "$MODE" = attemptdir ] && [ "$k" = 4 ]; then
+          emit "$run/call-ConcatPopAndMarginalizeCollisions/ConcatVcfs/sub$k/call-ConcatVcfs/attempt-2/$base"
+          emit "$run/call-ConcatPopAndMarginalizeCollisions/ConcatVcfs/sub$k/call-ConcatVcfs/attempt-2/$base.csi"
+          continue
+        fi
         emit "$run/call-ConcatPopAndMarginalizeCollisions/ConcatVcfs/sub$k/call-ConcatVcfs/$base"
         emit "$run/call-ConcatPopAndMarginalizeCollisions/ConcatVcfs/sub$k/call-ConcatVcfs/$base.csi"
+        if [ "$MODE" = twoattempts ] && [ "$k" = 16 ]; then
+          emit "$run/call-ConcatPopAndMarginalizeCollisions/ConcatVcfs/sub$k/call-ConcatVcfs/attempt-2/$base"
+          emit "$run/call-ConcatPopAndMarginalizeCollisions/ConcatVcfs/sub$k/call-ConcatVcfs/attempt-2/$base.csi"
+        fi
         emit "$run/call-PopAndMarginalizeCollisions/shard-0/$base"
         emit "$run/call-GLIMPSE2Ligate/aou2.batch-005.chr$k.prod-x.glimpse2.bubble.bcf"
         if [ "$MODE" = dupsrc ] && [ "$k" = 3 ]; then emit "$run/call-ConcatPopAndMarginalizeCollisions/ConcatVcfs/subB/call-ConcatVcfs/$base"; fi
@@ -132,6 +143,14 @@ for mode in missingchr dupsrc headeronly fewsamples wrongcontig otherdeliv; do
   echo "== $mode must refuse: no delete, no marker =="
   run_case $mode; { [ $RC = 1 ] && nodelete && nomarker; } && ok "$mode: refused" || bad "$mode rc=$RC $(tail -2 "$ST/out.log")"
 done
+
+echo "== retried call: chr4 output only under attempt-2/ is found and secured =="
+run_case attemptdir; { [ $RC = 0 ] && [ -f "$ST/marker" ] && [ "$(wc -l < "$ST/copied" | tr -d ' ')" = 44 ] && grep -q 'storage cp gs://b/glimpse2_phase/batch005/b005/GLIMPSE2FromPreprocessedPLsJoint/run4/call-ConcatPopAndMarginalizeCollisions/ConcatVcfs/sub4/call-ConcatVcfs/attempt-2/aou2.batch-005.chr4.prod-x.glimpse2.popped.bcf ' "$ST/calls.log"; } \
+  && ok "attemptdir: attempt-2 output secured, 22 verified" || bad "attemptdir rc=$RC copied=$(wc -l < "$ST/copied") $(tail -2 "$ST/out.log")"
+
+echo "== retried call with both attempts present: the highest attempt is used, not refused =="
+run_case twoattempts; { [ $RC = 0 ] && [ -f "$ST/marker" ] && [ "$(wc -l < "$ST/copied" | tr -d ' ')" = 44 ] && has 'chr16: 2 attempts of one call, using the highest: attempt-2' && grep -q 'call-ConcatVcfs/attempt-2/aou2.batch-005.chr16.prod-x.glimpse2.popped.bcf ' "$ST/calls.log" && ! grep -q 'call-ConcatVcfs/aou2.batch-005.chr16.prod-x.glimpse2.popped.bcf ' "$ST/calls.log"; } \
+  && ok "twoattempts: attempt-2 chosen over the first attempt" || bad "twoattempts rc=$RC $(tail -2 "$ST/out.log")"
 
 echo "== duplicate listing of the same object is not a duplicate output =="
 run_case duplisting; { [ $RC = 0 ] && [ -f "$ST/marker" ]; } && ok "duplisting: treated as one output" || bad "duplisting rc=$RC $(tail -2 "$ST/out.log")"

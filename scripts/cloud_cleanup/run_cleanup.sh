@@ -1,6 +1,6 @@
 #!/bin/bash
 # Gated cloud cleanup of finished batches, submitted from the laptop, executed in the cloud:
-#   phase 1: secure-prune-batch-v2 on batch 005 (already cleaned; nothing can be deleted)
+#   phase 1: $PRUNE_WF on batch 005 (already cleaned; nothing can be deleted)
 #   phase 2: v2 on batch 006, then independent storage verification
 #   phase 3: v2 on the other 22 finished batches, each verified
 # START_PHASE=N skips phases before N once they are proven. Job files go to glimpse2_prune/.
@@ -8,6 +8,10 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; W=$HERE/wbsafe; V=$HERE/verify_pruned_batch.sh
 L=~/imputation/cleanup_logs; BK=gs://longreadsphase2imputation
+# PRUNE_WF: registered cleanup workflow (v3 finds outputs under ConcatVcfs attempt-N/ retry folders).
+# BATCHES: phase-3 batch numbers, space-separated, overriding the default list.
+PRUNE_WF="${PRUNE_WF:-secure-prune-batch-v3}"
+BATCHES="${BATCHES:-7 8 9 10 11 12 14 15 16 17 18 19 20 21 22 23 24 25 26 27 29 30}"
 export JAVA_HOME=/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk/bin:$PATH CLOUDSDK_CORE_DISABLE_PROMPTS=1
 say(){ echo "[$(date +%H:%M:%S)] $*"; }
 stop(){ say "STOP: $*"; exit 1; }
@@ -20,7 +24,7 @@ say "logged in"
 
 submit(){  # $1=batch  $2=display name  $3=output path -> prints runId
   local resp
-  resp=$($W workflow job run --workflow=secure-prune-batch-v2 --job-id="$2" \
+  resp=$($W workflow job run --workflow="$PRUNE_WF" --job-id="$2" \
       --inputs="{\"SecureAndPruneBatch.batch\": $1}" --output-bucket-id=Long_Reads_Phase_2_Imputation \
       --output-path="glimpse2_prune/$3" --format=JSON 2>&1) || { echo "$resp" | tail -3 >&2; return 1; }
   python3 -c 'import json,sys;print(json.loads(sys.stdin.read())["runId"])' <<<"$resp"
@@ -51,7 +55,7 @@ report(){  # $1=runId -> prints the job's report.txt, read from the output path 
 START_PHASE="${START_PHASE:-1}"
 if [ "$START_PHASE" -le 1 ]; then
 say "phase 1: v2 proof on batch 005 (run folder already gone, nothing to delete)"
-id=$(submit 5 prune-v2-rerun-b005 batch005-v2rerun) || stop "submit failed for 005"
+id=$(submit 5 prune-${PRUNE_WF##*-}-rerun-b005 batch005-v2rerun) || stop "submit failed for 005"
 say "  submitted $id"; wait_all "$id" || stop "005 proof did not finish in 2 h"
 st=$(awk '{print $2}' $L/wait_state.txt); [ "$st" = COMPLETED ] || stop "005 proof ended $st"
 rep=$(report "$id"); echo "$rep" | grep -vE 'existing deliverable verified'
@@ -62,7 +66,7 @@ fi
 if [ "$START_PHASE" -le 2 ]; then
 say "phase 2: v2 real cleanup on batch 006"
 gcloud storage ls "$BK/glimpse2_phase/batch006/**" >/dev/null 2>&1 || stop "batch006 run folder unexpectedly absent"
-id=$(submit 6 prune-v2-b006 batch006) || stop "submit failed for 006"
+id=$(submit 6 prune-${PRUNE_WF##*-}-b006 batch006) || stop "submit failed for 006"
 say "  submitted $id"; wait_all "$id" || stop "006 did not finish in 2 h"
 st=$(awk '{print $2}' $L/wait_state.txt); [ "$st" = COMPLETED ] || stop "006 ended $st"
 rep=$(report "$id"); echo "$rep" | grep -vE ': secured |already present and identical'
@@ -70,21 +74,21 @@ rep=$(report "$id"); echo "$rep" | grep -vE ': secured |already present and iden
 $V 6 || stop "006 verification failed"
 fi
 
-say "phase 3: remaining 22 batches"
+say "phase 3: batches $BATCHES"
 ids=(); : > $L/phase3_ids.txt
-for n in 7 8 9 10 11 12 14 15 16 17 18 19 20 21 22 23 24 25 26 27 29 30; do
+for n in $BATCHES; do
   B=$(printf '%03d' $n)
   if $V $n >/dev/null 2>&1; then say "  batch-$B already verified clean, skipping"; continue; fi
   gcloud storage ls "$BK/glimpse2_phase/batch$B/**" >/dev/null 2>&1 || stop "batch-$B has no run folder and is not verified clean; not submitting"
-  id=$(submit $n prune-v2-b$B batch$B) || stop "submit failed for batch-$B"
+  id=$(submit $n prune-${PRUNE_WF##*-}-b$B batch$B) || stop "submit failed for batch-$B"
   echo "$n $id" >> $L/phase3_ids.txt; ids+=("$id"); say "  submitted batch-$B $id"
 done
 [ "${#ids[@]}" -gt 0 ] && { wait_all "${ids[@]}" || stop "phase 3 jobs did not all finish in 2 h"; }
 say "  job statuses: $(awk '{print $2}' $L/wait_state.txt | sort | uniq -c | tr '\n' ' ')"
 okc=0; bad=""
-for n in 7 8 9 10 11 12 14 15 16 17 18 19 20 21 22 23 24 25 26 27 29 30; do
+for n in $BATCHES; do
   if $V $n; then okc=$((okc+1)); else bad="$bad $n"; fi
 done
-say "phase 3 result: verified clean $okc of 22${bad:+; NOT clean:$bad}"
+say "phase 3 result: verified clean $okc of $(wc -w <<<"$BATCHES")${bad:+; NOT clean:$bad}"
 [ -z "$bad" ] || exit 1
 say "ALL DONE: batches 001-030 cleaned up and verified"

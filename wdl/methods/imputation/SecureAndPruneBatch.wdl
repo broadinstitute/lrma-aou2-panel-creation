@@ -13,7 +13,9 @@ version 1.0
 #   1. Refuses if anything under <bucket>/glimpse2_phase/batchNNN/ was written in the last
 #      quiet_hours hours, which would indicate a run or rerun still in progress.
 #   2. Finds exactly one final popped BCF per chromosome, from the ConcatVcfs call directory.
-#      Per-region PopAndMarginalizeCollisions shards share the basename and are not matched.
+#      A retried call writes under attempt-N/; the highest attempt of that one call is the final
+#      output. Two different calls for a chromosome is ambiguous and refused. Per-region
+#      PopAndMarginalizeCollisions shards share the basename and are not matched.
 #   3. Downloads each BCF + .csi and verifies it: expected sample count, records > 0, exactly the
 #      expected single contig, and one identical sample set across all 22 chromosomes.
 #   4. Server-side copies BCF + .csi to <bucket>/deliverables/batch-NNN/ and requires both
@@ -122,7 +124,9 @@ task SecureAndPrune {
         fi
 
         # --- 2. candidate outputs and existing deliverables
-        { awk '{print $NF}' run_objects.txt | grep -E '/call-ConcatVcfs/[^/]*\.glimpse2\.popped\.bcf$' || true; } | sort -u > sources.txt
+        # A retried ConcatVcfs call writes its output under attempt-N/ (the first attempt has no
+        # such folder). Both forms are final outputs of the same call.
+        { awk '{print $NF}' run_objects.txt | grep -E '/call-ConcatVcfs/(attempt-[0-9]+/)?[^/]*\.glimpse2\.popped\.bcf$' || true; } | sort -u > sources.txt
         list_or_none "$DELIV/*.glimpse2.popped.bcf" deliverables.txt || true
         log "final popped BCFs in run folder: $(wc -l < sources.txt | tr -d ' '), existing deliverables: $(wc -l < deliverables.txt | tr -d ' ')"
 
@@ -131,11 +135,19 @@ task SecureAndPrune {
         mkdir -p work
         for k in $(seq 1 22); do
             c="chr$k"
-            src=$(grep -E "\.batch-$B\.$c\.[^/]*\.glimpse2\.popped\.bcf$" sources.txt || true)
+            cands=$(grep -E "\.batch-$B\.$c\.[^/]*\.glimpse2\.popped\.bcf$" sources.txt || true)
             have=$(grep -E "\.batch-$B\.$c\.[^/]*\.glimpse2\.popped\.bcf$" deliverables.txt || true)
-            nsrc=$(printf '%s' "$src" | grep -c . || true)
+            ncand=$(printf '%s' "$cands" | grep -c . || true)
             nhave=$(printf '%s' "$have" | grep -c . || true)
-            [ "$nsrc" -le 1 ] || die "$c: $nsrc distinct final popped BCFs in the run folder"
+            # Candidates must all belong to ONE ConcatVcfs call: strip attempt-N/ and require a
+            # single remaining path. Two different calls for one chromosome is ambiguous, refuse.
+            ncall=$(printf '%s' "$cands" | sed -E 's#/attempt-[0-9]+/#/#' | sort -u | grep -c . || true)
+            [ "$ncall" -le 1 ] || die "$c: $ncall distinct final popped BCFs in the run folder"
+            # Of one call's attempts the highest-numbered one is the attempt Cromwell finished on
+            # (a retry only exists because the earlier attempt did not complete).
+            src=$(printf '%s' "$cands" | awk '{n=1; if (match($0, /\/attempt-[0-9]+\//)) n=substr($0, RSTART+9, RLENGTH-10); print n "\t" $0}' | sort -k1,1n | tail -1 | cut -f2-)
+            nsrc=$(printf '%s' "$src" | grep -c . || true)
+            [ "$ncand" -le 1 ] || log "$c: $ncand attempts of one call, using the highest: $(printf '%s' "$src" | grep -oE 'attempt-[0-9]+' || echo attempt-1)"
             [ "$nhave" -le 1 ] || die "$c: $nhave deliverables already present"
             rm -rf work/*
 
