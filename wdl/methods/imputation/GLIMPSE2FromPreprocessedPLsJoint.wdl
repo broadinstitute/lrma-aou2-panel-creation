@@ -374,28 +374,23 @@ task GLIMPSE2Phase {
         RuntimeAttr? runtime_attr_override
     }
 
-    # Fitted from measured peak RSS. The chr20 sweep gave 11 points at 4 threads / Kpbwt 1000:
-    #     peak_GiB = 0.42 + 2.17e-5 * L        (r2 ~ 0.99)
-    # i.e. 5.82 bytes per site per thread per state. Requesting 8.0 on the strength of that
-    # then OOMed every shard of the first chr2/chr11 run -- 3 of 3, all rc=137:
-    #     L =  50,227  requested  4 GiB, killed at  3.37
-    #     L = 351,339  requested 14 GiB, killed at 13.15
-    #     L = 357,973  requested 14 GiB, killed at 13.15
-    # Refitting on those: peak = 1.75 + 3.21e-5 * L, i.e. 8.62 bytes -- above the 8.0 they
-    # were sized with. The chr20 fit understated the slope by a third, so a sweep of one
-    # chromosome does not generalise to another.
+    # Fitted from measured peak RSS, two independent sweeps at 4 threads / Kpbwt 1000:
+    #     chr20, 11 shards (Jul 31):          peak_GiB = 0.42 + 2.17e-5 * L   (5.82 bytes/site/thread/state)
+    #     batch 008, all 528 shards (Sep 11): peak_GiB = -0.11 + 2.30e-5 * L  (5.75 bytes, residual sd 0.46, max +2.4)
+    # Requesting 8.0 bytes/site/thread/state is 1.39x the fitted slope; with the 3 GiB constant
+    # (guest OS, Docker, the sampler, localization buffers) the worst of the 528 measured shards
+    # uses 70% of its request and the median 55%.
+    #     L =   400,379 -> 16 GiB / 4 cpu   (floor; measured peak ~9)
+    #     L = 1,005,104 -> 36 GiB / 8 cpu   (measured 22.4)
+    #     L = 1,346,888 -> 47 GiB / 8 cpu   (measured 32.6)
     #
-    # Two corrections, because the failures show two things at once. 8.0 -> 11.0 covers the
-    # refit with margin, and 2 -> 4 GiB pays for what the task cannot use: every kill landed
-    # BELOW its request (84%, 94%, 94%), so the guest OS, Docker, the monitoring script and
-    # localization buffers take a cut of the VM that GLIMPSE2 never sees.
-    #
-    # Both peaks and the refit are lower bounds. peak_rss_gib on an rc=137 task is where the
-    # kernel stopped it, not what it wanted, which biases the slope down -- the direction that
-    # OOMs. Treat 11.0 as the floor of what is defensible until shards finish.
-    #     L =   400,379 -> 22 GiB / 4 cpu
-    #     L = 1,005,104 -> 49 GiB / 8 cpu
-    #     L = 1,346,888 -> 64 GiB / 10 cpu
+    # This rule ran as 4 + 11.0 for batches 001-030, requesting ~2.4x the measured peak
+    # (utilisation 35-53% over the 528 batch-008 shards). That coefficient came from three
+    # chr2/chr11 shards killed at rc=137 on Jul 31 (L=351k killed at 13.15 GiB, ~2x what the
+    # same L peaks at in production). Those kills are consistent with GLIMPSE2 running at its
+    # 2000-state default rather than Kpbwt 1000, i.e. a staged WDL that predated the typed
+    # --Kpbwt injection; they are not evidence about this configuration. RAM is ~30% of the
+    # phase bill, so the over-request cost ~14% of phase compute per batch.
     # Per-shard sizing redistributes memory rather than saving it against the old flat 16. 490 shards get less, 33 get more, and the total is 3538 GiB-hours against 3552, a
     # 0.4% difference. Phase compute is $13.68/batch either way (+$0.09). What it does buy is
     # the freedom to size the dense shards correctly at all: a flat request safe for chr7 s12
@@ -416,14 +411,10 @@ task GLIMPSE2Phase {
     # less for both resources that dominate this task. This is hard-coded deliberately:
     # Cromwell validates a cpuPlatform key wired to an optional String as present even when
     # empty, then sends minCpuPlatform="" to Batch. us-central1-a offers both N1 and N2D.
-    # Floored at 16 GiB. The regression cannot be trusted to set the low end: it was fit to
-    # peak_rss values from runs killed at rc=137, which are censored observations -- a kill
-    # point is where measurement stopped, not what the task wanted -- and those runs did not
-    # pin Kpbwt, so they ran at the 2000-state default while the coefficient is applied here
-    # at 1000. Both biases push the fit down. Against that, 517 of 523 shards completed at a
-    # flat 16 GiB, which is a measurement rather than an extrapolation. Keep the regression
-    # for the large shards it was built for and let the measured value hold the floor.
-    Int computed_mem_gb = 4 + ceil((((11.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
+    # Floored at 16 GiB: 517 of 523 shards completed at a flat 16 before per-shard sizing, and
+    # the smallest measured shard (L=283k) peaks at 6.5, so the floor binds only where the
+    # request is already generous. Memory below 32 GiB does not change the CPU count anyway.
+    Int computed_mem_gb = 3 + ceil((((8.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
     Int final_mem_gb    = if computed_mem_gb > 16 then computed_mem_gb else 16
     # The task pins AMD Rome, so Cromwell provisions N2D custom, which allows up to 8 GiB/vCPU
     # (N1 was 6.5) and requires an even vCPU count (>1). Size at 8 and round to even so the
