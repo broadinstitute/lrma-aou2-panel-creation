@@ -42,8 +42,9 @@ wait_all(){  # runIds...; writes "runId STATUS" lines to $L/wait_state.txt
 }
 report(){  # $1=runId -> prints the job's report.txt, read from the output path Workbench records
   local p
-  p=$($W workflow job describe --job-id="$1" 2>/dev/null | awk -F': *' '/^Output bucket path:/{print $2}')
-  [ -n "$p" ] || { echo "no output path recorded for $1" >&2; return 1; }
+  # the path itself contains "gs://", so strip the label instead of splitting on colons
+  p=$($W workflow job describe --job-id="$1" 2>/dev/null | sed -n 's/^Output bucket path: *//p' | head -1)
+  case "$p" in gs://*) ;; *) echo "no valid output path recorded for $1: '$p'" >&2; return 1;; esac
   gcloud storage cat "$p/call-SecureAndPrune/report.txt"
 }
 
