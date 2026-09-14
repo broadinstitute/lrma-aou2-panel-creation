@@ -21,12 +21,20 @@ LIST="$(mktemp)"; WBJSON="$(mktemp)"; trap 'rm -f "$LIST" "$WBJSON"' EXIT
 
 # emit "<batchnum> READY|RUNNING <count>" per batch
 if [ "$BACKEND" = managed ]; then
+  # An expired Workbench login makes any `wb` call start an interactive browser login that
+  # listens on localhost:3000 and never returns under cron, which then blocks every later `wb`
+  # call ("Address already in use"). Hit 2026-09-12: prune dead ~2 days. Check auth first and
+  # skip this run cleanly instead.
+  if ! wb auth status 2>/dev/null | grep -q 'LOGGED IN'; then
+    echo "wb not logged in; skipping this run (fix: wb auth login)"; exit 0
+  fi
   # Two submission styles (see prune_batch.sh): plain per-chromosome jobs in `job list`, and
   # bulk CSV batches in `job batch list` (whose sub-jobs are hidden from `job list`). A bulk batch
   # is terminal when its own status is; a plain batch when all its chromosome jobs are.
   # (JSON via files: `python3 -` already uses stdin for the program text)
   wb workflow job list --limit=1000 --format=JSON > "$WBJSON" 2>/dev/null || true
-  wb workflow job batch list --format=JSON > "$WBJSON.batches" 2>/dev/null || true
+  # (`batch list` defaults to 10 rows; an unlimited call would silently drop older batches)
+  wb workflow job batch list --limit=1000 --format=JSON > "$WBJSON.batches" 2>/dev/null || true
   python3 - "$WBJSON" "$WBJSON.batches" <<'PY' > "$LIST"
 import json,sys,re,collections
 def load(f):
@@ -34,7 +42,7 @@ def load(f):
     except Exception as e: sys.stderr.write(f"{f} unparsable: {e}\n"); return None
 jobs=load(sys.argv[1]); batches=load(sys.argv[2])
 if jobs is None or batches is None: sys.exit(3)
-if len(jobs)>=1000: sys.stderr.write("wb job list hit its limit; refusing (possible truncation)\n"); sys.exit(3)
+if len(jobs)>=1000 or len(batches)>=1000: sys.stderr.write("wb list hit its limit; refusing (possible truncation)\n"); sys.exit(3)
 TERM={'COMPLETED','FAILED','CANCELLED'}
 st=collections.defaultdict(list)
 pre=re.compile(r'\.batch-0*(\d+)\.chr\d+\.'); dn=re.compile(r'^b0*(\d+)-chr\d+$'); bn=re.compile(r'^b0*(\d+)$')

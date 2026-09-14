@@ -169,7 +169,7 @@ res=$(run_case m9 mrerun); rc="${res%%|*}"; tmp="${res#*|}"
 
 echo "== driver 10: managed discovery marks 003 READY and 030 RUNNING =="
 tmp="$(mktemp -d)"; write_wb_json "$tmp/wb.json" mgood
-printf '#!/usr/bin/env bash\ncat "%s/wb.json"\n' "$tmp" > "$tmp/wb"; chmod +x "$tmp/wb"
+printf '#!/usr/bin/env bash\ncase "$*" in *"auth status"*) echo "LOGGED IN";; *) cat "%s/wb.json";; esac\n' "$tmp" > "$tmp/wb"; chmod +x "$tmp/wb"
 printf '#!/usr/bin/env bash\necho "stub prune $*"\n' > "$tmp/prune_batch.sh"; chmod +x "$tmp/prune_batch.sh"
 cp "$DRIVER" "$tmp/driver.sh"
 out=$(PRUNE_BACKEND=managed PATH="$tmp:$PATH" bash "$tmp/driver.sh" 2>&1)
@@ -185,7 +185,7 @@ echo "== driver 12: bulk batches: b003 COMPLETED -> READY, b030 RUNNING -> skip;
 tmp="$(mktemp -d)"; write_wb_json "$tmp/wb.json" mbulk
 cat > "$tmp/wb" <<EOF
 #!/usr/bin/env bash
-case "\$*" in *"job batch list"*) cat "$tmp/wb.json.batches";; *--batch-job-id=*) cat "$tmp/wb.json.sub";; *) cat "$tmp/wb.json";; esac
+case "\$*" in *"auth status"*) echo "LOGGED IN";; *"job batch list"*) cat "$tmp/wb.json.batches";; *--batch-job-id=*) cat "$tmp/wb.json.sub";; *) cat "$tmp/wb.json";; esac
 EOF
 cat > "$tmp/gcloud" <<EOF
 #!/usr/bin/env bash
@@ -196,6 +196,18 @@ cp "$DRIVER" "$tmp/driver.sh"
 out=$(PRUNE_BACKEND=managed PATH="$tmp:$PATH" bash "$tmp/driver.sh" 2>&1)
 { echo "$out" | grep -q 'pruning batch-003' && echo "$out" | grep -q 'batch-030 already pruned' && ! echo "$out" | grep -q 'stub prune 030'; } \
   && ok "driver bulk: 003 pruned, 030 skipped by marker" || bad "driver bulk: $out"
+
+echo "== driver 13: logged-out wb -> skip run cleanly, never call prune or job list =="
+tmp="$(mktemp -d)"
+cat > "$tmp/wb" <<EOF
+#!/usr/bin/env bash
+case "\$*" in *"auth status"*) echo "LOGGED OUT";; *) echo "called: \$*" >> "$tmp/wbcalls.log"; exit 1;; esac
+EOF
+printf '#!/usr/bin/env bash\necho "stub prune $*"\n' > "$tmp/prune_batch.sh"; chmod +x "$tmp/wb" "$tmp/prune_batch.sh"
+cp "$DRIVER" "$tmp/driver.sh"
+out=$(PRUNE_BACKEND=managed PATH="$tmp:$PATH" bash "$tmp/driver.sh" 2>&1); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q 'not logged in' && [ ! -s "$tmp/wbcalls.log" ] && ! echo "$out" | grep -q 'stub prune'; } \
+  && ok "driver logged out: rc=0, skipped, no wb list calls" || bad "driver logged out: rc=$rc out=$out calls=$(cat "$tmp/wbcalls.log" 2>/dev/null)"
 
 echo "----"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

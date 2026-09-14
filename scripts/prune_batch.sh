@@ -63,17 +63,23 @@ query_workflows_managed() {
   local limit=1000 bid
   # (JSON via files: `python3 -` already uses stdin for the program text)
   wb workflow job list --limit=$limit --format=JSON > "$WORK/wb.json" 2>/dev/null || true
-  wb workflow job batch list --format=JSON > "$WORK/wbb.json" 2>/dev/null || true
-  for bid in $(python3 - "$BATCH_N" "$WORK/wbb.json" <<'PY'
+  wb workflow job batch list --limit=$limit --format=JSON > "$WORK/wbb.json" 2>/dev/null || true
+  # `wb ... batch list` defaults to 10 rows (like `job list`); an unlimited call silently drops
+  # older batches, and a dropped bulk batch would look like "no jobs" -> its tree could be pruned
+  # from under a running batch if stale plain jobs for the same number exist. Hence the limit
+  # and the >= limit guard. (A failure inside $(...) in a for-list would not trip set -e, so
+  # the id list goes through a file and the exit status is checked explicitly.)
+  python3 - "$BATCH_N" "$WORK/wbb.json" "$limit" > "$WORK/bids.txt" <<'PY' || return 3
 import json,sys,re
-n=int(sys.argv[1])
+n,limit=int(sys.argv[1]),int(sys.argv[3])
 try: b=json.load(open(sys.argv[2]))
 except Exception: b=[]
+if len(b)>=limit: sys.stderr.write(f"wb batch list returned {len(b)} rows >= limit {limit}; refusing (possible truncation)\n"); sys.exit(3)
 for r in b:
     m=re.match(r'^b0*(\d+)$', r.get('displayName') or '')
     if m and int(m.group(1))==n: print(r['runId'])
 PY
-  ); do
+  for bid in $(cat "$WORK/bids.txt"); do
     wb workflow job list --batch-job-id="$bid" --limit=$limit --format=JSON > "$WORK/wb.sub.$bid.json" 2>/dev/null || true
   done
   python3 - "$BATCH_N" "$limit" "$WORK" <<'PY'
