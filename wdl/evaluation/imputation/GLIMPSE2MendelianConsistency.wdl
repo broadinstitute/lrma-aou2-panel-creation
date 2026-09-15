@@ -145,7 +145,7 @@ task CalculateMendelianMetrics {
     command <<<
         set -euxo pipefail
 
-        conda install -y -c bioconda -c conda-forge bcftools scikit-allel pandas numpy pyarrow
+        conda install -y -c bioconda -c conda-forge bcftools scikit-allel
 
         # Create mapping file to safely rename the GLIMPSE2 'INFO' tag on-the-fly.
         # NOTE: --rename-annots takes "old_name new_name"; the new name must be BARE
@@ -431,7 +431,7 @@ task CalculateMendelianMetrics {
         disk_type:          "SSD",
         preemptible_tries:  2,
         max_retries:        0,
-        docker:             "continuumio/miniconda3:latest"
+        docker:             "jupyter/scipy-notebook:latest"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
@@ -460,9 +460,7 @@ task PlotMendelianMetrics {
     
     command <<<
         set -euxo pipefail
-        
-        conda install -y -c bioconda -c conda-forge pandas numpy "matplotlib<=3.10" seaborn pyarrow
-        
+
         python - "~{sep=',' unfiltered_pkls}" "~{sep=',' filtered_pkls}" "~{sep=',' info05_pkls}" "~{pedigree}" "~{output_prefix}" <<-'EOF'
         import sys
         import pandas as pd
@@ -522,7 +520,25 @@ task PlotMendelianMetrics {
                     
                     for i, af_bin_label in enumerate(af_bin_labels):
                         plt_df_values = []
+                        tick_labels = []
                         for j, length_bin_label in enumerate(length_bin_labels):
+                            
+                            label_parts = []
+                            for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
+                                key = (af_bin_label, length_bin_label, in_trh, filter_condition)
+                                if key in agg_results:
+                                    nhr = agg_results[key]['nhr_per_trio']
+                                    mean_val = nhr.mean()
+                                else:
+                                    mean_val = 0.0
+                                
+                                # Use MathText spaces '\ ' to stagger the rows diagonally in one string
+                                padding = '\\ ' * 8 * g
+                                label_parts.append(f'${padding}\\langle N_{{l}} \\rangle={mean_val:.2f}$')
+                            
+                            bin_label = '\n'.join(label_parts) + '\n\n' + length_bin_label
+                            tick_labels.append(bin_label)
+
                             for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
                                 key = (af_bin_label, length_bin_label, in_trh, filter_condition)
                                 if key in agg_results:
@@ -531,7 +547,6 @@ task PlotMendelianMetrics {
                                     nhr = res['nhr_per_trio']
                                     
                                     error_rates_per_trio = np.divide(errs, nhr, out=np.full(num_trios, np.nan), where=(nhr > 0))
-                                    mean_num_non_hom_ref = nhr.mean()
                                     
                                     if filter_condition == 'unfiltered':
                                         min_tar_gp_label = 'unfiltered'
@@ -540,13 +555,8 @@ task PlotMendelianMetrics {
                                     else:
                                         min_tar_gp_label = 'INFO > 0.5'
                                     
-                                    spacing = '\n' * (g + 1)
-                                    len_text = spacing + f'$\\langle N_{{l}} \\rangle={mean_num_non_hom_ref:.2f}$'
-                                    if g == 2:
-                                        len_text += '\n\n' + length_bin_label
-                                    
                                     plt_df_values.extend(
-                                        [[min_tar_gp_label, len_text, error_rates_per_trio[t]]
+                                        [[min_tar_gp_label, length_bin_label, error_rates_per_trio[t]]
                                          for t in range(num_trios) if not np.isnan(error_rates_per_trio[t])]
                                     )
                                         
@@ -554,6 +564,9 @@ task PlotMendelianMetrics {
                             plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
                             hue_order = ['unfiltered', 'GP > 0.9', 'INFO > 0.5']
                             sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', hue_order=hue_order, ax=ax[i], legend=i==2)
+                            
+                            ax[i].set_xticks(range(len(length_bin_labels)))
+                            ax[i].set_xticklabels(tick_labels)
 
                             ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
                             ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n')
@@ -583,15 +596,32 @@ task PlotMendelianMetrics {
                     
                     for i, af_bin_label in enumerate(af_bin_labels):
                         plt_df_values = []
+                        tick_labels = []
                         for j, length_bin_label in enumerate(length_bin_labels):
+                            
+                            label_parts = []
+                            for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
+                                key = (af_bin_label, length_bin_label, in_trh, filter_condition)
+                                if key in agg_results:
+                                    num_loci = len(agg_results[key]['locus_rates'])
+                                    mean_nt = agg_results[key]['nhr_per_trio'].sum() / max(num_loci, 1)
+                                else:
+                                    num_loci = 0
+                                    mean_nt = 0.0
+                                
+                                padding = '\\ ' * 8 * g
+                                line1 = f'${padding}\\langle N_{{t}} \\rangle={mean_nt:.2f}$'
+                                line2 = f'${padding}N_{{l}}={num_loci}$'
+                                label_parts.append(f"{line1}\n{line2}")
+
+                            bin_label = '\n'.join(label_parts) + '\n\n' + length_bin_label
+                            tick_labels.append(bin_label)
+                            
                             for g, filter_condition in enumerate(['unfiltered', 'GP09', 'INFO05']):
                                 key = (af_bin_label, length_bin_label, in_trh, filter_condition)
                                 if key in agg_results:
                                     res = agg_results[key]
                                     error_rates_per_locus = res['locus_rates']
-                                    num_loci = len(error_rates_per_locus)
-                                    
-                                    mean_num_non_hom_ref_trios = res['nhr_per_trio'].sum() / max(num_loci, 1)
                                     
                                     if filter_condition == 'unfiltered':
                                         min_tar_gp_label = 'unfiltered'
@@ -599,20 +629,18 @@ task PlotMendelianMetrics {
                                         min_tar_gp_label = 'GP > 0.9'
                                     else:
                                         min_tar_gp_label = 'INFO > 0.5'
-                                    
-                                    spacing = '\n' * (g + 1)
-                                    len_text = spacing + f'$\\langle N_{{t}} \\rangle$={mean_num_non_hom_ref_trios:.2f}\n$N_{{l}}={num_loci}$'
-                                    if g == 2:
-                                        len_text += '\n\n' + length_bin_label
 
                                     plt_df_values.extend(
-                                        [[min_tar_gp_label, len_text, rate] for rate in error_rates_per_locus]
+                                        [[min_tar_gp_label, length_bin_label, rate] for rate in error_rates_per_locus]
                                     )
 
                         if plt_df_values:
                             plt_df = pd.DataFrame(plt_df_values, columns=['MIN_TAR_GP_TEXT', 'LENGTH_BIN_TEXT', 'ERROR_RATE'])
                             hue_order = ['unfiltered', 'GP > 0.9', 'INFO > 0.5']
                             sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='ERROR_RATE', hue='MIN_TAR_GP_TEXT', hue_order=hue_order, ax=ax[i], legend=i==2)
+
+                            ax[i].set_xticks(range(len(length_bin_labels)))
+                            ax[i].set_xticklabels(tick_labels)
 
                             ax[i].set_xlabel('ALT length - REF length (bp)' if i == len(af_bin_labels) - 1 else None)
                             ax[i].set_ylabel(('panel allele frequency\n' if i == 1 else '\n\n')
@@ -659,7 +687,7 @@ task PlotMendelianMetrics {
         disk_type:          "SSD",
         preemptible_tries:  2,
         max_retries:        0,
-        docker:             "continuumio/miniconda3:latest"
+        docker:             "jupyter/scipy-notebook:latest"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
