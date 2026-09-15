@@ -4,8 +4,8 @@ workflow Glimpse2SVImputationFixupInfo {
     input {
         Array[File] original_imputed_vcfs
         Array[File] original_imputed_vcf_idxs
-        File panel_popped_sites_only_vcf
-        File panel_popped_sites_only_vcf_idx
+        Array[File] panel_popped_sites_only_vcfs
+        Array[File] panel_popped_sites_only_vcf_idxs
         Array[Int] batch_sizes
         Array[String] chromosomes
         Array[Array[String]] regions
@@ -15,23 +15,18 @@ workflow Glimpse2SVImputationFixupInfo {
     }
 
     scatter (contig_idx in range(length(chromosomes))) {
-        File contig_vcf = original_imputed_vcfs[contig_idx]
-        File contig_vcf_idx = original_imputed_vcf_idxs[contig_idx]
-        String chromosome = chromosomes[contig_idx]
         Array[String] contig_regions = regions[contig_idx]
 
         scatter (shard_idx in range(length(contig_regions))) {
-            String region = contig_regions[shard_idx]
-
             call FixupInfo {
                 input:
-                    original_vcf = contig_vcf,
-                    original_vcf_idx = contig_vcf_idx,
-                    panel_popped_sites_only_vcf = panel_popped_sites_only_vcf,
-                    panel_popped_sites_only_vcf_idx = panel_popped_sites_only_vcf_idx,
-                    region = region,
+                    original_vcf = original_imputed_vcfs[contig_idx],
+                    original_vcf_idx = original_imputed_vcf_idxs[contig_idx],
+                    panel_popped_sites_only_vcf = panel_popped_sites_only_vcfs[contig_idx],
+                    panel_popped_sites_only_vcf_idx = panel_popped_sites_only_vcf_idxs[contig_idx],
+                    region = contig_regions[shard_idx],
                     batch_sizes = batch_sizes,
-                    output_prefix = output_basename + "." + chromosome + ".shard_" + shard_idx,
+                    output_prefix = output_basename + "." + chromosomes[contig_idx] + ".shard_" + shard_idx,
                     docker = rust_docker
             }
         }
@@ -40,7 +35,7 @@ workflow Glimpse2SVImputationFixupInfo {
             input:
                 vcfs = FixupInfo.fixed_vcf,
                 vcf_idxs = FixupInfo.fixed_vcf_idx,
-                output_name = output_basename + "." + chromosome,
+                output_name = output_basename + "." + chromosomes[contig_idx],
                 docker = rust_docker
         }
     }
