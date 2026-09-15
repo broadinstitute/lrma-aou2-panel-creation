@@ -11,7 +11,7 @@ workflow Glimpse2SVImputationFixupInfo {
         Array[Array[String]] regions
         
         String output_basename
-        String rust_docker
+        String docker
     }
 
     scatter (contig_idx in range(length(chromosomes))) {
@@ -27,7 +27,7 @@ workflow Glimpse2SVImputationFixupInfo {
                     region = contig_regions[shard_idx],
                     batch_sizes = batch_sizes,
                     output_prefix = output_basename + "." + chromosomes[contig_idx] + ".shard_" + shard_idx,
-                    docker = rust_docker
+                    docker = docker
             }
         }
 
@@ -36,7 +36,7 @@ workflow Glimpse2SVImputationFixupInfo {
                 vcfs = FixupInfo.fixed_vcf,
                 vcf_idxs = FixupInfo.fixed_vcf_idx,
                 output_name = output_basename + "." + chromosomes[contig_idx],
-                docker = rust_docker
+                docker = docker
         }
     }
 
@@ -79,7 +79,7 @@ task FixupInfo {
         docker: docker
         memory: mem_gb + " GiB"
         cpu: cpu
-        disks: "local-disk " + disk_gb + " HDD"
+        disks: "local-disk " + disk_gb + " SSD"
         preemptible: 3
     }
 
@@ -125,7 +125,7 @@ task ConcatVCFs {
         docker: docker
         memory: mem_gb + " GiB"
         cpu: cpu
-        disks: "local-disk " + disk_gb + " HDD"
+        disks: "local-disk " + disk_gb + " SSD"
         preemptible: 3
     }
 
