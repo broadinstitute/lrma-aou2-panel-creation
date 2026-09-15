@@ -4,8 +4,8 @@ workflow Glimpse2SVImputationFixupInfo {
     input {
         Array[File] original_imputed_vcfs
         Array[File] original_imputed_vcf_idxs
-        Array[File] panel_popped_sites_only_vcfs
-        Array[File] panel_popped_sites_only_vcf_idxs
+        Array[File] panel_popped_sites_only_vcf_gzs
+        Array[File] panel_popped_sites_only_vcf_gz_tbis
         Array[Int] batch_sizes
         Array[String] chromosomes
         Array[Array[String]] regions
@@ -22,8 +22,8 @@ workflow Glimpse2SVImputationFixupInfo {
                 input:
                     original_vcf = original_imputed_vcfs[contig_idx],
                     original_vcf_idx = original_imputed_vcf_idxs[contig_idx],
-                    panel_popped_sites_only_vcf = panel_popped_sites_only_vcfs[contig_idx],
-                    panel_popped_sites_only_vcf_idx = panel_popped_sites_only_vcf_idxs[contig_idx],
+                    panel_popped_sites_only_vcf_gz = panel_popped_sites_only_vcf_gzs[contig_idx],
+                    panel_popped_sites_only_vcf_gz_tbi = panel_popped_sites_only_vcf_gz_tbis[contig_idx],
                     region = contig_regions[shard_idx],
                     batch_sizes = batch_sizes,
                     output_prefix = output_basename + "." + chromosomes[contig_idx] + ".shard_" + shard_idx,
@@ -51,8 +51,8 @@ task FixupInfo {
     input {
         File original_vcf
         File original_vcf_idx
-        File panel_popped_sites_only_vcf
-        File panel_popped_sites_only_vcf_idx
+        File panel_popped_sites_only_vcf_gz
+        File panel_popped_sites_only_vcf_gz_tbi
         String region
         Array[Int] batch_sizes
         String output_prefix
@@ -61,7 +61,7 @@ task FixupInfo {
         String docker
         Int mem_gb = 8
         Int cpu = 2
-        Int disk_gb = ceil(3 * size(original_vcf, "GiB") + size(panel_popped_sites_only_vcf, "GiB") + 20)
+        Int disk_gb = ceil(3 * size(original_vcf, "GiB") + size(panel_popped_sites_only_vcf_gz, "GiB") + 20)
     }
 
     command <<<
@@ -71,7 +71,7 @@ task FixupInfo {
         chmod +x fixup-info
 
         bcftools view -r ~{region} --regions-overlap 0 ~{original_vcf} | \
-            ./fixup-info ~{panel_popped_sites_only_vcf} ~{sep="," batch_sizes} ~{output_prefix}.batched_info.tsv.gz | \
+            ./fixup-info ~{panel_popped_sites_only_vcf_gz} ~{sep="," batch_sizes} ~{output_prefix}.batched_info.tsv.gz | \
             bcftools view -W=tbi -Oz -o ~{output_prefix}.vcf.gz
     >>>
 
