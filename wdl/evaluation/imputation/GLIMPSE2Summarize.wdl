@@ -276,7 +276,7 @@ task PlotSummaries {
     command <<<
         set -euxo pipefail
         
-        conda install -y -c bioconda -c conda-forge numpy pandas "matplotlib<=3.10" seaborn scipy
+        conda install -y -c bioconda -c conda-forge python=3.12 numpy pandas "matplotlib<=3.10" seaborn scipy
 
         python - "~{sep=',' summary_pkls}" \
                  "~{population_tsv}" \
@@ -563,7 +563,7 @@ task PlotSummaries {
         disk_type:          "SSD",
         preemptible_tries:  2,
         max_retries:        0,
-        docker:             "continuumio/miniconda3:latest"
+        docker:             "continuumio/miniconda3:26.7.1"
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
