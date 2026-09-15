@@ -107,6 +107,12 @@ workflow PostprocessBubblePanel {
         extra_args_shard = ""
     }
 
+    call ConvertToVcfGz as ConvertToVcfGzPoppedSitesOnly { input:
+        vcf = ConcatPoppedSitesOnly.concatenated_vcf,
+        vcf_idx = ConcatPoppedSitesOnly.concatenated_vcf_idx,
+        output_prefix = output_prefix + ".popped.sites"
+    }
+
     call ConcatVcfs.ConcatVcfs as ConcatBubbleSplit { input:
         vcfs = SplitBubblesPanel.split_bubbles_vcf,
         vcf_idxs = SplitBubblesPanel.split_bubbles_vcf_idx,
@@ -181,6 +187,8 @@ workflow PostprocessBubblePanel {
         File panel_popped_vcf_idx = ConcatPopped.concatenated_vcf_idx
         File panel_popped_sites_only_vcf = ConcatPoppedSitesOnly.concatenated_vcf
         File panel_popped_sites_only_vcf_idx = ConcatPoppedSitesOnly.concatenated_vcf_idx
+        File panel_popped_sites_only_vcf_gz = ConvertToVcfGzPoppedSitesOnly.vcf_gz
+        File panel_popped_sites_only_vcf_gz_tbi = ConvertToVcfGzPoppedSitesOnly.vcf_gz_tbi
 
         File panel_bubble_split_vcf = ConcatBubbleSplit.concatenated_vcf
         File panel_bubble_split_vcf_idx = ConcatBubbleSplit.concatenated_vcf_idx
