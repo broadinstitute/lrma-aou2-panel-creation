@@ -110,8 +110,8 @@ task ConcatVCFs {
         # Write array to file to bypass maximum command-line length limits 
         # in case there are hundreds of shard inputs
         cat <<EOF > vcf_list.txt
-        ~{sep='\n' vcfs}
-        EOF
+~{sep='\n' vcfs}
+EOF
 
         bcftools concat \
             --naive \
