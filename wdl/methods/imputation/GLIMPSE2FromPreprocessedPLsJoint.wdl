@@ -55,6 +55,12 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
         # Built once and reused. Compiling in each pop task would repeat the same Cargo build
         # thousands of times in production.
         File pop_glimpse2_binary
+        # Recomputes INFO/AF from the popped genotype posteriors (Samuel Lee's fixup-info,
+        # resources/fixup-info). pop-glimpse2 rebuilds GP for each popped allele but copies AF and
+        # INFO unchanged from the split record GLIMPSE2 scored, so without this those two fields do
+        # not describe the genotypes in the file (batch 008 chr22: INFO off by >0.1 on 20% of
+        # sites). Unset keeps the old behaviour.
+        File? fixup_info_binary
 
         # Pinned by digest. GCR tags are mutable, so a repush would silently
         # change what runs. This digest is tag 1.0.0-2cee597-1778869818 as of 2026-07-31.
@@ -144,6 +150,7 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
             panel_id_split_vcf_gz = panel_id_split_vcf_gz,
             panel_id_split_vcf_gz_tbi = panel_id_split_vcf_gz_tbi,
             pop_glimpse2_binary = pop_glimpse2_binary,
+            fixup_info_binary = fixup_info_binary,
             region = pop_regions[k],
             zones = zones,
             output_prefix = output_prefix + ".glimpse2.popped"
@@ -776,7 +783,8 @@ task PopAndMarginalizeCollisions {
         File panel_id_split_vcf_gz_tbi
         
         File pop_glimpse2_binary
-        
+        File? fixup_info_binary
+
         String region
         String output_prefix
 
@@ -853,9 +861,25 @@ task PopAndMarginalizeCollisions {
         # the sort may also be extraneous, but we keep it in to guard against getting out of sync with the popped panel
         # --threads is ADDITIONAL worker threads, so 1 is 2 total on this task's 2 cpu.
         bcftools view --threads 1 -r ~{region} --regions-overlap 0 ~{panel_bubble_split_sites_only_vcf} -Oz -o panel.bubble.split.sites.shard.vcf.gz
-        bcftools view --threads 1 -r ~{region} --regions-overlap 0 ~{posteriors_vcf} | \
-            "$POP_BIN" ~{panel_id_split_vcf_gz} panel.bubble.split.sites.shard.vcf.gz | \
-            bcftools sort --max-mem=2G -W -Ob -o ~{output_prefix}.bcf
+        if [ -n "~{fixup_info_binary}" ]; then
+            # Recompute AF/INFO from the popped GPs, over all samples in this file as one batch.
+            # fixup-info also sets ID and INFO/ID/RAF from the panel's popped sites (the id.split
+            # VCF), which pop-glimpse2 already writes identically.
+            cp "~{fixup_info_binary}" fixup-info && chmod +x fixup-info
+            N_SAMPLES=$(bcftools query -l ~{posteriors_vcf} | awk 'END{print NR}')
+            bcftools view --threads 1 -r ~{region} --regions-overlap 0 ~{panel_id_split_vcf_gz} -Oz -o panel.id.split.shard.vcf.gz
+            bcftools view --threads 1 -r ~{region} --regions-overlap 0 ~{posteriors_vcf} | \
+                "$POP_BIN" ~{panel_id_split_vcf_gz} panel.bubble.split.sites.shard.vcf.gz | \
+                ./fixup-info panel.id.split.shard.vcf.gz "$N_SAMPLES" batched_info.tsv.gz | \
+                bcftools sort --max-mem=2G -W -Ob -o ~{output_prefix}.bcf
+            # A popped record missing from the panel sites would get ID "." here: refuse.
+            N_MISSING=$(bcftools query -i 'INFO/ID="."' -f '.\n' ~{output_prefix}.bcf | awk 'END{print NR}')
+            [ "$N_MISSING" = 0 ] || { echo "ERROR: $N_MISSING popped records not found in panel sites" >&2; exit 1; }
+        else
+            bcftools view --threads 1 -r ~{region} --regions-overlap 0 ~{posteriors_vcf} | \
+                "$POP_BIN" ~{panel_id_split_vcf_gz} panel.bubble.split.sites.shard.vcf.gz | \
+                bcftools sort --max-mem=2G -W -Ob -o ~{output_prefix}.bcf
+        fi
 
     >>>
 

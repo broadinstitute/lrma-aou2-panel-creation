@@ -4,7 +4,7 @@ export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 B=$(printf '%03d' "$1"); BK=gs://longreadsphase2imputation; D=$BK/deliverables/batch-$B
 out=$(gcloud storage ls "$D/" 2>&1); rc=$?
 [ $rc = 0 ] || { echo "batch-$B: FAIL listing deliverables: $(echo "$out" | tail -1)"; exit 1; }
-nb=$(grep -c 'popped\.bcf$' <<<"$out"); nc=$(grep -c 'popped\.bcf\.csi$' <<<"$out"); nm=$(grep -c 'PRUNED\.ok$' <<<"$out"); no=$(grep -vcE 'popped\.bcf(\.csi)?$|PRUNED\.ok$' <<<"$out")
+nb=$(grep -c 'popped\.bcf$' <<<"$out"); nc=$(grep -c 'popped\.bcf\.csi$' <<<"$out"); nm=$(grep -c 'PRUNED\.ok$' <<<"$out"); no=$(grep -vcE 'popped\.bcf(\.csi)?$|PRUNED\.ok$|INFO_FIXED\.ok$' <<<"$out")
 run=$(gcloud storage ls "$BK/glimpse2_phase/batch$B/**" 2>&1 | tail -1)
 case "$run" in *"matched no objects"*) gone=yes;; *) gone="NO: $run";; esac
 export GCS_OAUTH_TOKEN=$(gcloud auth print-access-token 2>/dev/null)
