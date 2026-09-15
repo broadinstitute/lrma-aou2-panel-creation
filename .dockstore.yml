@@ -45,6 +45,9 @@ workflows:
 - name: GLIMPSE2FromPreprocessedPLsJoint
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/GLIMPSE2FromPreprocessedPLsJoint.wdl
+- name: Glimpse2SVImputationFixupInfo
+  subclass: wdl
+  primaryDescriptorPath: /wdl/methods/imputation/Glimpse2SVImputationFixupInfo.wdl
 - name: PreprocessPLsGVCF
   subclass: wdl
   primaryDescriptorPath: /wdl/methods/imputation/PreprocessPLsGVCF.wdl
