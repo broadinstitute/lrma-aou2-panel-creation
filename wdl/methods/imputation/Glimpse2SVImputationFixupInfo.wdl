@@ -61,7 +61,7 @@ task FixupInfo {
         String docker
         Int mem_gb = 8
         Int cpu = 2
-        Int disk_gb = ceil(3 * size(original_vcf, "GiB") + size(panel_popped_sites_only_vcf_gz, "GiB") + 20)
+        Int disk_gb = ceil(2 * size(original_vcf, "GiB") + size(panel_popped_sites_only_vcf_gz, "GiB") + 20)
     }
 
     command <<<
