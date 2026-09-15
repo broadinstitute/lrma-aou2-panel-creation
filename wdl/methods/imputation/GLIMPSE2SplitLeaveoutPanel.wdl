@@ -107,11 +107,9 @@ workflow GLIMPSE2SplitLeaveoutPanel {
             }
         }
 
-        # chunks_tsv is the full panel's file, carried through unchanged: same boundaries, so it
-        # still describes these shards, and downstream reads it for provenance rather than for
-        # control flow.
+        # Same boundaries as the full panel's chunks.tsv by construction. The struct no longer
+        # carries chunks_tsv (sl_aou2_v1 d59cd42 moved it to a separate output).
         ChunkedPanelChromosome leaveout_chunked_panel_chromosome = object {
-            chunks_tsv: full_panel_chunks_tsvs[i],
             input_regions: input_regions,
             output_regions: output_regions,
             panel_split_chunk_bins: ChunkedGLIMPSE2SplitReference.panel_split_chunk_bin,

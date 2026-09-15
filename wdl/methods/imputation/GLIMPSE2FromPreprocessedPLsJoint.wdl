@@ -64,19 +64,16 @@ workflow GLIMPSE2FromPreprocessedPLsJoint {
 
         # Pinned by digest. GCR tags are mutable, so a repush would silently
         # change what runs. This digest is tag 1.0.0-2cee597-1778869818 as of 2026-07-31.
-        # Enables checkpointing; note it contains bcftools/htslib 1.16.
-        #
-        # NB the staged input CSVs override this with :tfenne-opt, which IS a mutable tag --
-        # pinning it there matters more than pinning the default here, and that is a change to
-        # the run config.
+        # Enables checkpointing; note it contains bcftools/htslib 1.16. The production batch CSVs
+        # (inputs/bulk, inputs/bulk_v2) do not override it, so this digest is what runs.
         String glimpse2_docker = "us.gcr.io/broad-gotc-prod/imputation-glimpse2@sha256:c3d64c5af3b8e789bcda94451931f09073d3a8750fc7375a8d44246d193e8a21"
 
         # VWB's Batch backend is restricted to us-central1-a. Task-level attempts to provide
         # a wider zone pool were measured to be inert, so state the location that actually
         # runs instead of advertising unavailable zones. All five task types defined below
         # request AMD Rome, which makes Cromwell select N2D instead of its N1 default. Both
-        # families are available in us-central1-a, while the live Cloud Billing catalog prices
-        # N2D custom Spot CPU and RAM 35% below N1 custom Spot.
+        # families are available in us-central1-a; N2D custom Spot CPU and RAM list ~35% below
+        # N1 custom Spot (billing catalog, 2026-08-31).
         String zones = "us-central1-a"
     }
 
@@ -218,7 +215,8 @@ struct RuntimeAttr {
 }
 
 struct ChunkedPanelChromosome {
-    String chunks_tsv
+    # chunks_tsv was dropped from the producer (sl_aou2_v1 d59cd42). Panel JSONs written before
+    # that still carry it; Cromwell coerces JSON to a struct field by field and ignores extra keys.
     Array[String] input_regions
     Array[String] output_regions
     Array[String] panel_split_chunk_bins
@@ -409,25 +407,22 @@ task GLIMPSE2Phase {
     # since linear predicts 58.8 GiB for chr7 s12 at 8 threads and it succeeded on 40. And
     # cgroup memory.peak counts page cache, so this is an upper bound on demand.
     #
-    # Request AMD Rome in the runtime block so Cromwell selects N2D rather than its N1 custom
-    # default. The live Cloud Billing catalog prices us-central1 N2D custom Spot at
-    # $0.01224/vCPU-hour and $0.001640/GiB-hour, versus $0.01885 and $0.002526 for N1: 35%
-    # less for both resources that dominate this task. This is hard-coded deliberately:
-    # Cromwell validates a cpuPlatform key wired to an optional String as present even when
-    # empty, then sends minCpuPlatform="" to Batch. us-central1-a offers both N1 and N2D.
+    # cpuPlatform "AMD Rome" (N2D) is hard-coded in the runtime block rather than an optional
+    # input: Cromwell validates a cpuPlatform key wired to an optional String as present even
+    # when empty, then sends minCpuPlatform="" to Batch.
+    #
     # Floored at 16 GiB: 517 of 523 shards completed at a flat 16 before per-shard sizing, and
     # the smallest measured shard (L=283k) peaks at 6.5, so the floor binds only where the
     # request is already generous. Memory below 32 GiB does not change the CPU count anyway.
     Int computed_mem_gb = 3 + ceil((((8.0 * phase_threads) * phase_kpbwt) * n_variants) / 1000000000.0)
     Int final_mem_gb    = if computed_mem_gb > 16 then computed_mem_gb else 16
-    # The task pins AMD Rome, so Cromwell provisions N2D custom, which allows up to 8 GiB/vCPU
-    # (N1 was 6.5) and requires an even vCPU count (>1). Size at 8 and round to even so the
-    # requested shape matches what Batch provisions instead of Cromwell silently widening it:
-    # at 6.5 a 32/64 GiB shard requested 6/10 vCPUs and Batch rounded up to 8/16; at 8.0 it is
-    # 4/8, halving the vCPU bill for those shards while keeping the 4 GLIMPSE threads covered.
+    # The task pins AMD Rome, so Cromwell provisions N2D custom: at most 8 GiB per vCPU, and
+    # N2DCustomMachineType.validateCpu (Cromwell 91) rounds the vCPU count up to a power of two
+    # up to 16, then to a multiple of 16. Rounding the same way here makes the request what
+    # runs: an even-only rule asked 6 for 33-48 GiB shards and Batch gave 8 (1,888 attempts).
     Int ratio_min_cpu = ceil(final_mem_gb / 8.0)
     Int unrounded_cpu = if ratio_min_cpu > phase_threads then ratio_min_cpu else phase_threads
-    Int final_cpu     = unrounded_cpu + (unrounded_cpu % 2)
+    Int final_cpu     = if unrounded_cpu <= 2 then 2 else if unrounded_cpu <= 4 then 4 else if unrounded_cpu <= 8 then 8 else if unrounded_cpu <= 16 then 16 else ((unrounded_cpu + 15) / 16) * 16
 
     # Sized from the regional inputs rather than a flat 50 GB. The old 17-GB measured
     # high-water included localization of the full chromosome PL BCF into every phase shard.
@@ -462,7 +457,8 @@ task GLIMPSE2Phase {
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
     Int eff_ratio_cpu = ceil(eff_mem_gb / 8.0)
     Int eff_unrounded = if eff_ratio_cpu > phase_threads then eff_ratio_cpu else phase_threads
-    Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_unrounded + (eff_unrounded % 2)])
+    Int eff_n2d_cpu   = if eff_unrounded <= 2 then 2 else if eff_unrounded <= 4 then 4 else if eff_unrounded <= 8 then 8 else if eff_unrounded <= 16 then 16 else ((eff_unrounded + 15) / 16) * 16
+    Int eff_cpu       = select_first([runtime_attr.cpu_cores, eff_n2d_cpu])
     command <<<
         set -euxo pipefail
 
@@ -928,7 +924,7 @@ task RemapSampleNames {
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     # Same partial-override fix as the other tasks: select_first is per field, so overriding
-    # only mem_gb would keep a cpu computed for the default memory and breach the N1 ratio.
+    # only mem_gb would keep a cpu computed for the default memory and breach the N2D ratio.
     Float eff_mem_gb  = select_first([runtime_attr.mem_gb, default_attr.mem_gb])
     Int eff_ratio_cpu = ceil(eff_mem_gb / 8.0)
     Int eff_unrounded = if eff_ratio_cpu > 2 then eff_ratio_cpu else 2

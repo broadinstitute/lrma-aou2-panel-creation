@@ -1,6 +1,8 @@
 #!/bin/bash
 # verify_pruned_batch.sh N: storage-only check that batch N was cleaned up correctly.
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
+# bcftools downloads a remote file's index into the working directory; keep that out of the repo.
+cd "$(mktemp -d)" || exit 1
 B=$(printf '%03d' "$1"); BK=gs://longreadsphase2imputation; D=$BK/deliverables/batch-$B
 out=$(gcloud storage ls "$D/" 2>&1); rc=$?
 [ $rc = 0 ] || { echo "batch-$B: FAIL listing deliverables: $(echo "$out" | tail -1)"; exit 1; }

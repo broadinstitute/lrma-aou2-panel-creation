@@ -8,3 +8,6 @@ resources/extract-bubble-PLs/target
 # python bytecode
 __pycache__/
 *.pyc
+
+# local Cromwell run logs at the repo root
+cromwell-workflow-logs/

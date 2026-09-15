@@ -129,7 +129,9 @@ FLOOR = float(f.group(1)) if f else 0.0
 mem = max(FLOOR, CONST + math.ceil(COEFF * t * kp * L / 1e9))
 r = math.ceil(mem / 8.0)
 u = r if r > t else t
-print(int(mem), u + (u % 2))' "$1" "$2" "$3" "$WDL"
+# N2D custom vCPU rule (Cromwell 91 N2DCustomMachineType.validateCpu): power of two up to 16.
+cpu = 2 if u <= 2 else 4 if u <= 4 else 8 if u <= 8 else 16 if u <= 16 else ((u + 15) // 16) * 16
+print(int(mem), cpu)' "$1" "$2" "$3" "$WDL"
 }
 
 # Every shard observed to OOM at 16 GiB must now be sized above 16; the one that passed at 16

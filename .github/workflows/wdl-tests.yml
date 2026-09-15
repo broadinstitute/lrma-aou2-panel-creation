@@ -28,6 +28,10 @@ jobs:
         run: |
           python3 test/wdl/check-command-blocks.py wdl/methods/imputation/GLIMPSE2FromPreprocessedPLsJoint.wdl
           python3 test/wdl/check-command-blocks.py wdl/methods/imputation/GLIMPSE2ChunkAndSplitPanel.wdl
+          python3 test/wdl/check-command-blocks.py wdl/methods/imputation/SecureAndPruneBatch.wdl
+          python3 test/wdl/check-command-blocks.py wdl/methods/imputation/FixupInfoDeliverables.wdl
+      - name: 'cloud cleanup workflow: every refusal path'
+        run: bash scripts/tests/test_secure_and_prune_batch.sh
       - name: 'task command blocks (repo-wide, advisory)'
         continue-on-error: true
         run: |
