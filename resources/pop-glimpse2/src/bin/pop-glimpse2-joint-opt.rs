@@ -1,5 +1,5 @@
 use flate2::read::MultiGzDecoder; 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write, BufWriter};
@@ -9,8 +9,6 @@ use std::time::Instant;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 struct Record {
-    raf: Option<String>,
-    af: Option<String>,
     info_val: Option<String>,
     atomic_ids: Vec<String>,
 }
@@ -42,7 +40,7 @@ fn format_float(val: f32) -> String {
 
 fn process_group(
     group_lines: &[(String, String)],
-    id_buffer: &HashMap<String, (u32, String, String, String)>,
+    id_buffer: &HashMap<String, (u32, String, String, String, String)>,
     max_alleles: usize,
     out_handle: &mut impl Write,
 ) {
@@ -59,21 +57,18 @@ fn process_group(
     let num_alleles = group_lines.len();
 
     let mut records: Vec<Record> = Vec::with_capacity(num_alleles);
-    let mut all_atomic_ids = HashSet::new();
+    // for each atomic variant, the indices of the path records that contain it
+    let mut carriers: HashMap<String, Vec<usize>> = HashMap::new();
     
     let mut hap_probs: Vec<Vec<(f32, f32)>> = vec![vec![(0.0, 0.0); num_alleles]; num_samples];
 
     for (a, (line, site_info)) in group_lines.iter().enumerate() {
         let fields: Vec<&str> = line.trim_end().split('\t').collect();
         
-        let mut raf = None;
-        let mut af = None;
         let mut info_val = None;
         
         for item in fields[7].split(';') {
-            if let Some(v) = item.strip_prefix("RAF=") { raf = Some(v.to_string()); }
-            else if let Some(v) = item.strip_prefix("AF=") { af = Some(v.to_string()); }
-            else if let Some(v) = item.strip_prefix("INFO=") { info_val = Some(v.to_string()); }
+            if let Some(v) = item.strip_prefix("INFO=") { info_val = Some(v.to_string()); }
         }
         
         let mut atomic_ids = Vec::new();
@@ -83,7 +78,7 @@ fn process_group(
                 for j in replaced_id.split(':').map(|s| s.trim()) {
                     if id_buffer.contains_key(j) {
                         atomic_ids.push(j.to_string());
-                        all_atomic_ids.insert(j.to_string());
+                        match carriers.get_mut(j) { Some(v) => v.push(a), None => { carriers.insert(j.to_string(), vec![a]); } }
                     } else {
                         panic!("Error: Variant ID '{}' not found in the ID buffer. Ensure your biallelic VCF contains this ID and the window size is large enough.", j);
                     }
@@ -93,7 +88,7 @@ fn process_group(
         }
 
         records.push(Record {
-            raf, af, info_val, atomic_ids,
+            info_val, atomic_ids,
         });
 
         let fmt: Vec<&str> = fields[8].split(':').collect();
@@ -138,7 +133,7 @@ fn process_group(
     }
 
     let mut atomic_sample_dists: HashMap<String, Vec<PhasedDist>> = HashMap::new();
-    for id in &all_atomic_ids {
+    for id in carriers.keys() {
         atomic_sample_dists.insert(id.clone(), vec![PhasedDist { p0: 0.0, p1: 0.0 }; num_samples]);
     }
     
@@ -186,7 +181,7 @@ fn process_group(
         }
     }
 
-    let mut sorted_atomic_vars: Vec<_> = all_atomic_ids.into_iter().collect();
+    let mut sorted_atomic_vars: Vec<String> = carriers.keys().cloned().collect();
     
     sorted_atomic_vars.sort_by(|a, b| {
         let data_a = id_buffer.get(a);
@@ -208,12 +203,37 @@ fn process_group(
         let var_data = &id_buffer[&assigned_id];
         let coord = var_data.0;
         
-        let t_rec = records.iter().find(|r| r.atomic_ids.contains(&assigned_id)).unwrap();
-        
+        // RAF comes from the variant's record in the biallelic ID VCF. AF and INFO are computed
+        // below from the same haplotype probabilities as GT, DS and GP. The GLIMPSE2 INFO of the
+        // paths is written as INFO_BUBBLE_FIRST and INFO_BUBBLE_MAX.
+        let carrying: &Vec<usize> = &carriers[&assigned_id];
+        let t_rec = &records[carrying[0]];
+        let path_info_max = carrying.iter().filter_map(|&a| records[a].info_val.as_ref().and_then(|v| v.parse::<f64>().ok())).fold(f64::NAN, f64::max);
+
         let mut new_info = vec![format!("ID={}", assigned_id)];
-        if let Some(v) = &t_rec.raf { new_info.push(format!("RAF={}", v)); }
-        if let Some(v) = &t_rec.af { new_info.push(format!("AF={}", v)); }
-        if let Some(v) = &t_rec.info_val { new_info.push(format!("INFO={}", v)); }
+        if !var_data.4.is_empty() { new_info.push(format!("RAF={}", var_data.4)); }
+
+        let dists = atomic_sample_dists.get(&assigned_id).unwrap_or(&empty_dists);
+
+        // IMPUTE INFO of the GP written here is 1 - sum_i Var(DS_i) / (2N af (1-af)), with
+        // Var(DS_i) = p0(1-p0) + p1(1-p1) for independent haplotypes. It is "." when af is 0 or 1.
+        // Probabilities below 2e-4 come from the 1e-5 clamp in hap_probs and are zeroed. A variant
+        // absent from all samples then gets AF=0 and INFO=.
+        let (mut s_ds, mut s_var) = (0.0_f64, 0.0_f64);
+        for dist in dists.iter() {
+            let q0 = { let q = dist.p0.clamp(0.0, 1.0) as f64; if q < 2e-4 { 0.0 } else { q } };
+            let q1 = { let q = dist.p1.clamp(0.0, 1.0) as f64; if q < 2e-4 { 0.0 } else { q } };
+            s_ds += q0 + q1;
+            s_var += q0 * (1.0 - q0) + q1 * (1.0 - q1);
+        }
+        let n_haps = 2.0 * num_samples as f64;
+        let af = s_ds / n_haps;
+        let info = if af > 0.0 && af < 1.0 { Some((1.0 - s_var / (n_haps * af * (1.0 - af))).clamp(0.0, 1.0)) } else { None };
+        new_info.push(format!("AF={:.6}", af));
+        new_info.push(match info { Some(v) => format!("INFO={:.3}", v), None => "INFO=.".to_string() });
+        new_info.push(format!("INFO_BUBBLE_MAX={}", if path_info_max.is_finite() { format!("{:.3}", path_info_max) } else { ".".to_string() }));
+        if let Some(v) = &t_rec.info_val { new_info.push(format!("INFO_BUBBLE_FIRST={}", v)); }
+        new_info.push(format!("N_PATHS={};DS_SUM={};VAR_SUM={};N_HAPS={}", carrying.len(), s_ds, s_var, num_samples * 2));
 
         let mut vcf_line = vec![
             chrom.clone(),
@@ -227,7 +247,6 @@ fn process_group(
             "GT:DS:GP".to_string(),
         ];
 
-        let dists = atomic_sample_dists.get(&assigned_id).unwrap_or(&empty_dists);
 
         for s in 0..num_samples {
             let dist = &dists[s];
@@ -309,7 +328,7 @@ fn main() {
     let mut group: Vec<(String, String)> = Vec::new(); 
     let mut records_processed: usize = 0;
 
-    let mut id_buffer: HashMap<String, (u32, String, String, String)> = HashMap::new();
+    let mut id_buffer: HashMap<String, (u32, String, String, String, String)> = HashMap::new();
     let mut active_id_chrom = String::new();
 
     let start_time = Instant::now();
@@ -318,6 +337,23 @@ fn main() {
     for line_result in stdin.lock().lines() {
         let line = line_result.unwrap();
         if line.starts_with('#') {
+            if line.starts_with("##INFO=<ID=ID,") || line.starts_with("##INFO=<ID=RAF,") || line.starts_with("##INFO=<ID=AF,") || line.starts_with("##INFO=<ID=INFO,") {
+                continue;   // redefined below for the popped record
+            }
+            if line.starts_with("#CHROM") {
+                for h in [
+                    "##INFO=<ID=ID,Number=1,Type=String,Description=\"Atomic variant ID\">",
+                    "##INFO=<ID=RAF,Number=A,Type=Float,Description=\"ALT allele frequency in the reference panel\">",
+                    "##INFO=<ID=AF,Number=A,Type=Float,Description=\"ALT allele frequency in the target samples (mean dosage / 2)\">",
+                    "##INFO=<ID=INFO,Number=A,Type=Float,Description=\"IMPUTE INFO of the GP in this record. Undefined (.) when AF is 0 or 1\">",
+                    "##INFO=<ID=INFO_BUBBLE_MAX,Number=A,Type=Float,Description=\"Maximum GLIMPSE2 INFO over the bubble paths that contain this variant\">",
+                    "##INFO=<ID=INFO_BUBBLE_FIRST,Number=A,Type=Float,Description=\"GLIMPSE2 INFO of the first bubble path that contains this variant\">",
+                    "##INFO=<ID=N_PATHS,Number=1,Type=Integer,Description=\"Number of bubble paths that contain this variant\">",
+                    "##INFO=<ID=DS_SUM,Number=1,Type=Float,Description=\"Sum over samples of the expected dosage\">",
+                    "##INFO=<ID=VAR_SUM,Number=1,Type=Float,Description=\"Sum over samples of the dosage variance\">",
+                    "##INFO=<ID=N_HAPS,Number=1,Type=Integer,Description=\"Number of target haplotypes\">",
+                ] { writeln!(out_handle, "{}", h).unwrap(); }
+            }
             if !line.contains("INFO=<ID=AK") && !line.contains("FORMAT=<ID=GL") && !line.contains("FORMAT=<ID=KC") {
                 writeln!(out_handle, "{}", line).unwrap();
             }
@@ -422,11 +458,23 @@ fn main() {
                 let ref_seq = pop_fields[3].to_string();
                 let alt_seq = pop_fields[4].to_string();
                 
+                // RAF is the variant's AF in the biallelic ID VCF, or AC/AN when AF is missing
+                let (mut id_val, mut raf_str) = (String::new(), String::new());
+                let (mut ac, mut an) = (String::new(), String::new());
                 for item in pop_fields[7].split(';') {
-                    if let Some(id_val) = item.strip_prefix("ID=") {
-                        id_buffer.insert(id_val.to_string(), (peek_pos, orig_id, ref_seq, alt_seq));
-                        break;
+                    if let Some(v) = item.strip_prefix("ID=") { id_val = v.to_string(); }
+                    else if let Some(v) = item.strip_prefix("AF=") { raf_str = v.to_string(); }
+                    else if let Some(v) = item.strip_prefix("AC=") { ac = v.to_string(); }
+                    else if let Some(v) = item.strip_prefix("AN=") { an = v.to_string(); }
+                }
+                if raf_str.is_empty() || raf_str == "." {
+                    raf_str.clear();
+                    if let (Ok(a), Ok(n)) = (ac.parse::<f64>(), an.parse::<f64>()) {
+                        if n > 0.0 { raf_str = format!("{:.6}", a / n); }
                     }
+                }
+                if !id_val.is_empty() {
+                    id_buffer.insert(id_val, (peek_pos, orig_id, ref_seq, alt_seq, raf_str));
                 }
             }
         }

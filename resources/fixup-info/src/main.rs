@@ -95,9 +95,10 @@ fn main() {
             else if let Some(v) = item.strip_prefix("AN=") { an_val = v.to_string(); }
         }
         
-        if raf_val.is_empty() && !ac_val.is_empty() && !an_val.is_empty() {
+        if (raf_val.is_empty() || raf_val == ".") && !ac_val.is_empty() && !an_val.is_empty() {
+            raf_val.clear();
             if let (Ok(ac), Ok(an)) = (ac_val.parse::<f64>(), an_val.parse::<f64>()) {
-                if an > 0.0 { raf_val = format_float_3((ac / an) as f32); }
+                if an > 0.0 { raf_val = format!("{:.6}", ac / an); }
             }
         }
         panel_dict.insert(key, (atomic_id, orig_id, raf_val));
@@ -126,9 +127,12 @@ fn main() {
 
         if line.starts_with("#CHROM") {
             writeln!(vcf_out, "##INFO=<ID=ID,Number=1,Type=String,Description=\"Atomic variant ID\">").unwrap();
-            writeln!(vcf_out, "##INFO=<ID=RAF,Number=A,Type=Float,Description=\"Panel reference allele frequency\">").unwrap();
-            writeln!(vcf_out, "##INFO=<ID=AF,Number=A,Type=Float,Description=\"Recalculated allele frequency\">").unwrap();
-            writeln!(vcf_out, "##INFO=<ID=INFO,Number=A,Type=Float,Description=\"Recalculated IMPUTE INFO score\">").unwrap();
+            writeln!(vcf_out, "##INFO=<ID=RAF,Number=A,Type=Float,Description=\"ALT allele frequency in the reference panel\">").unwrap();
+            writeln!(vcf_out, "##INFO=<ID=AF,Number=A,Type=Float,Description=\"ALT allele frequency in the target samples (mean dosage / 2)\">").unwrap();
+            writeln!(vcf_out, "##INFO=<ID=INFO,Number=A,Type=Float,Description=\"IMPUTE INFO of the GP in this record. Undefined (.) when AF is 0 or 1\">").unwrap();
+            writeln!(vcf_out, "##INFO=<ID=DS_SUM,Number=1,Type=Float,Description=\"Sum over samples of the expected dosage\">").unwrap();
+            writeln!(vcf_out, "##INFO=<ID=VAR_SUM,Number=1,Type=Float,Description=\"Sum over samples of the dosage variance\">").unwrap();
+            writeln!(vcf_out, "##INFO=<ID=N_HAPS,Number=1,Type=Integer,Description=\"Number of target haplotypes\">").unwrap();
             writeln!(vcf_out, "{}", line).unwrap();
             line.clear();
             continue;
@@ -136,7 +140,10 @@ fn main() {
             if !line.starts_with("##INFO=<ID=RAF,") && 
                !line.starts_with("##INFO=<ID=AF,") && 
                !line.starts_with("##INFO=<ID=INFO,") &&
-               !line.starts_with("##INFO=<ID=ID,") {
+               !line.starts_with("##INFO=<ID=ID,") &&
+               !line.starts_with("##INFO=<ID=DS_SUM,") &&
+               !line.starts_with("##INFO=<ID=VAR_SUM,") &&
+               !line.starts_with("##INFO=<ID=N_HAPS,") {
                 writeln!(vcf_out, "{}", line).unwrap();
             }
             line.clear();
@@ -168,10 +175,39 @@ fn main() {
 
         let mut batch_af_strs = Vec::with_capacity(num_samples.len());
         let mut batch_info_strs = Vec::with_capacity(num_samples.len());
+        // Unrounded per-batch AF and INFO for pooling across batches. The 3-decimal strings are
+        // written only to the TSV.
+        let mut batch_af: Vec<f64> = Vec::with_capacity(num_samples.len());
+        let mut batch_info: Vec<Option<f64>> = Vec::with_capacity(num_samples.len());
         let mut sample_offset = 9;
+
+        // pop-glimpse2 writes DS_SUM, VAR_SUM and N_HAPS from the unrounded haplotype
+        // probabilities, so a single-batch run computes AF and INFO from these tags.
+        let mut exact: Option<(f64, f64, f64)> = None;
+        {
+            let (mut ds, mut var, mut nh) = (None, None, None);
+            for item in fields[7].split(';') {
+                if let Some(v) = item.strip_prefix("DS_SUM=") { ds = v.parse::<f64>().ok(); }
+                else if let Some(v) = item.strip_prefix("VAR_SUM=") { var = v.parse::<f64>().ok(); }
+                else if let Some(v) = item.strip_prefix("N_HAPS=") { nh = v.parse::<f64>().ok(); }
+            }
+            if let (Some(d), Some(v), Some(n)) = (ds, var, nh) {
+                if num_samples.len() == 1 && (n - 2.0 * total_samples as f64).abs() < 0.5 { exact = Some((d, v, n)); }
+            }
+        }
 
         // 1. Calculate per-batch statistics exactly as f32 mirroring main_2.rs
         for &batch_size in &num_samples {
+            if let Some((d, v, n)) = exact {
+                let af = d / n;
+                let info = if af > 0.0 && af < 1.0 { Some((1.0 - v / (n * af * (1.0 - af))).max(0.0)) } else { None };
+                batch_af_strs.push(format_float_3(af as f32));
+                batch_info_strs.push(match info { Some(x) => format_float_3(x as f32), None => ".".to_string() });
+                batch_af.push(af);
+                batch_info.push(info);
+                sample_offset += batch_size;
+                continue;
+            }
             let mut ds_sum = 0.0_f32;
             let mut ds2_sum = 0.0_f32;
             let mut ds4_sum = 0.0_f32;
@@ -201,17 +237,21 @@ fn main() {
             let af = ds_sum / safe_n;
             let denom = n_tar_haps * af * (1.0 - af);
             
-            let mut recalc_info = 1.0_f32;
-            if af > 0.0 && af < 1.0 && denom > 0.0 {
-                recalc_info = 1.0 - (ds4_sum - ds2_sum) / denom;
-            }
-            recalc_info = recalc_info.max(0.0);
+            // INFO is undefined when af is 0 or 1. A value of 1 here would pass every missed
+            // variant through an INFO filter.
+            let recalc_info: Option<f32> = if af > 0.0 && af < 1.0 && denom > 0.0 {
+                Some((1.0 - (ds4_sum - ds2_sum) / denom).max(0.0))
+            } else {
+                None
+            };
             
             // Round INFO natively before truncating to mirror C++
-            let recalc_info_rounded = (recalc_info * 1000.0).round() / 1000.0;
+            let recalc_info_rounded = recalc_info.map(|v| (v * 1000.0).round() / 1000.0);
             
             batch_af_strs.push(format_float_3(af));
-            batch_info_strs.push(format_float_3(recalc_info_rounded));
+            batch_info_strs.push(match recalc_info_rounded { Some(v) => format_float_3(v), None => ".".to_string() });
+            batch_af.push(af as f64);
+            batch_info.push(recalc_info.map(|v| v as f64));
         }
 
         let mut tsv_line = format!("{}\t{}\t{}\t{}", fields[0], fields[1], fields[3], fields[4]);
@@ -223,26 +263,28 @@ fn main() {
         let mut agg_af_sum = 0.0_f64;
         let mut numerator = 0.0_f64;
 
-        // 2. Aggregate across batches using f64 parsed from the truncated strings, mirroring the Python RecomputeAndAnnotate
+        // 2. Pool the unrounded per-batch values. A batch with undefined INFO has af 0 or 1, so
+        //    its variance term is 0.
         for i in 0..num_samples.len() {
             let n = num_samples[i] as f64;
-            let b_af = batch_af_strs[i].parse::<f64>().unwrap();
-            let b_info = batch_info_strs[i].parse::<f64>().unwrap();
-
+            let b_af = batch_af[i];
+            if let Some(b_info) = batch_info[i] {
+                numerator += (1.0 - b_info) * 2.0 * n * b_af * (1.0 - b_af);
+            }
             agg_af_sum += b_af * n;
-            numerator += (1.0 - b_info) * 2.0 * n * b_af * (1.0 - b_af);
         }
 
         let total_af = agg_af_sum / (total_samples as f64);
         let denom = 2.0 * (total_samples as f64) * total_af * (1.0 - total_af);
         
-        let mut total_info = 1.0_f64;
-        if total_af > 0.0 && total_af < 1.0 && denom > 0.0 {
-            total_info = 1.0 - (numerator / denom);
-        }
+        let total_info: Option<f64> = if total_af > 0.0 && total_af < 1.0 && denom > 0.0 {
+            Some((1.0 - (numerator / denom)).max(0.0))
+        } else {
+            None
+        };
 
         let final_af = round_to_3_sig_figs(total_af);
-        let final_info = round_to_3_sig_figs(total_info);
+        let final_info = match total_info { Some(v) => format!("{}", round_to_3_sig_figs(v)), None => ".".to_string() };
 
         let mut new_info = format!("ID={}", atomic_id);
         if !true_raf.is_empty() {
@@ -251,6 +293,17 @@ fn main() {
         
         // 3. Format using standard {} serialization to preserve significant figures perfectly
         new_info.push_str(&format!(";AF={};INFO={}", final_af, final_info));
+        // Copy the remaining INFO tags (INFO_BUBBLE_MAX, N_PATHS, ...).
+        for item in fields[7].split(';') {
+            let key = item.split('=').next().unwrap_or("");
+            if item.is_empty() || item == "." || matches!(key, "ID" | "RAF" | "AF" | "INFO" | "DS_SUM" | "VAR_SUM" | "N_HAPS") { continue; }
+            new_info.push(';');
+            new_info.push_str(item);
+        }
+        // Rewrite DS_SUM, VAR_SUM and N_HAPS from the pooled totals. In a merged input the
+        // existing tags come from one batch only. agg_af_sum is sum_b af_b n_b, so the dosage
+        // sum is 2 agg_af_sum.
+        new_info.push_str(&format!(";DS_SUM={};VAR_SUM={};N_HAPS={}", 2.0 * agg_af_sum, numerator, 2 * total_samples));
         
         let new_info_str = new_info.clone();
         fields[7] = &new_info_str;

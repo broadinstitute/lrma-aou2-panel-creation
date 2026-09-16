@@ -1,0 +1,9 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr1>
+##INFO=<ID=ID,Number=A,Type=String,Description="x">
+##INFO=<ID=AF,Number=A,Type=Float,Description="x">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	100	orig_a	A	T	.	.	ID=a;AF=0.5
+chr1	100	orig_c	A	C	.	.	ID=c;AF=0.05
+chr1	101	orig_b	A	G	.	.	ID=b;AF=0.2
+chr1	200	orig_m	G	A	.	.	ID=m;AF=0.01

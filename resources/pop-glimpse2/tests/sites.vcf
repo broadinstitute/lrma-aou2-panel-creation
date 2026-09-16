@@ -1,0 +1,14 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr1>
+##INFO=<ID=ID,Number=A,Type=String,Description="x">
+##INFO=<ID=RAF,Number=A,Type=Float,Description="x">
+##INFO=<ID=AF,Number=A,Type=Float,Description="x">
+##INFO=<ID=INFO,Number=A,Type=Float,Description="x">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="x">
+##FORMAT=<ID=DS,Number=1,Type=Float,Description="x">
+##FORMAT=<ID=GP,Number=3,Type=Float,Description="x">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	100	.	A	T	.	.	ID=a
+chr1	100	.	A	TG	.	.	ID=a:b
+chr1	100	.	A	C	.	.	ID=c
+chr1	200	.	G	A	.	.	ID=m
