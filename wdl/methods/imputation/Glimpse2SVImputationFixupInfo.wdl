@@ -59,7 +59,7 @@ task FixupInfo {
         File fixup_info_bin
         
         String docker
-        Int mem_gb = 8
+        Int mem_gb = 6
         Int cpu = 2
         Int disk_gb = ceil(2 * size(original_vcf, "GiB") + size(panel_popped_sites_only_vcf_gz, "GiB") + 20)
     }
@@ -70,9 +70,40 @@ task FixupInfo {
         cp ~{fixup_info_bin} fixup-info
         chmod +x fixup-info
 
+        # 1. Pre-shard the sites-only panel to drastically reduce Rust memory/startup time
+        echo "Sharding panel VCF..."
+        bcftools view -r ~{region} --regions-overlap 0 -Oz -o panel_shard.vcf.gz ~{panel_popped_sites_only_vcf_gz}
+        bcftools index -t vcf panel_shard.vcf.gz
+
+        # 2. Get expected site and sample counts
+        IN_SITES=$(bcftools index -n panel_shard.vcf.gz)
+        IN_SAMPLES=$(bcftools query -l ~{original_vcf} | wc -l)
+
+        # 3. Execute processing pipeline (bgzip runs single-threaded to prevent CPU thrashing on 2 cores)
+        echo "Running fixup-info..."
         bcftools view -r ~{region} --regions-overlap 0 ~{original_vcf} | \
-            ./fixup-info ~{panel_popped_sites_only_vcf_gz} ~{sep="," batch_sizes} ~{output_prefix}.batched_info.tsv.gz | \
-            bcftools view -W=tbi -Oz -o ~{output_prefix}.vcf.gz
+            ./fixup-info panel_shard.vcf.gz ~{sep="," batch_sizes} ~{output_prefix}.batched_info.tsv.gz | \
+            bgzip > ~{output_prefix}.vcf.gz
+            
+        # 4. Index the newly created bgzip output
+        bcftools index -t ~{output_prefix}.vcf.gz
+        
+        # 5. Validation Check
+        echo "Validating sites and samples..."
+        OUT_SITES=$(bcftools index -n ~{output_prefix}.vcf.gz)
+        OUT_SAMPLES=$(bcftools query -l ~{output_prefix}.vcf.gz | wc -l)
+        
+        if [ "$IN_SITES" -ne "$OUT_SITES" ]; then
+            echo "FATAL ERROR: Site count mismatch. Panel region had $IN_SITES, but output has $OUT_SITES."
+            exit 1
+        fi
+        
+        if [ "$IN_SAMPLES" -ne "$OUT_SAMPLES" ]; then
+            echo "FATAL ERROR: Sample count mismatch. Input had $IN_SAMPLES, but output has $OUT_SAMPLES."
+            exit 1
+        fi
+        
+        echo "Validation passed! $OUT_SITES sites and $OUT_SAMPLES samples successfully processed."
     >>>
 
     runtime {

@@ -179,17 +179,20 @@ fn main() {
             for s in 0..batch_size {
                 let sample_data = fields[sample_offset + s];
                 if sample_data != "." {
-                    let parts: Vec<&str> = sample_data.split(':').collect();
-                    if let Some(gp_str) = parts.get(gp_idx) {
-                        let gps: Vec<f32> = gp_str.split(',').filter_map(|v| v.parse().ok()).collect();
-                        if gps.len() == 3 {
-                            let gp1_q = gps[1];
-                            let gp2_q = gps[2];
-                            let ds_q = gp1_q + 2.0 * gp2_q;
-                            
-                            ds_sum += ds_q;
-                            ds2_sum += ds_q * ds_q;
-                            ds4_sum += gp1_q + 4.0 * gp2_q;
+                    // Optimization 1: Iterator parsing replaces the two Vec allocations
+                    let mut parts_iter = sample_data.split(':');
+                    if let Some(gp_str) = parts_iter.nth(gp_idx) {
+                        let mut gp_iter = gp_str.split(',');
+                        gp_iter.next(); // Skip gp0
+                        
+                        if let (Some(gp1_s), Some(gp2_s)) = (gp_iter.next(), gp_iter.next()) {
+                            if let (Ok(gp1_q), Ok(gp2_q)) = (gp1_s.parse::<f32>(), gp2_s.parse::<f32>()) {
+                                let ds_q = gp1_q + 2.0 * gp2_q;
+                                
+                                ds_sum += ds_q;
+                                ds2_sum += ds_q * ds_q;
+                                ds4_sum += gp1_q + 4.0 * gp2_q;
+                            }
                         }
                     }
                 }
@@ -252,10 +255,23 @@ fn main() {
         // 3. Format using standard {} serialization to preserve significant figures perfectly
         new_info.push_str(&format!(";AF={};INFO={}", final_af, final_info));
         
-        let new_info_str = new_info.clone();
-        fields[7] = &new_info_str;
+        // Optimization 2: Fast line reconstruction eliminates fields.join("\t")
+        let mut tab_count = 0;
+        let mut format_start_idx = 0;
+        for (idx, b) in line.bytes().enumerate() {
+            if b == b'\t' {
+                tab_count += 1;
+                if tab_count == 8 {
+                    format_start_idx = idx; 
+                    break;
+                }
+            }
+        }
 
-        writeln!(vcf_out, "{}", fields.join("\t")).unwrap();
+        write!(vcf_out, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", 
+            fields[0], fields[1], orig_id_str, fields[3], fields[4], fields[5], fields[6], new_info).unwrap();
+        
+        writeln!(vcf_out, "{}", &line[format_start_idx..]).unwrap();
 
         // Check if we hit the requested limit
         if let Some(max) = max_records {
