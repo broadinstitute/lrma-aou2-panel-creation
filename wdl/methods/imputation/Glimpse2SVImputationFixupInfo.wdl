@@ -73,7 +73,7 @@ task FixupInfo {
         # 1. Pre-shard the sites-only panel to drastically reduce Rust memory/startup time
         echo "Sharding panel VCF..."
         bcftools view -r ~{region} --regions-overlap 0 -Oz -o panel_shard.vcf.gz ~{panel_popped_sites_only_vcf_gz}
-        bcftools index -t vcf panel_shard.vcf.gz
+        bcftools index -t panel_shard.vcf.gz
 
         # 2. Get expected site and sample counts
         IN_SITES=$(bcftools index -n panel_shard.vcf.gz)
