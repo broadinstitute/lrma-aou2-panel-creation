@@ -10,6 +10,7 @@ workflow GLIMPSE2Concordance {
         File trh_bed_idx
         Array[String] regions
         String output_prefix
+        Int info_threshold = 0.5
     }
 
     Array[String] trh_bins = ["outTRH", "inTRH"]
@@ -35,7 +36,8 @@ workflow GLIMPSE2Concordance {
                     trh_bin = trh_bin,
                     length_bin = length_bin,
                     region = regions[idx],
-                    output_prefix = output_prefix + "." + regions[idx] + "." + trh_bin + "." + length_bin
+                    output_prefix = output_prefix + "." + regions[idx] + "." + trh_bin + "." + length_bin,
+                    info_threshold = info_threshold
                 }
             }
         }
@@ -49,7 +51,8 @@ workflow GLIMPSE2Concordance {
             error_spl_files = chrom_error_spl,
             output_prefix = output_prefix + "." + regions[idx],
             panel_name = basename(panel_vcfs[idx]),
-            imputed_name = basename(imputed_vcfs[idx])
+            imputed_name = basename(imputed_vcfs[idx]),
+            info_threshold = info_threshold
         }
     }
 
@@ -65,7 +68,8 @@ workflow GLIMPSE2Concordance {
         error_spl_files = all_error_spl_files,
         output_prefix = output_prefix + ".aggregate",
         panel_name = "Aggregate Panel",
-        imputed_name = "Aggregate Imputed"
+        imputed_name = "Aggregate Imputed",
+        info_threshold = info_threshold
     }
 
     output {
@@ -151,6 +155,7 @@ task FilterAndConcordance {
         String length_bin
         String region
         String output_prefix
+        Int info_threshold = 0.5
 
         RuntimeAttr? runtime_attr_override
     }
@@ -197,13 +202,13 @@ task FilterAndConcordance {
             --threads $(nproc) \
             --output ~{output_prefix}.concordance-result
 
-        # 2. INFO>0.5 Evaluations
+        # 2. INFO Evaluations
         bcftools view ~{output_prefix}.bcf \
-            -i 'INFO/INFO>0.5' \
+            -i 'INFO/INFO>~{info_threshold}' \
             --threads $(nproc) \
-            --write-index=csi -Ob -o ~{output_prefix}.INFO05.bcf
+            --write-index=csi -Ob -o ~{output_prefix}.INFO.bcf
 
-        echo "~{region} ~{panel_vcf} ~{panel_vcf} ~{output_prefix}.INFO05.bcf" > ~{output_prefix}.INFO05.concordance-input.txt
+        echo "~{region} ~{panel_vcf} ~{panel_vcf} ~{output_prefix}.INFO.bcf" > ~{output_prefix}.INFO.concordance-input.txt
 
         ./GLIMPSE2_concordance_static \
             --min-tar-gp 0.0 \
@@ -211,9 +216,9 @@ task FilterAndConcordance {
             --use-alt-af \
             --out-r2-per-site \
             --bins 0.00001 0.00002 0.00005 0.0001 0.0002 0.0005 0.001 0.002 0.005 0.01 0.02 0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 0.95 0.99 0.995 0.999 1.0 \
-            --input ~{output_prefix}.INFO05.concordance-input.txt \
+            --input ~{output_prefix}.INFO.concordance-input.txt \
             --threads $(nproc) \
-            --output ~{output_prefix}.INFO05.concordance-result
+            --output ~{output_prefix}.INFO.concordance-result
     >>>
 
     output {
@@ -253,6 +258,7 @@ task PlotResults {
         String output_prefix
         String panel_name
         String imputed_name
+        Int info_threshold = 0.5
 
         RuntimeAttr? runtime_attr_override
     }
@@ -293,12 +299,12 @@ task PlotResults {
             
             parts = filename.split('_GPfilt_')
             prefix_parts = parts[0].split('.')
-            is_info05 = 'INFO05' in prefix_parts
+            is_info = 'INFO' in prefix_parts
             
-            if is_info05:
+            if is_info:
                 length_bin = prefix_parts[-3]
                 trh_bin = prefix_parts[-4]
-                label_type = 'INFO05'
+                label_type = 'INFO'
             else:
                 length_bin = prefix_parts[-2]
                 trh_bin = prefix_parts[-3]
@@ -339,12 +345,12 @@ task PlotResults {
             
             parts = filename.split('_GPfilt_')
             prefix_parts = parts[0].split('.')
-            is_info05 = 'INFO05' in prefix_parts
+            is_info = 'INFO' in prefix_parts
             
-            if is_info05:
+            if is_info:
                 length_bin = prefix_parts[-3]
                 trh_bin = prefix_parts[-4]
-                label_type = 'INFO05'
+                label_type = 'INFO'
             else:
                 length_bin = prefix_parts[-2]
                 trh_bin = prefix_parts[-3]
@@ -395,9 +401,9 @@ task PlotResults {
             fig, ax = plt.subplots(1, 5, figsize=(10, 2))
             for i, length_bin in enumerate(['SV_DEL', 'DEL', 'SNP', 'INS', 'SV_INS']):
                 ax2 = ax[i].twinx()
-                for label_type, min_tar_gp in [('NORMAL', 0.0), ('NORMAL', 0.9), ('INFO05', 0.0)]:
-                    if label_type == 'INFO05':
-                        label = 'INFO > 0.5'
+                for label_type, min_tar_gp in [('NORMAL', 0.0), ('NORMAL', 0.9), ('INFO', 0.0)]:
+                    if label_type == 'INFO':
+                        label = 'INFO > ~{info_threshold}'
                         ls_val = 'dashed'
                     else:
                         label = 'unfiltered' if min_tar_gp == 0.0 else f'GP > {min_tar_gp}'
@@ -452,9 +458,9 @@ task PlotResults {
             plt_df_values = []
             for length_bin in ['SV_DEL', 'DEL', 'SNP', 'INS', 'SV_INS']:
                 length_bin_label = {'SV_DEL': '(-inf, -50]', 'DEL': '(-50, -1]', 'SNP': 'SNP', 'INS': '[0, 50)', 'SV_INS': '[50, inf)'}[length_bin]
-                for label_type, min_tar_gp in [('NORMAL', 0.0), ('NORMAL', 0.9), ('INFO05', 0.0)]:
-                    if label_type == 'INFO05':
-                        min_tar_gp_label = 'INFO > 0.5'
+                for label_type, min_tar_gp in [('NORMAL', 0.0), ('NORMAL', 0.9), ('INFO', 0.0)]:
+                    if label_type == 'INFO':
+                        min_tar_gp_label = 'INFO > ~{info_threshold}'
                     else:
                         min_tar_gp_label = 'unfiltered' if min_tar_gp == 0.0 else f'GP > {min_tar_gp}'
                         
@@ -467,10 +473,10 @@ task PlotResults {
 
             if plt_df_values:
                 plt_df = pd.DataFrame(plt_df_values, columns=['LENGTH_BIN_TEXT', 'MIN_TAR_GP_TEXT', 'non_reference_discordanc_rate_percent'])
-                hue_order = ['unfiltered', 'GP > 0.9', 'INFO > 0.5']
+                hue_order = ['unfiltered', 'GP > 0.9', 'INFO > ~{info_threshold}']
                 sns.boxplot(data=plt_df, x='LENGTH_BIN_TEXT', y='non_reference_discordanc_rate_percent', hue='MIN_TAR_GP_TEXT', hue_order=hue_order, ax=ax)
                 
-                # Apply dashed borders to INFO>0.5 boxes (the last third of drawn patches)
+                # Apply dashed borders to INFO boxes (the last third of drawn patches)
                 for j, box in enumerate(ax.patches):
                     if j >= 10:
                         box.set_linestyle('dashed')
