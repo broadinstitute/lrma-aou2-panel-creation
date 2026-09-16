@@ -10,7 +10,7 @@ workflow GLIMPSE2Concordance {
         File trh_bed_idx
         Array[String] regions
         String output_prefix
-        Int info_threshold = 0.5
+        Float info_threshold = 0.5
     }
 
     Array[String] trh_bins = ["outTRH", "inTRH"]
@@ -155,7 +155,7 @@ task FilterAndConcordance {
         String length_bin
         String region
         String output_prefix
-        Int info_threshold = 0.5
+        Float info_threshold = 0.5
 
         RuntimeAttr? runtime_attr_override
     }
@@ -258,7 +258,7 @@ task PlotResults {
         String output_prefix
         String panel_name
         String imputed_name
-        Int info_threshold = 0.5
+        Float info_threshold = 0.5
 
         RuntimeAttr? runtime_attr_override
     }
