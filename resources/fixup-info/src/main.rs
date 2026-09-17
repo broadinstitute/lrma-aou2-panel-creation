@@ -16,36 +16,20 @@ fn smart_open(filename: &str) -> Box<dyn BufRead> {
     }
 }
 
-// Emulates the exact f32 formatting of main_2.rs before Python sees it
-fn format_float_3(val: f32) -> String {
-    let s = format!("{:.3}", val);
-    let trimmed = s.trim_end_matches('0').trim_end_matches('.');
-    if trimmed.is_empty() {
-        "0".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 // Emulates Python numpy's vectorized_sig_fig_round on the final f64 values (Banker's Rounding)
 fn round_to_3_sig_figs(x: f64) -> f64 {
     if x == 0.0 || !x.is_finite() {
         return x;
     }
+    
+    // Calculate powers of 10 for rounding (n=3)
     let power = 2.0 - x.abs().log10().floor();
     let factor = 10_f64.powf(power);
     
     let scaled = x * factor;
-    let r = scaled.round();
     
-    // Emulate numpy's round-half-to-even behavior
-    let rounded = if (scaled - r).abs() == 0.5 {
-        if r % 2.0 == 0.0 { r } else { r - 1.0 * scaled.signum() }
-    } else {
-        r
-    };
-    
-    rounded / factor
+    // round_ties_even() natively mirrors numpy's round-half-to-even behavior
+    scaled.round_ties_even() / factor
 }
 
 fn main() {
@@ -97,7 +81,12 @@ fn main() {
         
         if raf_val.is_empty() && !ac_val.is_empty() && !an_val.is_empty() {
             if let (Ok(ac), Ok(an)) = (ac_val.parse::<f64>(), an_val.parse::<f64>()) {
-                if an > 0.0 { raf_val = format_float_3((ac / an) as f32); }
+                if an > 0.0 { 
+                    // Emulating precision constraint if originally desired by the workflow
+                    let val = (ac / an) as f32;
+                    raf_val = format!("{:.3}", val).trim_end_matches('0').trim_end_matches('.').to_string();
+                    if raf_val.is_empty() { raf_val = "0".to_string(); }
+                }
             }
         }
         panel_dict.insert(key, (atomic_id, orig_id, raf_val));
@@ -166,11 +155,11 @@ fn main() {
         let fmt: Vec<&str> = fields[8].split(':').collect();
         let gp_idx = fmt.iter().position(|&x| x == "GP").expect("No GP format found");
 
-        let mut batch_af_strs = Vec::with_capacity(num_samples.len());
-        let mut batch_info_strs = Vec::with_capacity(num_samples.len());
+        let mut batch_afs = Vec::with_capacity(num_samples.len());
+        let mut batch_infos = Vec::with_capacity(num_samples.len());
         let mut sample_offset = 9;
 
-        // 1. Calculate per-batch statistics exactly as f32 mirroring main_2.rs
+        // 1. Calculate per-batch statistics exactly as f32 mirroring main_2.rs without string truncation
         for &batch_size in &num_samples {
             let mut ds_sum = 0.0_f32;
             let mut ds2_sum = 0.0_f32;
@@ -179,7 +168,6 @@ fn main() {
             for s in 0..batch_size {
                 let sample_data = fields[sample_offset + s];
                 if sample_data != "." {
-                    // Optimization 1: Iterator parsing replaces the two Vec allocations
                     let mut parts_iter = sample_data.split(':');
                     if let Some(gp_str) = parts_iter.nth(gp_idx) {
                         let mut gp_iter = gp_str.split(',');
@@ -210,27 +198,24 @@ fn main() {
             }
             recalc_info = recalc_info.max(0.0);
             
-            // Round INFO natively before truncating to mirror C++
-            let recalc_info_rounded = (recalc_info * 1000.0).round() / 1000.0;
-            
-            batch_af_strs.push(format_float_3(af));
-            batch_info_strs.push(format_float_3(recalc_info_rounded));
+            batch_afs.push(af);
+            batch_infos.push(recalc_info);
         }
 
         let mut tsv_line = format!("{}\t{}\t{}\t{}", fields[0], fields[1], fields[3], fields[4]);
         for i in 0..num_samples.len() {
-            tsv_line.push_str(&format!("\t{}\t{}", batch_af_strs[i], batch_info_strs[i]));
+            tsv_line.push_str(&format!("\t{}\t{}", batch_afs[i], batch_infos[i]));
         }
         writeln!(tsv_out, "{}", tsv_line).unwrap();
 
         let mut agg_af_sum = 0.0_f64;
         let mut numerator = 0.0_f64;
 
-        // 2. Aggregate across batches using f64 parsed from the truncated strings, mirroring the Python RecomputeAndAnnotate
+        // 2. Aggregate across batches using purely numeric f64, eliminating string round-trip precision loss
         for i in 0..num_samples.len() {
             let n = num_samples[i] as f64;
-            let b_af = batch_af_strs[i].parse::<f64>().unwrap();
-            let b_info = batch_info_strs[i].parse::<f64>().unwrap();
+            let b_af = batch_afs[i] as f64;
+            let b_info = batch_infos[i] as f64;
 
             agg_af_sum += b_af * n;
             numerator += (1.0 - b_info) * 2.0 * n * b_af * (1.0 - b_af);
@@ -244,6 +229,7 @@ fn main() {
             total_info = 1.0 - (numerator / denom);
         }
 
+        // 3. Final significant figure application matches Python identically
         let final_af = round_to_3_sig_figs(total_af);
         let final_info = round_to_3_sig_figs(total_info);
 
@@ -252,10 +238,9 @@ fn main() {
             new_info.push_str(&format!(";RAF={}", true_raf));
         }
         
-        // 3. Format using standard {} serialization to preserve significant figures perfectly
         new_info.push_str(&format!(";AF={};INFO={}", final_af, final_info));
         
-        // Optimization 2: Fast line reconstruction eliminates fields.join("\t")
+        // Fast line reconstruction
         let mut tab_count = 0;
         let mut format_start_idx = 0;
         for (idx, b) in line.bytes().enumerate() {
@@ -273,7 +258,6 @@ fn main() {
         
         writeln!(vcf_out, "{}", &line[format_start_idx..]).unwrap();
 
-        // Check if we hit the requested limit
         if let Some(max) = max_records {
             if records_processed >= max {
                 eprintln!("Hit the requested limit of {} records. Stopping early.", max);
@@ -281,7 +265,6 @@ fn main() {
             }
         }
 
-        // Clear the buffer at the end of the loop so it can be reused for the next line
         line.clear();
     }
     
