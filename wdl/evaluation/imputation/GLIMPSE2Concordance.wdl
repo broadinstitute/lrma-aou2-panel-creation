@@ -59,7 +59,7 @@ workflow GLIMPSE2Concordance {
     # Generate Aggregate Plots
     Array[File] all_rsquare_grp_files = flatten(flatten(flatten(FilterAndConcordance.rsquare_grp_files)))
     Array[File] all_rsquare_spl_files = flatten(flatten(flatten(FilterAndConcordance.rsquare_spl_files)))
-    Array[File] all_rsquare_site_files = flatten(flatten(flatten(FilterAndConcordance.rsquare_site_files))) # ADD THIS LINE
+    Array[File] all_rsquare_sites_files = flatten(flatten(flatten(FilterAndConcordance.rsquare_sites_files)))
     Array[File] all_error_grp_files = flatten(flatten(flatten(FilterAndConcordance.error_grp_files)))
     Array[File] all_error_spl_files = flatten(flatten(flatten(FilterAndConcordance.error_spl_files)))
     Array[File] all_error_cal_files = flatten(flatten(flatten(FilterAndConcordance.error_cal_files)))
@@ -80,7 +80,7 @@ workflow GLIMPSE2Concordance {
         Array[File] concordance_per_chrom_plots_pdf = flatten([PlotResultsPerChrom.r2_plot_inTRH_pdf, PlotResultsPerChrom.r2_plot_outTRH_pdf, PlotResultsPerChrom.nrd_plot_inTRH_pdf, PlotResultsPerChrom.nrd_plot_outTRH_pdf])
         Array[File] concordance_per_chrom_plots_png = flatten([PlotResultsPerChrom.r2_plot_inTRH_png, PlotResultsPerChrom.r2_plot_outTRH_png, PlotResultsPerChrom.nrd_plot_inTRH_png, PlotResultsPerChrom.nrd_plot_outTRH_png])
         
-        Array[Array[File]] concordance_results = [all_rsquare_grp_files, all_rsquare_spl_files, all_error_grp_files, all_error_spl_files, all_error_cal_files, all_rsquare_site_files]
+        Array[Array[File]] concordance_results = [all_rsquare_grp_files, all_rsquare_spl_files, all_rsquare_sites_files, all_error_grp_files, all_error_spl_files, all_error_cal_files]
     }
 }
 
@@ -225,7 +225,7 @@ task FilterAndConcordance {
     output {
         Array[File] rsquare_grp_files = glob("*.rsquare.grp.txt.gz")
         Array[File] rsquare_spl_files = glob("*.rsquare.spl.txt.gz")
-        Array[File] rsquare_site_files = glob("*.rsquare.site.txt.gz")
+        Array[File] rsquare_sites_files = glob("*_r2_sites.txt.gz")
         Array[File] error_grp_files = glob("*.error.grp.txt.gz")
         Array[File] error_spl_files = glob("*.error.spl.txt.gz")
         Array[File] error_cal_files = glob("*.error.cal.txt.gz")
