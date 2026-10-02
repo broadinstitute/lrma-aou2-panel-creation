@@ -2,43 +2,79 @@ version 1.0
 
 workflow SubsetAndSplitVcf {
 
+    meta {
+        description: "For subsetting an input project VCF into the desired region, followed by per-sample splitting."
+    }
+
     input {
         File joint_vcf
         File joint_vcf_idx
         String region
+        Int expected_number_of_sites
+
+        Int expected_sample_count
+
         String gcs_output_dir
-        String output_tag           # per-sample BCFs will be copied to gcs_output_dir/{sample_name}.{output_tag}.bcf
+        String output_tag
 
         # optional hierarchical split
-        File? sample_batches_tsv      # see bcftools +split --help; e.g., contains rows: {sample_name_1},{sample_name_2},...\t-\tbatch-0
+        File? sample_batches_tsv
+    }
+
+    output {
+        Array[String] split_vcf_paths = res
+        String validation_gate = if vcf_count_ok then "ok" else select_first(empty_string_array)
+    }
+
+    parameter_meta {
+        output_tag: {
+            description: "per-sample BCFs will be copied to gcs_output_dir/{sample_name}.{output_tag}.bcf"
+        }
+        sample_batches_tsv: {
+            description: "when provided, perform the per-sample split in batches defined in this file; each row is formatted: {sample_name_1},{sample_name_2},...\t-\tbatch-0; see `bcftools +split --help`"
+        }
+        expected_number_of_sites: {
+            description: "expected number of sites in this region, used for safeguard against streaming errors"
+        }
+        split_vcf_paths: {
+            description: "GCS URI of the split per-sample VCF"
+        }
+        validation_gate: {
+            validation_gate: "enforces the split VCF counts are correct"
+        }
     }
 
     call SubsetAndSplitVcf { input:
-        vcf = joint_vcf,
+        vcf     = joint_vcf,
         vcf_idx = joint_vcf_idx,
-        region = region,
-        gcs_output_dir = if defined(sample_batches_tsv) then gcs_output_dir + "/batches" else gcs_output_dir,
+
+        region  = region,
+        expected_number_of_sites = expected_number_of_sites,
+
         sample_batches_tsv = sample_batches_tsv,
-        output_tag = output_tag
+
+        gcs_output_dir = if defined(sample_batches_tsv) then gcs_output_dir + "/batches" else gcs_output_dir,
+        output_tag     = output_tag
     }
     
+    # when sample-batching is desired, i.e. large cohorts, a 2nd round is necessary to generate the per-sample VCFs
     if (defined(sample_batches_tsv)) {
-        Int num_batches = length(read_lines(select_first([sample_batches_tsv])))
-        scatter (i in range(num_batches)) {
+        scatter (batch_vcf in SubsetAndSplitVcf.split_vcf_paths) {
             call SubsetAndSplitVcf as SubsetAndSplitVcfBatch { input:
-                vcf = gcs_output_dir + "/batches/batch-" + i + "." + output_tag + ".bcf",
+                vcf = batch_vcf,
+
+                expected_number_of_sites = expected_number_of_sites,
+
                 gcs_output_dir = gcs_output_dir,
-                wait_for_me = SubsetAndSplitVcf.number_of_sites,
                 output_tag = output_tag
             }
         }
     }
 
-    output {
-        Int number_of_sites = SubsetAndSplitVcf.number_of_sites
-        Array[String] split_vcf_paths = select_first([flatten(select_first([SubsetAndSplitVcfBatch.split_vcf_paths])), 
-                                                      SubsetAndSplitVcf.split_vcf_paths])
-    }
+    Array[String] res = select_first([flatten(select_first([SubsetAndSplitVcfBatch.split_vcf_paths])),
+                                      SubsetAndSplitVcf.split_vcf_paths])
+    Boolean vcf_count_ok = length(split_vcf_paths) == expected_sample_count
+    Array[String?] empty_string_array = []
 }
 
 struct RuntimeAttr {
@@ -55,20 +91,42 @@ struct RuntimeAttr {
 task SubsetAndSplitVcf {
 
     input {
-        File vcf
+        File  vcf
         File? vcf_idx       # only needed for initial stream, not for batches
-        String? region      # only needed for initial stream, not for batches
+
+        Int expected_number_of_sites
+
+        String? region
+
+        File? sample_batches_tsv
+
         String gcs_output_dir
         String output_tag
-        File? sample_batches_tsv
-        Int? wait_for_me    # dummy input to gate scatter until initial split is done
+
         Int view_verbosity = 8
+
         RuntimeAttr? runtime_attr_override
+    }
+
+    output {
+        Array[String] split_vcf_paths = read_lines("output_vcf_paths.txt")
     }
 
     parameter_meta {
         vcf: {
             localization_optional: true
+        }
+
+        region: {
+            description: "region to subset the VCF to; when the samples are batch processed, no need to provide in the 2nd round for per-sample split"
+        }
+
+        sample_batches_tsv: {
+            description: "when provided, perform the per-sample split in batches defined in this file; each row is formatted: {sample_name_1},{sample_name_2},...\t-\tbatch-0; see `bcftools +split --help`"
+        }
+
+        split_vcf_paths: {
+            description: "GCS URI of the split VCF; it could be per-batch or per-sample"
         }
     }
     
@@ -90,23 +148,37 @@ task SubsetAndSplitVcf {
             -Ob -o ~{output_tag}.bcf
 
         # check number of sites to guard against streaming errors
-        bcftools view -H ~{output_tag}.bcf | wc -l > number_of_sites.txt
+        N=$(bcftools view -H ~{output_tag}.bcf | wc -l | awk '{print $1}')
+        if [[ ${N} -ne ~{expected_number_of_sites} ]]; then echo "Number of sites unexpected"; exit 1; fi
 
-        bcftools +split ~{output_tag}.bcf ~{"--samples-file " + sample_batches_tsv} -Ob -o output
+        # per-sample or per-batch split
+        bcftools +split \
+            ~{output_tag}.bcf \
+            ~{"--samples-file " + sample_batches_tsv} \
+            -Ob \
+        -o output
 
+        # apply tag to the output
         for bcf in output/*.bcf; do
             bcf_basename=$(basename $bcf .bcf)
             mv $bcf output/$bcf_basename.~{output_tag}.bcf
         done
 
-        gcloud storage cp output/*.bcf ~{gcs_output_dir}/
-        gsutil ls ~{gcs_output_dir}/*bcf > output_vcf_paths.txt
+        # user-controlled result saving
+        gcloud storage cp \
+            output/*.bcf \
+            "~{gcs_output_dir}/"
+
+        # Report only the files produced by this invocation.
+        # Do not list the shared GCS directory: other scattered calls may be
+        # writing there concurrently, and previous runs may have left files.
+        : > output_vcf_paths.txt
+        for bcf in output/*.bcf; do
+            bcf_basename=$(basename "$bcf")
+            echo "~{gcs_output_dir}/$bcf_basename" >> output_vcf_paths.txt
+        done
     >>>
 
-    output {
-        Array[String] split_vcf_paths = read_lines("output_vcf_paths.txt")
-        Int number_of_sites = read_int("number_of_sites.txt")
-    }
     ###################
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
@@ -116,7 +188,7 @@ task SubsetAndSplitVcf {
         use_ssd:            true,
         preemptible_tries:  5,
         max_retries:        0,
-        docker:             "us.gcr.io/broad-dsde-methods/slee/lr-bcftools-patched-gcloud/lr-bcftools-patched-gcloud:1.23.1-libdeflate"      # see https://github.com/broadinstitute/bcftools-patched
+        docker:             "us.gcr.io/broad-dsde-methods/slee/lr-bcftools-patched-gcloud/lr-bcftools-patched-gcloud:1.23"      # see https://github.com/broadinstitute/bcftools-patched
     }
     RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
     runtime {
