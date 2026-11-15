@@ -86,6 +86,7 @@ def main():
             '##INFO=<ID=AF,Number=A,Type=Float,Description="AF">',
             '##INFO=<ID=INFO,Number=A,Type=Float,Description="INFO">',
             '##FORMAT=<ID=GT,Number=1,Type=String,Description="genotype">',
+            '##FORMAT=<ID=DS,Number=A,Type=Float,Description="dosage">',
             '##FORMAT=<ID=GP,Number=G,Type=Float,Description="genotype probs">']
     per = N_SAMPLES // N_BATCHES
     groups = [('main', range(N_SAMPLES))] + [('main.batch-%03d' % (b + 1), range(b * per, (b + 1) * per)) for b in range(N_BATCHES)]

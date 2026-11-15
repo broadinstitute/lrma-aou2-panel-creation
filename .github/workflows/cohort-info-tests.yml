@@ -46,4 +46,12 @@ jobs:
             echo "DOCKER=cohort-info-test:local" >> $GITHUB_ENV
           fi
       - name: cohort INFO end to end
-        run: UTILS=$GITHUB_WORKSPACE/utils bash test/cohort-info/run.sh
+        run: |
+          echo "utils commit $(git -C utils rev-parse HEAD)" | tee utils-commit.txt
+          UTILS=$GITHUB_WORKSPACE/utils OUT_BIN=$GITHUB_WORKSPACE/bin bash test/cohort-info/run.sh
+          cp utils-commit.txt bin/
+      # The production pop-glimpse2 and paste-vcfs: built on Ubuntu 24.04 like the task image, and the binaries this test passed with.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cohort-info-binaries
+          path: bin/

@@ -26,6 +26,7 @@ git -C "$REPO" worktree add -q --detach "$W/prefix" 79a6f70^
 cargo build -q --release --locked --manifest-path "$W/prefix/resources/pop-glimpse2/Cargo.toml" --bin pop-glimpse2-joint-opt
 cp "$W/prefix/resources/pop-glimpse2/target/release/pop-glimpse2-joint-opt" pop.old
 git -C "$REPO" worktree remove --force "$W/prefix"
+if [ -n "${OUT_BIN:-}" ]; then mkdir -p "$OUT_BIN" && cp pop.sam "$OUT_BIN/pop-glimpse2" && cp paste-vcfs "$OUT_BIN/" && (cd "$OUT_BIN" && sha256sum pop-glimpse2 paste-vcfs > SHA256SUMS); fi
 
 say "fixture"
 python3 "$REPO/test/cohort-info/make_fixture.py" fx
@@ -39,7 +40,7 @@ pop_regions() {
     for r in $REGIONS; do
         k=$((k+1))
         bcftools view -r "$r" --regions-overlap 0 sites.vcf.gz -Oz -o s.$k.vcf.gz
-        bcftools view -r "$r" --regions-overlap 0 "$in" | "./$bin" ids.vcf.gz s.$k.vcf.gz | bcftools sort -Ob -o "$out.$k.bcf" 2>/dev/null
+        bcftools view -r "$r" --regions-overlap 0 "$in" | "./$bin" ids.vcf.gz s.$k.vcf.gz | bcftools sort -Ob -o "$out.$k.bcf"
         list+=("$out.$k.bcf")
     done
     bcftools concat --naive "${list[@]}" -Ob -o "$out" && bcftools index -f "$out" && rm "${list[@]}"
