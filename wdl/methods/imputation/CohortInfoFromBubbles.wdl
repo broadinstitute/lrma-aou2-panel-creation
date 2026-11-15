@@ -38,6 +38,12 @@ workflow CohortInfoFromBubbles {
         Array[Boolean] paste_do_localization = [false, true, true]
         # CheckMerged streams the merged BCF from GCS, so a local test run checks it in its own script
         Boolean check_merged = true
+        # Paste VM settings per level, e.g. {"preemptible_tries": 3}; unset fields keep MergeVcfs' defaults (including its
+        # input-sized disk). Required: Cromwell 91 cannot evaluate these optional inputs of the paste WDL when a calling
+        # workflow leaves them unset (its nested scatters become an implicit subworkflow).
+        RuntimeAttr paste_l0_runtime_attr
+        RuntimeAttr paste_l1_runtime_attr
+        RuntimeAttr paste_l2_runtime_attr
         String output_prefix = "aou2_50k.cohort_info"
         String docker = "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust@sha256:0f25c4091c49d8eb0c3d8bcdb45e7680a093e0a691e74ccec2d3743758a7d22c"
         String zones = "us-central1-a"
@@ -84,7 +90,6 @@ workflow CohortInfoFromBubbles {
         String paste_idx = if i == 0 then PoolCohortInfo.base_cohort_bcf_idx else batches[i][4]
     }
 
-    # Not inside a conditional: Cromwell 91 fails this subworkflow call there, on its unset optional inputs.
     call Paste.HierarchicallyMergeVcfs as PasteBatches { input:
         vcfs_array = paste_vcf,
         vcf_idxs_array = paste_idx,
@@ -94,6 +99,9 @@ workflow CohortInfoFromBubbles {
         timeouts_min = paste_timeouts_min,
         output_prefix = output_prefix + "." + chromosome,
         paste_vcfs_binary = paste_vcfs_binary,
+        l0_merge_runtime_attr_override = paste_l0_runtime_attr,
+        l1_merge_runtime_attr_override = paste_l1_runtime_attr,
+        l2_merge_runtime_attr_override = paste_l2_runtime_attr,
         extra_merge_args = "--threads $(nproc) --info ID,RAF,AF,INFO,N_PATHS,N_PATHS_TOTAL,DS_SUM,VAR_SUM,N_HAPS --format GT,DS,GP"
     }
 

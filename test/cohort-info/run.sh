@@ -106,6 +106,8 @@ EOF
  "CohortInfoFromBubbles.paste_vcfs_binary": "$W/paste-vcfs", "CohortInfoFromBubbles.paste_regions": ["chr1:1-1000000", "chr1:1000001-2000000"],
  "CohortInfoFromBubbles.paste_batch_sizes": [2, 2], "CohortInfoFromBubbles.paste_timeouts_min": [0, 0],
  "CohortInfoFromBubbles.paste_do_localization": [true, true, true], "CohortInfoFromBubbles.check_merged": false,
+ "CohortInfoFromBubbles.paste_l0_runtime_attr": {"preemptible_tries": 3}, "CohortInfoFromBubbles.paste_l1_runtime_attr": {"preemptible_tries": 3},
+ "CohortInfoFromBubbles.paste_l2_runtime_attr": {"preemptible_tries": 3},
  "CohortInfoFromBubbles.expected_samples": 12,
  "CohortInfoFromBubbles.RepopBatch.cpu": 2, "CohortInfoFromBubbles.RepopBatch.mem_gb": 4$DOCKER_JSON}
 EOF
