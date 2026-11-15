@@ -38,6 +38,10 @@ workflow CohortInfoFromBubbles {
         Array[Boolean] paste_do_localization = [false, true, true]
         # CheckMerged streams the merged BCF from GCS, so a local test run checks it in its own script
         Boolean check_merged = true
+        # Paste VM sizes per level. Passed through explicitly: Cromwell fails a subworkflow call that leaves them unset.
+        RuntimeAttr? paste_l0_runtime_attr_override
+        RuntimeAttr? paste_l1_runtime_attr_override
+        RuntimeAttr? paste_l2_runtime_attr_override
         # false stops after PoolCohortInfo, for checking the re-pop and the cohort INFO before paying for the paste
         Boolean run_paste = true
         String output_prefix = "aou2_50k.cohort_info"
@@ -96,6 +100,9 @@ workflow CohortInfoFromBubbles {
             timeouts_min = paste_timeouts_min,
             output_prefix = output_prefix + "." + chromosome,
             paste_vcfs_binary = paste_vcfs_binary,
+            l0_merge_runtime_attr_override = paste_l0_runtime_attr_override,
+            l1_merge_runtime_attr_override = paste_l1_runtime_attr_override,
+            l2_merge_runtime_attr_override = paste_l2_runtime_attr_override,
             extra_merge_args = "--threads $(nproc) --info ID,RAF,AF,INFO,N_PATHS,N_PATHS_TOTAL,DS_SUM,VAR_SUM,N_HAPS --format GT,DS,GP"
         }
 
