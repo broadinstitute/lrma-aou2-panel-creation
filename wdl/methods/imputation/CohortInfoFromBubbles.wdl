@@ -95,8 +95,11 @@ workflow CohortInfoFromBubbles {
     }
 
     scatter (i in range(length(batches))) {
-        String paste_vcf = if i % paste_group == 0 then PoolCohortInfo.base_cohort_bcfs[i / paste_group] else batches[i][3]
-        String paste_idx = if i % paste_group == 0 then PoolCohortInfo.base_cohort_bcf_idxs[i / paste_group] else batches[i][4]
+        Int group = i / paste_group
+        String group_bcf = PoolCohortInfo.base_cohort_bcfs[group]
+        String group_idx = PoolCohortInfo.base_cohort_bcf_idxs[group]
+        String paste_vcf = if i % paste_group == 0 then group_bcf else batches[i][3]
+        String paste_idx = if i % paste_group == 0 then group_idx else batches[i][4]
     }
 
     call Paste.HierarchicallyMergeVcfs as PasteBatches { input:
