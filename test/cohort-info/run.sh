@@ -97,13 +97,15 @@ w, regions = sys.argv[1], sys.argv[2].split()
 print(json.dumps({"chr1": {"panel_bubble_split_sites_only_vcf": f"{w}/sites.vcf.gz", "panel_bubble_split_sites_only_vcf_idx": f"{w}/sites.vcf.gz.tbi",
                            "panel_id_split_vcf_gz": f"{w}/ids.vcf.gz", "panel_id_split_vcf_gz_tbi": f"{w}/ids.vcf.gz.tbi", "pop_regions": regions}}))
 EOF
+    DOCKER_JSON=""
+    [ -z "${DOCKER:-}" ] || DOCKER_JSON=", \"CohortInfoFromBubbles.docker\": \"$DOCKER\""
     cat > inputs.json <<EOF
 {"CohortInfoFromBubbles.chromosome": "chr1", "CohortInfoFromBubbles.batches_tsv": "$W/batches.tsv",
  "CohortInfoFromBubbles.pop_glimpse2_panel_resources_json": "$W/panel.json",
  "CohortInfoFromBubbles.pop_glimpse2_binary": "$W/pop.sam", "CohortInfoFromBubbles.cohort_info_script": "$REPO/resources/cohort-info/cohort_info.py",
  "CohortInfoFromBubbles.paste_vcfs_binary": "$W/paste-vcfs", "CohortInfoFromBubbles.paste_regions": ["chr1"],
  "CohortInfoFromBubbles.expected_samples": 12, "CohortInfoFromBubbles.run_paste": false,
- "CohortInfoFromBubbles.RepopBatch.cpu": 2, "CohortInfoFromBubbles.RepopBatch.mem_gb": 4${DOCKER:+, "CohortInfoFromBubbles.docker": "$DOCKER"}}
+ "CohortInfoFromBubbles.RepopBatch.cpu": 2, "CohortInfoFromBubbles.RepopBatch.mem_gb": 4$DOCKER_JSON}
 EOF
     java -jar "$WOMTOOL_JAR" validate "$REPO/wdl/methods/imputation/CohortInfoFromBubbles.wdl" -i inputs.json
     java -jar "$CROMWELL_JAR" run "$REPO/wdl/methods/imputation/CohortInfoFromBubbles.wdl" -i inputs.json -m meta.json > cromwell.log 2>&1 \
