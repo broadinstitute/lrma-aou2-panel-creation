@@ -82,6 +82,7 @@ def main():
 
     contig = '##contig=<ID=chr1,length=%d>' % CHROM_LEN
     head = ['##fileformat=VCFv4.2', contig,
+            '##INFO=<ID=ID,Number=1,Type=String,Description="atomic ID; the pre-fix pop writes it without adding a header line">',
             '##INFO=<ID=RAF,Number=A,Type=Float,Description="panel AF">',
             '##INFO=<ID=AF,Number=A,Type=Float,Description="AF">',
             '##INFO=<ID=INFO,Number=A,Type=Float,Description="INFO">',

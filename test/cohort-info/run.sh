@@ -40,7 +40,10 @@ pop_regions() {
     for r in $REGIONS; do
         k=$((k+1))
         bcftools view -r "$r" --regions-overlap 0 sites.vcf.gz -Oz -o s.$k.vcf.gz
-        bcftools view -r "$r" --regions-overlap 0 "$in" | "./$bin" ids.vcf.gz s.$k.vcf.gz | bcftools sort -Ob -o "$out.$k.bcf"
+        bcftools view -r "$r" --regions-overlap 0 "$in" | "./$bin" ids.vcf.gz s.$k.vcf.gz 2> pop.log > raw.vcf
+        bcftools sort -Ob -o "$out.$k.bcf" raw.vcf || {
+            echo "FAIL sort of $bin output on $r"; grep '^##' raw.vcf | grep -v '^##contig'
+            grep -v '^#' raw.vcf | head -3 | cut -c1-400; exit 1; }
         list+=("$out.$k.bcf")
     done
     bcftools concat --naive "${list[@]}" -Ob -o "$out" && bcftools index -f "$out" && rm "${list[@]}"
