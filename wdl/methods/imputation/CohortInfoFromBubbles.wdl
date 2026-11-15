@@ -38,12 +38,6 @@ workflow CohortInfoFromBubbles {
         Array[Boolean] paste_do_localization = [false, true, true]
         # CheckMerged streams the merged BCF from GCS, so a local test run checks it in its own script
         Boolean check_merged = true
-        # Paste VM sizes per level. Passed through explicitly: Cromwell fails a subworkflow call that leaves them unset.
-        RuntimeAttr? paste_l0_runtime_attr_override
-        RuntimeAttr? paste_l1_runtime_attr_override
-        RuntimeAttr? paste_l2_runtime_attr_override
-        # false stops after PoolCohortInfo, for checking the re-pop and the cohort INFO before paying for the paste
-        Boolean run_paste = true
         String output_prefix = "aou2_50k.cohort_info"
         String docker = "us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust@sha256:0f25c4091c49d8eb0c3d8bcdb45e7680a093e0a691e74ccec2d3743758a7d22c"
         String zones = "us-central1-a"
@@ -85,37 +79,33 @@ workflow CohortInfoFromBubbles {
         zones = zones
     }
 
-    if (run_paste) {
-        scatter (i in range(length(batches))) {
-            String paste_vcf = if i == 0 then PoolCohortInfo.base_cohort_bcf else batches[i][3]
-            String paste_idx = if i == 0 then PoolCohortInfo.base_cohort_bcf_idx else batches[i][4]
-        }
+    scatter (i in range(length(batches))) {
+        String paste_vcf = if i == 0 then PoolCohortInfo.base_cohort_bcf else batches[i][3]
+        String paste_idx = if i == 0 then PoolCohortInfo.base_cohort_bcf_idx else batches[i][4]
+    }
 
-        call Paste.HierarchicallyMergeVcfs as PasteBatches { input:
-            vcfs_array = paste_vcf,
-            vcf_idxs_array = paste_idx,
-            regions = paste_regions,
-            batch_sizes = paste_batch_sizes,
-            do_localization = paste_do_localization,
-            timeouts_min = paste_timeouts_min,
-            output_prefix = output_prefix + "." + chromosome,
-            paste_vcfs_binary = paste_vcfs_binary,
-            l0_merge_runtime_attr_override = paste_l0_runtime_attr_override,
-            l1_merge_runtime_attr_override = paste_l1_runtime_attr_override,
-            l2_merge_runtime_attr_override = paste_l2_runtime_attr_override,
-            extra_merge_args = "--threads $(nproc) --info ID,RAF,AF,INFO,N_PATHS,N_PATHS_TOTAL,DS_SUM,VAR_SUM,N_HAPS --format GT,DS,GP"
-        }
+    # Not inside a conditional: Cromwell 91 fails this subworkflow call there, on its unset optional inputs.
+    call Paste.HierarchicallyMergeVcfs as PasteBatches { input:
+        vcfs_array = paste_vcf,
+        vcf_idxs_array = paste_idx,
+        regions = paste_regions,
+        batch_sizes = paste_batch_sizes,
+        do_localization = paste_do_localization,
+        timeouts_min = paste_timeouts_min,
+        output_prefix = output_prefix + "." + chromosome,
+        paste_vcfs_binary = paste_vcfs_binary,
+        extra_merge_args = "--threads $(nproc) --info ID,RAF,AF,INFO,N_PATHS,N_PATHS_TOTAL,DS_SUM,VAR_SUM,N_HAPS --format GT,DS,GP"
+    }
 
-        if (check_merged) {
-            call CheckMerged { input:
-                merged_bcf = PasteBatches.merged_vcf,
-                merged_bcf_idx = PasteBatches.merged_vcf_idx,
-                n_records = PoolCohortInfo.n_records,
-                n_samples = RepopBatch.n_samples,
-                sites_info_md5 = PoolCohortInfo.sites_info_md5,
-                docker = docker,
-                zones = zones
-            }
+    if (check_merged) {
+        call CheckMerged { input:
+            merged_bcf = PasteBatches.merged_vcf,
+            merged_bcf_idx = PasteBatches.merged_vcf_idx,
+            n_records = PoolCohortInfo.n_records,
+            n_samples = RepopBatch.n_samples,
+            sites_info_md5 = PoolCohortInfo.sites_info_md5,
+            docker = docker,
+            zones = zones
         }
     }
 
@@ -123,8 +113,8 @@ workflow CohortInfoFromBubbles {
         Array[File] repop_reports = RepopBatch.report
         File cohort_report = PoolCohortInfo.report
         File base_cohort_bcf = PoolCohortInfo.base_cohort_bcf
-        File? merged_bcf = PasteBatches.merged_vcf
-        File? merged_bcf_idx = PasteBatches.merged_vcf_idx
+        File merged_bcf = PasteBatches.merged_vcf
+        File merged_bcf_idx = PasteBatches.merged_vcf_idx
         File? merged_report = CheckMerged.report
     }
 }
