@@ -1,0 +1,57 @@
+name: Cohort INFO tests
+
+on:
+  push:
+    branches: [ 'cohort-info' ]
+    paths: [ 'resources/cohort-info/**', 'wdl/methods/imputation/CohortInfoFromBubbles.wdl', 'test/cohort-info/**', '.github/workflows/cohort-info-tests.yml' ]
+  pull_request:
+    paths: [ 'resources/cohort-info/**', 'wdl/methods/imputation/CohortInfoFromBubbles.wdl', 'test/cohort-info/**' ]
+  workflow_dispatch:
+
+jobs:
+  cohortInfo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    name: re-pop, pooled INFO and paste vs one pop over all samples
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          repository: broadinstitute/lrma-sv-imputation-utils
+          path: utils
+      - name: system dependencies (rust-htslib build, bcftools)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential clang cmake zlib1g-dev libbz2-dev liblzma-dev \
+            libcurl4-openssl-dev libssl-dev libdeflate-dev libgsl-dev bcftools python3
+          rustup toolchain install 1.90.0 --profile minimal && rustup default 1.90.0
+      - uses: actions/setup-java@17f84c3641ba7b8f6deff6309fc4c864478f5d62  # v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - uses: ./.github/actions/install-cromwell
+        with:
+          CROMWELL_VERSION: 91
+      - name: task command blocks
+        run: python3 test/wdl/check-command-blocks.py wdl/methods/imputation/CohortInfoFromBubbles.wdl
+      # The WDL's default image. Built from the utils Dockerfile if the registry refuses an anonymous pull.
+      - name: task image
+        run: |
+          IMG=$(sed -n 's/.*String docker = "\(.*\)"/\1/p' wdl/methods/imputation/CohortInfoFromBubbles.wdl)
+          if docker pull "$IMG"; then echo "DOCKER=$IMG" >> $GITHUB_ENV; else
+            docker build -q -f utils/docker/lrma-aou2-panel-creation-rust/Dockerfile -t cohort-info-test:local utils
+            echo "DOCKER=cohort-info-test:local" >> $GITHUB_ENV
+          fi
+      - name: cohort INFO end to end
+        run: |
+          echo "utils commit $(git -C utils rev-parse HEAD)" | tee utils-commit.txt
+          UTILS=$GITHUB_WORKSPACE/utils OUT_BIN=$GITHUB_WORKSPACE/bin bash test/cohort-info/run.sh
+          cp utils-commit.txt bin/
+      # The production pop-glimpse2 and paste-vcfs: built on Ubuntu 24.04 like the task image, and the binaries this test passed with.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cohort-info-binaries
+          path: bin/
