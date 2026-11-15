@@ -4,7 +4,7 @@
 #      write identical GT:DS:GP, which RepopBatch relies on
 #   2. pooling the per-batch AF/INFO and pasting the batches gives the same file as popping all 48 samples at once: GT:DS:GP
 #      identical, AF and INFO within the rounding bound (compare.py)
-#   3. with CROMWELL_JAR set, the WDL itself (re-pop and pooling) runs and its base file matches step 2
+#   3. with CROMWELL_JAR set, the WDL itself runs end to end and its base and merged files match steps 1-2
 # Usage: UTILS=path/to/lrma-sv-imputation-utils bash test/cohort-info/run.sh
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -88,7 +88,7 @@ python3 "$REPO/test/cohort-info/compare.py" merged.tsv reference.tsv
 [ "$(bcftools query -f '%INFO/N_HAPS\n' merged.bcf | sort -u)" = 96 ] || { echo "FAIL N_HAPS"; exit 1; }
 
 if [ -n "${CROMWELL_JAR:-}" ]; then
-    say "3. the WDL: re-pop and pooling (run_paste=false) on the same fixture"
+    say "3. the WDL end to end (re-pop, pooling, paste) on the same fixture"
     : > batches.tsv
     for b in $BATCHES; do printf '%s\t%s\t%s\t%s\t%s\n' $b $W/bubble.$b.bcf $W/bubble.$b.bcf.csi $W/popped.$b.bcf $W/popped.$b.bcf.csi >> batches.tsv; done
     python3 - "$W" "$REGIONS" > panel.json <<'EOF'
@@ -103,8 +103,10 @@ EOF
 {"CohortInfoFromBubbles.chromosome": "chr1", "CohortInfoFromBubbles.batches_tsv": "$W/batches.tsv",
  "CohortInfoFromBubbles.pop_glimpse2_panel_resources_json": "$W/panel.json",
  "CohortInfoFromBubbles.pop_glimpse2_binary": "$W/pop.sam", "CohortInfoFromBubbles.cohort_info_script": "$REPO/resources/cohort-info/cohort_info.py",
- "CohortInfoFromBubbles.paste_vcfs_binary": "$W/paste-vcfs", "CohortInfoFromBubbles.paste_regions": ["chr1"],
- "CohortInfoFromBubbles.expected_samples": 12, "CohortInfoFromBubbles.run_paste": false,
+ "CohortInfoFromBubbles.paste_vcfs_binary": "$W/paste-vcfs", "CohortInfoFromBubbles.paste_regions": ["chr1:1-1000000", "chr1:1000001-2000000"],
+ "CohortInfoFromBubbles.paste_batch_sizes": [2, 2], "CohortInfoFromBubbles.paste_timeouts_min": [0, 0],
+ "CohortInfoFromBubbles.paste_do_localization": [true, true, true], "CohortInfoFromBubbles.check_merged": false,
+ "CohortInfoFromBubbles.expected_samples": 12,
  "CohortInfoFromBubbles.RepopBatch.cpu": 2, "CohortInfoFromBubbles.RepopBatch.mem_gb": 4$DOCKER_JSON}
 EOF
     java -jar "$WOMTOOL_JAR" validate "$REPO/wdl/methods/imputation/CohortInfoFromBubbles.wdl" -i inputs.json
@@ -116,5 +118,15 @@ EOF
     [ "$(gtmd5 "$wbase")" = "$(gtmd5 popped.batch-001.bcf)" ] || { echo "FAIL WDL base genotypes"; exit 1; }
     find cromwell-executions -name report.txt -path '*RepopBatch*' -exec cat {} +
     echo "WDL base file matches the direct run"
+    # the paste through the existing paste WDL (2 regions, 2 levels), checked as CheckMerged would plus against the reference
+    wm=$(python3 -c 'import json;print(json.load(open("meta.json"))["outputs"]["CohortInfoFromBubbles.merged_bcf"])')
+    [ "$(bcftools query -l "$wm" | md5sum)" = "$(bcftools query -l reference.bcf | md5sum)" ] || { echo "FAIL WDL merged sample order"; exit 1; }
+    [ "$(bcftools index -n "$wm")" = "$(bcftools index -n base.bcf)" ] || { echo "FAIL WDL merged record count"; exit 1; }
+    [ "$(gtmd5 "$wm")" = "$(gtmd5 reference.bcf)" ] || { echo "FAIL WDL merged GT:DS:GP differ from one pop over all samples"; exit 1; }
+    t='%CHROM\t%POS\t%ID\t%REF\t%ALT\t%INFO/ID\t%INFO/RAF\t%INFO/AF\t%INFO/INFO\t%INFO/N_PATHS\t%INFO/N_PATHS_TOTAL\t%INFO/DS_SUM\t%INFO/VAR_SUM\t%INFO/N_HAPS\n'
+    [ "$(bcftools query -f "$t" "$wm" | md5sum)" = "$(bcftools query -f "$t" base.bcf | md5sum)" ] || { echo "FAIL WDL merged INFO differs from the base"; exit 1; }
+    bcftools query -f "$q" "$wm" > wmerged.tsv
+    python3 "$REPO/test/cohort-info/compare.py" wmerged.tsv reference.tsv
+    echo "WDL merged file matches one pop over all samples"
 fi
 say "PASS"

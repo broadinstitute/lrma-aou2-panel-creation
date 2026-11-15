@@ -34,6 +34,10 @@ workflow CohortInfoFromBubbles {
         Array[String] paste_regions
         Array[Int] paste_batch_sizes = [20, 10]
         Array[Int] paste_timeouts_min = [720, 720]
+        # Level 0 slices each popped BCF by region straight from GCS. Local test runs localize instead.
+        Array[Boolean] paste_do_localization = [false, true, true]
+        # CheckMerged streams the merged BCF from GCS, so a local test run checks it in its own script
+        Boolean check_merged = true
         # false stops after PoolCohortInfo, for checking the re-pop and the cohort INFO before paying for the paste
         Boolean run_paste = true
         String output_prefix = "aou2_50k.cohort_info"
@@ -88,21 +92,23 @@ workflow CohortInfoFromBubbles {
             vcf_idxs_array = paste_idx,
             regions = paste_regions,
             batch_sizes = paste_batch_sizes,
-            do_localization = [false, true, true],
+            do_localization = paste_do_localization,
             timeouts_min = paste_timeouts_min,
             output_prefix = output_prefix + "." + chromosome,
             paste_vcfs_binary = paste_vcfs_binary,
             extra_merge_args = "--threads $(nproc) --info ID,RAF,AF,INFO,N_PATHS,N_PATHS_TOTAL,DS_SUM,VAR_SUM,N_HAPS --format GT,DS,GP"
         }
 
-        call CheckMerged { input:
-            merged_bcf = PasteBatches.merged_vcf,
-            merged_bcf_idx = PasteBatches.merged_vcf_idx,
-            n_records = PoolCohortInfo.n_records,
-            n_samples = RepopBatch.n_samples,
-            sites_info_md5 = PoolCohortInfo.sites_info_md5,
-            docker = docker,
-            zones = zones
+        if (check_merged) {
+            call CheckMerged { input:
+                merged_bcf = PasteBatches.merged_vcf,
+                merged_bcf_idx = PasteBatches.merged_vcf_idx,
+                n_records = PoolCohortInfo.n_records,
+                n_samples = RepopBatch.n_samples,
+                sites_info_md5 = PoolCohortInfo.sites_info_md5,
+                docker = docker,
+                zones = zones
+            }
         }
     }
 
