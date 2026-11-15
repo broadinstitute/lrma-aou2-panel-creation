@@ -14,8 +14,8 @@ import "../MultilevelHierarchicallyPasteVcfsStreaming.wdl" as Paste
 # CHROM, POS, ID, REF, ALT and every sample's GT:DS:GP match the existing popped BCF byte for byte.
 # The merged genotypes are the existing popped BCFs pasted, never re-encoded.
 #
-# The paste copies INFO from its first input at every level, so only the first batch's records are
-# rewritten (PoolCohortInfo) and that file is pasted in front of the other batches.
+# The paste copies INFO from the first input of each paste, so PoolCohortInfo rewrites only the first batch of each
+# level-0 paste group (10 of 200 batches); every level then carries the cohort values.
 #
 # Inputs never get written to. Every output goes to the run's own output path.
 workflow CohortInfoFromBubbles {
@@ -72,9 +72,18 @@ workflow CohortInfoFromBubbles {
         }
     }
 
+    # the first batch of each level-0 paste group (CreateBatches splits the list into consecutive groups of this size)
+    Int paste_group = paste_batch_sizes[0]
+    scatter (i in range(length(batches))) {
+        if (i % paste_group == 0) {
+            String group_base_bcf = batches[i][3]
+            String group_base_idx = batches[i][4]
+        }
+    }
+
     call PoolCohortInfo { input:
-        base_bcf = batches[0][3],
-        base_bcf_idx = batches[0][4],
+        base_bcfs = select_all(group_base_bcf),
+        base_bcf_idxs = select_all(group_base_idx),
         sites_tsv = RepopBatch.sites_tsv[0],
         sites_md5s = RepopBatch.sites_md5,
         info_tsvs = RepopBatch.info_tsv,
@@ -86,8 +95,8 @@ workflow CohortInfoFromBubbles {
     }
 
     scatter (i in range(length(batches))) {
-        String paste_vcf = if i == 0 then PoolCohortInfo.base_cohort_bcf else batches[i][3]
-        String paste_idx = if i == 0 then PoolCohortInfo.base_cohort_bcf_idx else batches[i][4]
+        String paste_vcf = if i % paste_group == 0 then PoolCohortInfo.base_cohort_bcfs[i / paste_group] else batches[i][3]
+        String paste_idx = if i % paste_group == 0 then PoolCohortInfo.base_cohort_bcf_idxs[i / paste_group] else batches[i][4]
     }
 
     call Paste.HierarchicallyMergeVcfs as PasteBatches { input:
@@ -120,7 +129,7 @@ workflow CohortInfoFromBubbles {
     output {
         Array[File] repop_reports = RepopBatch.report
         File cohort_report = PoolCohortInfo.report
-        File base_cohort_bcf = PoolCohortInfo.base_cohort_bcf
+        File cohort_table = PoolCohortInfo.cohort_table
         File merged_bcf = PasteBatches.merged_vcf
         File merged_bcf_idx = PasteBatches.merged_vcf_idx
         File? merged_report = CheckMerged.report
@@ -232,10 +241,12 @@ task RepopBatch {
     }
 }
 
+# Pools once, then writes the cohort INFO onto each level-0 paste group's first batch, so every paste at every level
+# carries it (paste-vcfs takes INFO from its first input and fails on a requested tag that input lacks).
 task PoolCohortInfo {
     input {
-        File base_bcf
-        File base_bcf_idx
+        Array[File] base_bcfs
+        Array[File] base_bcf_idxs
         File sites_tsv
         Array[String] sites_md5s
         Array[File] info_tsvs
@@ -246,32 +257,47 @@ task PoolCohortInfo {
         String zones
     }
 
-    Int disk_gb = 20 + ceil(3 * size(base_bcf, "GB") + size(info_tsvs, "GB"))
+    Int disk_gb = 20 + ceil(3 * size(base_bcfs, "GB") + 2 * size(info_tsvs, "GB"))
 
     command <<<
         set -euo pipefail
         n_lists=$(sort -u ~{write_lines(sites_md5s)} | awk 'END{print NR}')
         [ "$n_lists" = 1 ] || { echo "ERROR: batches have $n_lists different site lists" >&2; exit 1; }
 
-        bcftools view ~{base_bcf} | \
-            python3 ~{cohort_info_script} --n-samples ~{sep="," n_samples} --sites ~{sites_tsv} --report report.txt \
-                ~{sep=" " info_tsvs} | \
-            bcftools view -Ob -o ~{output_prefix}.bcf --write-index
+        python3 ~{cohort_info_script} pool --n-samples ~{sep="," n_samples} --sites ~{sites_tsv} --report report.txt \
+            --out cohort_info.tsv.gz ~{sep=" " info_tsvs}
 
-        r_in=$(bcftools index -n ~{base_bcf}); r_out=$(bcftools index -n ~{output_prefix}.bcf)
-        [ "$r_in" = "$r_out" ] || { echo "ERROR: records $r_in -> $r_out" >&2; exit 1; }
-        q='%CHROM\t%POS\t%ID\t%REF\t%ALT[\t%GT:%DS:%GP]\n'
-        m_in=$(bcftools query -f "$q" ~{base_bcf} | md5sum | cut -d' ' -f1)
-        m_out=$(bcftools query -f "$q" ~{output_prefix}.bcf | md5sum | cut -d' ' -f1)
-        [ "$m_in" = "$m_out" ] || { echo "ERROR: sites or genotypes changed" >&2; exit 1; }
-        echo "$r_out" > n_records
-        bcftools query -f '%CHROM\t%POS\t%ID\t%REF\t%ALT\t%INFO/ID\t%INFO/RAF\t%INFO/AF\t%INFO/INFO\t%INFO/N_PATHS\t%INFO/N_PATHS_TOTAL\t%INFO/DS_SUM\t%INFO/VAR_SUM\t%INFO/N_HAPS\n' ~{output_prefix}.bcf | md5sum | cut -d' ' -f1 > sites_info.md5
+        apply_base() {
+            set -euo pipefail
+            k=$1; in=$2; out=~{output_prefix}-$k.bcf
+            bcftools view "$in" | python3 ~{cohort_info_script} apply --table cohort_info.tsv.gz | bcftools view -Ob -o "$out" --write-index
+            r_in=$(bcftools index -n "$in"); r_out=$(bcftools index -n "$out")
+            [ "$r_in" = "$r_out" ] || { echo "ERROR: $in records $r_in -> $r_out" >&2; exit 1; }
+            q='%CHROM\t%POS\t%ID\t%REF\t%ALT[\t%GT:%DS:%GP]\n'
+            [ "$(bcftools query -f "$q" "$in" | md5sum)" = "$(bcftools query -f "$q" "$out" | md5sum)" ] \
+                || { echo "ERROR: $in sites or genotypes changed" >&2; exit 1; }
+            bcftools query -f '%CHROM\t%POS\t%ID\t%REF\t%ALT\t%INFO/ID\t%INFO/RAF\t%INFO/AF\t%INFO/INFO\t%INFO/N_PATHS\t%INFO/N_PATHS_TOTAL\t%INFO/DS_SUM\t%INFO/VAR_SUM\t%INFO/N_HAPS\n' "$out" \
+                | md5sum | cut -d' ' -f1 > sites_info.$k.md5
+            echo "$r_out" > n_records.$k
+        }
+        export -f apply_base
+        awk '{printf "%03d\t%s\n", NR, $0}' ~{write_lines(base_bcfs)} > bases.tsv
+        xargs -P $(nproc) -L 1 bash -c 'apply_base "$@"' _ < bases.tsv
+        cut -f1 bases.tsv | awk '{print "~{output_prefix}-" $1 ".bcf"}' > out_bcfs.txt
+        awk '{print $0 ".csi"}' out_bcfs.txt > out_idxs.txt
+
+        # every base must carry the same sites and INFO
+        n_md5=$(cut -f1 bases.tsv | awk '{print "sites_info." $1 ".md5"}' | xargs cat | sort -u | awk 'END{print NR}')
+        [ "$n_md5" = 1 ] || { echo "ERROR: cohort INFO differs between group bases" >&2; exit 1; }
+        cp sites_info.001.md5 sites_info.md5
+        cp n_records.001 n_records
         cat report.txt
     >>>
 
     output {
-        File base_cohort_bcf = "~{output_prefix}.bcf"
-        File base_cohort_bcf_idx = "~{output_prefix}.bcf.csi"
+        Array[File] base_cohort_bcfs = read_lines("out_bcfs.txt")
+        Array[File] base_cohort_bcf_idxs = read_lines("out_idxs.txt")
+        File cohort_table = "cohort_info.tsv.gz"
         Int n_records = read_int("n_records")
         String sites_info_md5 = read_string("sites_info.md5")
         File report = "report.txt"

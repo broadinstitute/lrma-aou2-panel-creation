@@ -73,8 +73,9 @@ for b in $BATCHES; do
     infos+=(info.$b.tsv.gz)
 done
 bcftools query -f '%CHROM\t%POS\t%ID\t%REF\t%ALT\t%INFO/ID\t%INFO/RAF\t%INFO/N_PATHS\t%INFO/N_PATHS_TOTAL\n' repop.batch-001.bcf | gzip > sites.batch-001.tsv.gz
-bcftools view popped.batch-001.bcf | \
-    python3 "$REPO/resources/cohort-info/cohort_info.py" --n-samples 12,12,12,12 --sites sites.batch-001.tsv.gz --report report.txt "${infos[@]}" | \
+python3 "$REPO/resources/cohort-info/cohort_info.py" pool --n-samples 12,12,12,12 --sites sites.batch-001.tsv.gz --report report.txt \
+    --out cohort.tsv.gz "${infos[@]}"
+bcftools view popped.batch-001.bcf | python3 "$REPO/resources/cohort-info/cohort_info.py" apply --table cohort.tsv.gz | \
     bcftools view -Ob -o base.bcf --write-index
 cat report.txt
 tags=ID,RAF,AF,INFO,N_PATHS,N_PATHS_TOTAL,DS_SUM,VAR_SUM,N_HAPS
@@ -114,12 +115,10 @@ EOF
     java -jar "$WOMTOOL_JAR" validate "$REPO/wdl/methods/imputation/CohortInfoFromBubbles.wdl" -i inputs.json
     java -jar "$CROMWELL_JAR" run "$REPO/wdl/methods/imputation/CohortInfoFromBubbles.wdl" -i inputs.json -m meta.json > cromwell.log 2>&1 \
         || { tail -100 cromwell.log; find cromwell-executions -name stderr -exec tail -20 {} +; exit 1; }
-    wbase=$(python3 -c 'import json;print(json.load(open("meta.json"))["outputs"]["CohortInfoFromBubbles.base_cohort_bcf"])')
-    [ "$(bcftools query -f '%CHROM\t%POS\t%ID\t%REF\t%ALT\t%INFO\n' "$wbase" | md5sum)" = "$(bcftools query -f '%CHROM\t%POS\t%ID\t%REF\t%ALT\t%INFO\n' base.bcf | md5sum)" ] \
-        || { echo "FAIL WDL base INFO differs from the direct run"; exit 1; }
-    [ "$(gtmd5 "$wbase")" = "$(gtmd5 popped.batch-001.bcf)" ] || { echo "FAIL WDL base genotypes"; exit 1; }
+    wtab=$(python3 -c 'import json;print(json.load(open("meta.json"))["outputs"]["CohortInfoFromBubbles.cohort_table"])')
+    [ "$(gzip -dc "$wtab" | md5sum)" = "$(gzip -dc cohort.tsv.gz | md5sum)" ] || { echo "FAIL WDL cohort table differs from the direct run"; exit 1; }
     find cromwell-executions -name report.txt -path '*RepopBatch*' -exec cat {} +
-    echo "WDL base file matches the direct run"
+    echo "WDL cohort table matches the direct run"
     # the paste through the existing paste WDL (2 regions, 2 levels), checked as CheckMerged would plus against the reference
     wm=$(python3 -c 'import json;print(json.load(open("meta.json"))["outputs"]["CohortInfoFromBubbles.merged_bcf"])')
     [ "$(bcftools query -l "$wm" | md5sum)" = "$(bcftools query -l reference.bcf | md5sum)" ] || { echo "FAIL WDL merged sample order"; exit 1; }
