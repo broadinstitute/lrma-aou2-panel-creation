@@ -25,12 +25,31 @@ IMAGE = ('us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust'
          '@sha256:0f25c4091c49d8eb0c3d8bcdb45e7680a093e0a691e74ccec2d3743758a7d22c')
 SA = 'pet-27774816681405f7e370a@wb-caring-carrot-494.iam.gserviceaccount.com'
 N_BATCHES = 200
-N_REGIONS = 16
-# stage: (tasks, machine, boot disk GB, max run seconds)
+# GRCh38. Paste regions of about 3.2 Mb (chr22: 16 regions, about 20 min each).
+LENGTHS = {'chr1': 248956422, 'chr2': 242193529, 'chr3': 198295559, 'chr4': 190214555, 'chr5': 181538259,
+           'chr6': 170805979, 'chr7': 159345973, 'chr8': 145138636, 'chr9': 138394717, 'chr10': 133797422,
+           'chr11': 135086622, 'chr12': 133275309, 'chr13': 114364328, 'chr14': 107043718, 'chr15': 101991189,
+           'chr16': 90338345, 'chr17': 83257441, 'chr18': 80373285, 'chr19': 58617616, 'chr20': 64444167,
+           'chr21': 46709983, 'chr22': 50818468}
+REGION_BP = 3200000
+# stage: (tasks, machine, boot disk GB, max run seconds); None = set per chromosome in stages()
 STAGES = {'gp': (N_BATCHES, 'n2d-standard-8', 60, 4 * 3600),
           'pool': (1, 'n2d-standard-8', 200, 12 * 3600),
-          'paste': (N_REGIONS, 'n2d-standard-8', 200, 12 * 3600),
-          'concat': (1, 'n2d-standard-8', 600, 12 * 3600)}
+          'paste': (None, 'n2d-standard-8', 200, 12 * 3600),
+          'concat': (1, 'n2d-standard-8', None, 12 * 3600)}
+
+
+def stages(chrom):
+    """Per chromosome: paste region count, and the concat disk from batch-001's size (chr22: 200 popped BCFs 83 GB,
+    merged 52 GB; the concat holds the regions and the merged file)."""
+    n_regions = -(-LENGTHS[chrom] // REGION_BP)
+    f = (f'gs://longreadsphase2imputation/deliverables/batch-001/aou2_50k_init.batch-001.{chrom}'
+         '.prod-05fea60.glimpse2.popped.bcf')
+    merged_gb = int(sh('gcloud', 'storage', 'du', '-s', f).split()[0]) * N_BATCHES * 0.63 / 1e9
+    st = dict(STAGES)
+    st['paste'] = (n_regions,) + STAGES['paste'][1:]
+    st['concat'] = STAGES['concat'][:2] + (max(600, int(2.4 * merged_gb) + 100),) + STAGES['concat'][3:]
+    return n_regions, st
 
 
 def sh(*cmd):
@@ -48,9 +67,10 @@ def upload():
 
 
 def job(stage, chrom, run):
-    tasks, machine, disk, max_s = STAGES[stage]
+    n_regions, st = stages(chrom)
+    tasks, machine, disk, max_s = st[stage]
     env = {'STAGE': stage, 'CHROM': chrom, 'OUT': OUT, 'RUN': run,
-           'N_BATCHES': str(N_BATCHES), 'N_REGIONS': str(N_REGIONS)}
+           'N_BATCHES': str(N_BATCHES), 'N_REGIONS': str(n_regions)}
     boot = f'mkdir -p /tmp/w && gcloud storage cp -q {run}/task.sh /tmp/w/task.sh && bash /tmp/w/task.sh'
     return {
         'labels': {'stage': f'cohort-info-{stage}', 'chrom': chrom},
