@@ -157,7 +157,8 @@ stage_concat() {
         || { echo "ERROR: merged sites or INFO differ from the base" >&2; exit 1; }
     # genotypes of a few batches over one region, merged vs delivered
     export GCS_OAUTH_TOKEN; GCS_OAUTH_TOKEN=$(gcloud auth print-access-token)
-    local reg; reg=$(region $out 7 $N_REGIONS) b d spot=""
+    local reg b d spot=""
+    reg=$(region $out 7 $N_REGIONS)
     for b in batch-002 batch-100 batch-200; do
         d=$(popped $b)
         bcftools query -l "$d##idx##$d.csi" > s.$b

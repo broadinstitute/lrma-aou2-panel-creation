@@ -62,7 +62,7 @@ def job(stage, chrom, run):
                 'maxRunDuration': f'{max_s}s',
                 'maxRetryCount': 3,
                 # retry preemptions and VM failures only; a script error fails the task
-                'lifecyclePolicies': [{'action': 'FAIL_TASK', 'actionCondition': {'exitCodes': [1]}}],
+                'lifecyclePolicies': [{'action': 'FAIL_TASK', 'actionCondition': {'exitCodes': [1, 2, 126, 127, 141]}}],
                 'environment': {'variables': env},
                 'runnables': [{'container': {'imageUri': IMAGE, 'entrypoint': '/bin/bash', 'commands': ['-c', boot]}}],
             }}],
@@ -87,8 +87,12 @@ def submit_and_wait(stage, chrom, run):
     print(f'{time.strftime("%H:%M:%S")} submitted {name}', flush=True)
     while True:
         time.sleep(60)
-        d = json.loads(sh('gcloud', 'batch', 'jobs', 'describe', name, '--location=us-central1', f'--project={PROJECT}',
-                          '--format=json'))
+        try:
+            d = json.loads(sh('gcloud', 'batch', 'jobs', 'describe', name, '--location=us-central1',
+                              f'--project={PROJECT}', '--format=json'))
+        except subprocess.CalledProcessError as e:      # transient API errors; the job keeps running
+            print(f'{time.strftime("%H:%M:%S")} describe failed, retrying: {e.stderr.strip()[-200:]}', flush=True)
+            continue
         st = d.get('status', {})
         counts = st.get('taskGroups', {}).get('group0', {}).get('counts', {})
         print(f'{time.strftime("%H:%M:%S")} {name} {st.get("state")} {counts}', flush=True)
