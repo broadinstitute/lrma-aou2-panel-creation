@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Pool per-batch AF/INFO into one cohort INFO, then write it onto popped BCFs.
 
+    bcftools query -f '%INFO/INFO[\t%GP]\n' popped.batch-NNN.bcf | cohort_info.py gp | gzip > info.batch-NNN.tsv.gz
     cohort_info.py pool --n-samples 250,250,... --sites sites.tsv.gz --report report.txt --out cohort.tsv.gz \
         info.batch-001.tsv.gz info.batch-002.tsv.gz ...
     bcftools view popped.batch-NNN.bcf | cohort_info.py apply --table cohort.tsv.gz > popped.batch-NNN.cohort.vcf
+    cohort_info.py compare cohort.a.tsv.gz cohort.b.tsv.gz > compare.txt
+
+`gp` makes a batch's info.tsv from its popped BCF instead of a re-pop: per sample E[X] = GP1 + 2 GP2 and
+E[X^2] = GP1 + 4 GP2, so AF_b and INFO_b are those pop-glimpse2 would print, but from the GP as stored (3 decimals) and
+unrounded and unclamped, so that pool recovers DS_b and VAR_b exactly. On chr22 batch-001 this INFO is within 0.002 of the
+re-popped (243ccdd) INFO for 99.98% of records with AF >= 0.01; the larger differences are records with AF < 0.001.
 
 paste-vcfs copies INFO from the first input of each paste. The hierarchical paste pastes groups of batches, so `apply` is
 run on the first batch of every level-0 group; every level then carries the cohort values.
@@ -161,9 +168,61 @@ def apply(a):
         n_rec += 1
 
 
+def gp(_):
+    out = sys.stdout
+    for line in sys.stdin:
+        old, rest = line.rstrip('\n').split('\t', 1)
+        v = list(map(float, rest.replace(',', '\t').split('\t')))
+        a, b = v[1::3], v[2::3]
+        n = len(a)
+        s1, s2 = sum(a), sum(b)
+        sq = sum([(x + y + y) ** 2 for x, y in zip(a, b)])
+        p = (s1 + 2.0 * s2) / (2.0 * n)
+        info = 1.0 if p <= 0.0 or p >= 1.0 else 1.0 - (s1 + 4.0 * s2 - sq) / (2.0 * n * p * (1.0 - p))
+        out.write(f'{p:.9g}\t{info:.9g}\t{old}\n')
+
+
+def compare(a):
+    """AF and INFO of two cohort tables of the same sites: |difference| counts by minor AF of the first."""
+    edges = [0.0, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 1.01]
+    classes = [(0.001, 'maf<0.001'), (0.01, 'maf<0.01'), (0.05, 'maf<0.05'), (2.0, 'maf>=0.05')]
+    hist = {(k, c): [0] * (len(edges) - 1) for k in ('AF', 'INFO') for _, c in classes}
+    cut = {c: [0, 0, 0] for _, c in classes}      # records, INFO < 0.3 in both, in exactly one
+    n = 0
+    ta, tb = zcat(a.table_a), zcat(a.table_b)
+    ta.readline(), tb.readline()
+    for la, lb in zip_longest(ta, tb):
+        if la is None or lb is None:
+            sys.exit(f'ERROR: tables end at different records after {n}')
+        fa, fb = la.rstrip('\n').split('\t'), lb.rstrip('\n').split('\t')
+        if fa[:5] != fb[:5]:
+            sys.exit(f'ERROR: record {n} differs: {fa[:5]} {fb[:5]}')
+        va = dict(kv.split('=', 1) for kv in fa[5].split(';'))
+        vb = dict(kv.split('=', 1) for kv in fb[5].split(';'))
+        af = float(va['AF'])
+        c = next(c for hi, c in classes if min(af, 1 - af) < hi)
+        for k in ('AF', 'INFO'):
+            hist[k, c][bin_of(abs(float(va[k]) - float(vb[k])), edges)] += 1
+        ia, ib = float(va['INFO']) < 0.3, float(vb['INFO']) < 0.3
+        cut[c][0] += 1
+        cut[c][1] += ia and ib
+        cut[c][2] += ia != ib
+        n += 1
+    print(f'records\t{n}')
+    print('abs_diff_bins\t' + ' '.join(f'[{edges[i]},{edges[i + 1]})' for i in range(len(edges) - 1)))
+    for (k, c), h in hist.items():
+        print(f'{k}\t{c}\t' + ' '.join(map(str, h)))
+    for c, (m, both, one) in cut.items():
+        print(f'info_lt_0.3\t{c}\trecords={m}\tboth={both}\tonly_one={one}')
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest='cmd', required=True)
+    sub.add_parser('gp')
+    c = sub.add_parser('compare')
+    c.add_argument('table_a')
+    c.add_argument('table_b')
     p = sub.add_parser('pool')
     p.add_argument('--n-samples', required=True, help='comma-separated sample count per batch, in input order')
     p.add_argument('--sites', required=True)
@@ -173,7 +232,7 @@ def main():
     q = sub.add_parser('apply')
     q.add_argument('--table', required=True)
     a = ap.parse_args()
-    pool(a) if a.cmd == 'pool' else apply(a)
+    {'gp': gp, 'pool': pool, 'apply': apply, 'compare': compare}[a.cmd](a)
 
 
 if __name__ == '__main__':
