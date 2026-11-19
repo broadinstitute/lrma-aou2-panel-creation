@@ -78,6 +78,7 @@ stage_pool() {
     local rb=() rp
     for rp in $(gcloud storage ls "$REPOP/batch-*/*.$CHROM.prod-05fea60.glimpse2.popped.bcf"); do
         b=$(basename "$(dirname $rp)"); rb+=($b)
+        GCS_OAUTH_TOKEN=$(gcloud auth print-access-token)     # the pool can outlast the token fetched at the start
         bcftools query -f '%INFO/AF\t%INFO/INFO\t.\n' $rp | gzip -1 > repop.$b.info.tsv.gz
     done
     if [ ${#rb[@]} -gt 0 ]; then
