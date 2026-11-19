@@ -173,4 +173,26 @@ stage_concat() {
     echo ok > done; put done $O/$out.done
 }
 
+# one task, after every chromosome: copy the merged BCFs, their reports and the README to $DEST (CHROM is unused)
+stage_deliver() {
+    local c n=0
+    gcloud storage ls "$DEST/**" >/dev/null 2>&1 && { echo "ERROR: $DEST is not empty" >&2; exit 1; }
+    for c in $(seq 1 22); do gcloud storage ls $OUT/chr$c/aou2_50k.cohort_info.chr$c.bcf.done >/dev/null; done
+    gcloud storage cp -q $RUN/README.md README.md
+    put README.md $DEST/README.md
+    for c in $(seq 1 22); do
+        put $OUT/chr$c/aou2_50k.cohort_info.chr$c.bcf $OUT/chr$c/aou2_50k.cohort_info.chr$c.bcf.csi $DEST/
+        put $OUT/chr$c/merged_report.txt $OUT/chr$c/pool/report.txt $OUT/chr$c/pool/compare_repop243.txt $DEST/reports/chr$c/
+    done
+    # same objects, same checksums
+    for c in $(seq 1 22); do
+        [ "$(gcloud storage ls -L $OUT/chr$c/aou2_50k.cohort_info.chr$c.bcf | grep -i 'crc32c')" = \
+          "$(gcloud storage ls -L $DEST/aou2_50k.cohort_info.chr$c.bcf | grep -i 'crc32c')" ] \
+            || { echo "ERROR: chr$c copy checksum differs" >&2; exit 1; }
+        n=$((n + 1))
+    done
+    echo "delivered $n chromosomes to $DEST" | tee deliver_report.txt
+    put deliver_report.txt $DEST/reports/
+}
+
 stage_$STAGE

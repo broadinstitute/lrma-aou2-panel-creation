@@ -20,7 +20,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 FILES = {'task.sh': os.path.join(HERE, 'task.sh'),
          'cohort_info.py': os.path.join(REPO, 'resources/cohort-info/cohort_info.py'),
-         'paste-vcfs': os.path.expanduser('~/aou-info-fix/bin/paste-vcfs')}   # CI-built (utils 243ccdd), SHA256SUMS
+         'paste-vcfs': os.path.expanduser('~/aou-info-fix/bin/paste-vcfs'),   # CI-built (utils 243ccdd), SHA256SUMS
+         'README.md': os.path.expanduser('~/aou-info-fix/deliverable/README.md')}
+DEST = 'gs://long-reads-phase-2-imputation-vwb/cohort_info_v1'
 IMAGE = ('us.gcr.io/broad-dsde-methods/slee/lrma-aou2-panel-creation-rust'
          '@sha256:0f25c4091c49d8eb0c3d8bcdb45e7680a093e0a691e74ccec2d3743758a7d22c')
 SA = 'pet-27774816681405f7e370a@wb-caring-carrot-494.iam.gserviceaccount.com'
@@ -36,7 +38,9 @@ REGION_BP = 3200000
 STAGES = {'gp': (N_BATCHES, 'n2d-standard-8', 60, 4 * 3600),
           'pool': (1, 'n2d-standard-8', 200, 12 * 3600),
           'paste': (None, 'n2d-standard-8', 200, 12 * 3600),
-          'concat': (1, 'n2d-standard-8', None, 12 * 3600)}
+          'concat': (1, 'n2d-standard-8', None, 12 * 3600),
+          'deliver': (1, 'n2d-standard-8', 60, 12 * 3600)}
+CHROM_STAGES = ['gp', 'pool', 'paste', 'concat']     # the default; deliver runs once, after all 22: submit.py chr22 deliver
 
 
 def stages(chrom):
@@ -69,7 +73,7 @@ def upload():
 def job(stage, chrom, run):
     n_regions, st = stages(chrom)
     tasks, machine, disk, max_s = st[stage]
-    env = {'STAGE': stage, 'CHROM': chrom, 'OUT': OUT, 'RUN': run,
+    env = {'STAGE': stage, 'CHROM': chrom, 'OUT': OUT, 'RUN': run, 'DEST': DEST,
            'N_BATCHES': str(N_BATCHES), 'N_REGIONS': str(n_regions)}
     boot = f'mkdir -p /tmp/w && gcloud storage cp -q {run}/task.sh /tmp/w/task.sh && bash /tmp/w/task.sh'
     return {
@@ -123,7 +127,7 @@ def submit_and_wait(stage, chrom, run):
 
 
 def main():
-    chrom, stages = sys.argv[1], sys.argv[2:] or list(STAGES)
+    chrom, stages = sys.argv[1], sys.argv[2:] or CHROM_STAGES
     run = upload()
     print(f'run files {run}', flush=True)
     for s in stages:
